@@ -149,12 +149,13 @@ pub fn rewrite_response_models(value: &mut Value, backend_model: &str, public_mo
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UsageTotals {
     pub input: u64,
+    pub cached_input: u64,
     pub output: u64,
 }
 
 impl UsageTotals {
     pub fn is_empty(self) -> bool {
-        self.input == 0 && self.output == 0
+        self.input == 0 && self.cached_input == 0 && self.output == 0
     }
 }
 
@@ -186,12 +187,22 @@ fn collect_usage(value: &Value, totals: &mut UsageTotals) {
 fn add_usage_object(object: &Map<String, Value>, totals: &mut UsageTotals) {
     totals.input += number_field(object, "prompt_tokens").unwrap_or(0);
     totals.input += number_field(object, "input_tokens").unwrap_or(0);
+    totals.cached_input += nested_number_field(object, "prompt_tokens_details", "cached_tokens")
+        .or_else(|| nested_number_field(object, "input_tokens_details", "cached_tokens"))
+        .unwrap_or(0);
     totals.output += number_field(object, "completion_tokens").unwrap_or(0);
     totals.output += number_field(object, "output_tokens").unwrap_or(0);
 }
 
 fn number_field(object: &Map<String, Value>, field: &str) -> Option<u64> {
     object.get(field).and_then(Value::as_u64)
+}
+
+fn nested_number_field(object: &Map<String, Value>, parent: &str, field: &str) -> Option<u64> {
+    object
+        .get(parent)
+        .and_then(Value::as_object)
+        .and_then(|object| number_field(object, field))
 }
 
 #[derive(Debug, Default)]
@@ -261,6 +272,7 @@ impl SseNormalizer {
         };
         let usage = extract_usage(&json);
         self.usage.input += usage.input;
+        self.usage.cached_input += usage.cached_input;
         self.usage.output += usage.output;
         if let (Some(backend_model), Some(public_model)) = (&self.backend_model, &self.public_model)
         {

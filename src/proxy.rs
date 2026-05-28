@@ -474,6 +474,7 @@ impl StreamMetrics {
 
     fn add_usage(&mut self, usage: UsageTotals) {
         self.usage.input += usage.input;
+        self.usage.cached_input += usage.cached_input;
         self.usage.output += usage.output;
     }
 }

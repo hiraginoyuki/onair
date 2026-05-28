@@ -141,6 +141,6 @@ Metric instruments:
 - `onair.backend.requests`: counter labeled by `route`, `identity`, `model`, `backend`, and `stream`.
 - `onair.request.duration`: histogram in seconds with the same labels as `onair.requests`.
 - `onair.stream.duration`: histogram in seconds for streaming response lifetime.
-- `onair.tokens`: counter labeled by `direction=input|output` when backend responses include OpenAI-compatible usage data such as `prompt_tokens`, `completion_tokens`, `input_tokens`, or `output_tokens`.
+- `onair.tokens`: counter labeled by `direction=input|cached_input|output` when backend responses include OpenAI-compatible usage data such as `prompt_tokens`, `completion_tokens`, `input_tokens`, `output_tokens`, or `cached_tokens`.
 
 Prompt and response bodies are not logged by onair.

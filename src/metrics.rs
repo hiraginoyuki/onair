@@ -75,6 +75,11 @@ impl Metrics {
             attributes.push(KeyValue::new("direction", "input"));
             self.tokens_total.add(usage.input, &attributes);
         }
+        if usage.cached_input > 0 {
+            let mut attributes = labels.base_attributes();
+            attributes.push(KeyValue::new("direction", "cached_input"));
+            self.tokens_total.add(usage.cached_input, &attributes);
+        }
         if usage.output > 0 {
             let mut attributes = labels.base_attributes();
             attributes.push(KeyValue::new("direction", "output"));
