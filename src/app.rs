@@ -161,3 +161,265 @@ fn model_route_labels(route: &str, identity: &str, model: &str) -> MetricLabels 
         stream: false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::net::SocketAddr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use axum::body::{Body, to_bytes};
+    use axum::extract::State;
+    use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+    use axum::http::{Request, StatusCode};
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::config::{
+        Config, ModelRoute, ResolvedBackend, ResolvedClient, RoutingConfig, RoutingStrategy,
+        ServerConfig, TelemetryConfig,
+    };
+
+    const CLIENT_KEY: &str = "sk-test";
+    const PUBLIC_MODEL: &str = "gpt-public";
+    const BACKEND_MODEL: &str = "backend-private";
+
+    #[tokio::test]
+    async fn responses_forwards_prompt_cache_fields_and_rewrites_model() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let state = test_state(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello",
+                    "prompt_cache_key": "tenant-a:prefix",
+                    "prompt_cache_retention": "24h"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = json_body(response).await;
+        assert_eq!(response_body["model"], PUBLIC_MODEL);
+        assert_eq!(
+            response_body["usage"]["input_tokens_details"]["cached_tokens"],
+            7
+        );
+
+        let captured = backend.requests();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0]["model"], BACKEND_MODEL);
+        assert_eq!(captured[0]["prompt_cache_key"], "tenant-a:prefix");
+        assert_eq!(captured[0]["prompt_cache_retention"], "24h");
+
+        backend.abort();
+    }
+
+    #[tokio::test]
+    async fn sticky_routing_reuses_backend_for_same_prompt_cache_key() {
+        let backend_a = TestBackend::spawn("backend-a").await;
+        let backend_b = TestBackend::spawn("backend-b").await;
+        let state = test_state(
+            RoutingStrategy::Sticky,
+            vec![
+                test_backend("backend-a", backend_a.base_url()),
+                test_backend("backend-b", backend_b.base_url()),
+            ],
+        );
+        let app = router(state);
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(json_request(
+                    "/v1/responses",
+                    json!({
+                        "model": PUBLIC_MODEL,
+                        "input": "same prefix",
+                        "prompt_cache_key": "cache-affinity-key"
+                    }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let hits_a = backend_a.hits();
+        let hits_b = backend_b.hits();
+        assert!(
+            (hits_a == 2 && hits_b == 0) || (hits_a == 0 && hits_b == 2),
+            "expected sticky routing to select one backend twice, got a={hits_a}, b={hits_b}"
+        );
+
+        backend_a.abort();
+        backend_b.abort();
+    }
+
+    #[tokio::test]
+    async fn disallowed_model_returns_404_without_calling_backend() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let state = test_state(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": "not-allowed",
+                    "input": "hello"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(backend.hits(), 0);
+
+        backend.abort();
+    }
+
+    fn test_state(strategy: RoutingStrategy, backends: Vec<ResolvedBackend>) -> Arc<AppState> {
+        Arc::new(
+            AppState::new(
+                Config {
+                    server: ServerConfig::default(),
+                    telemetry: TelemetryConfig::default(),
+                    routing: RoutingConfig { strategy },
+                    clients: vec![ResolvedClient {
+                        id: "dev".to_owned(),
+                        api_key: CLIENT_KEY.to_owned(),
+                        models: btree_set([PUBLIC_MODEL]),
+                    }],
+                    backends,
+                },
+                Metrics::new(),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn test_backend(id: &str, base_url: String) -> ResolvedBackend {
+        ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            capabilities: btree_set(["responses", "streaming"]),
+            models: vec![ModelRoute {
+                public: PUBLIC_MODEL.to_owned(),
+                backend: BACKEND_MODEL.to_owned(),
+                endpoints: btree_set(["responses"]),
+            }],
+        }
+    }
+
+    fn json_request(uri: &str, body: Value) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(AUTHORIZATION, format!("Bearer {CLIENT_KEY}"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    async fn json_body(response: Response<Body>) -> Value {
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn btree_set<const N: usize>(values: [&str; N]) -> BTreeSet<String> {
+        values.into_iter().map(str::to_owned).collect()
+    }
+
+    #[derive(Clone)]
+    struct BackendState {
+        name: String,
+        requests: Arc<Mutex<Vec<Value>>>,
+        hits: Arc<AtomicUsize>,
+    }
+
+    struct TestBackend {
+        address: SocketAddr,
+        state: BackendState,
+        handle: JoinHandle<()>,
+    }
+
+    impl TestBackend {
+        async fn spawn(name: &str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let state = BackendState {
+                name: name.to_owned(),
+                requests: Arc::new(Mutex::new(Vec::new())),
+                hits: Arc::new(AtomicUsize::new(0)),
+            };
+            let app = Router::new()
+                .route("/v1/responses", post(backend_responses))
+                .with_state(state.clone());
+            let handle = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+
+            Self {
+                address,
+                state,
+                handle,
+            }
+        }
+
+        fn base_url(&self) -> String {
+            format!("http://{}", self.address)
+        }
+
+        fn hits(&self) -> usize {
+            self.state.hits.load(Ordering::SeqCst)
+        }
+
+        fn requests(&self) -> Vec<Value> {
+            self.state.requests.lock().unwrap().clone()
+        }
+
+        fn abort(self) {
+            self.handle.abort();
+        }
+    }
+
+    async fn backend_responses(
+        State(state): State<BackendState>,
+        Json(payload): Json<Value>,
+    ) -> Json<Value> {
+        state.hits.fetch_add(1, Ordering::SeqCst);
+        state.requests.lock().unwrap().push(payload.clone());
+        Json(json!({
+            "id": format!("resp_{}", state.name),
+            "object": "response",
+            "model": payload["model"],
+            "output": [],
+            "usage": {
+                "input_tokens": 13,
+                "input_tokens_details": {
+                    "cached_tokens": 7
+                },
+                "output_tokens": 3
+            }
+        }))
+    }
+}

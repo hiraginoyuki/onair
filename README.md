@@ -35,6 +35,11 @@ exporter = "none" # or "otlp"
 otlp_endpoint = "http://127.0.0.1:4317"
 export_interval_ms = 30000
 
+[routing]
+# "priority" chooses the first matching backend. "sticky" hashes identity/path/model/prompt_cache_key
+# across all matching backends, improving prompt-cache locality when several backends serve a model.
+strategy = "priority"
+
 [access]
 default_models = ["gpt-4o-mini"]
 
@@ -85,6 +90,8 @@ endpoints = ["chat", "responses"]
 
 `[[backend.model]].endpoints` can further restrict a model route to endpoint keys such as `chat`, `chat_completions`, `responses`, `audio`, or `embeddings`. If omitted or empty, the model route is allowed for any endpoint supported by the backend. Backend order is priority order when multiple compatible routes match, and also for model-less requests.
 
+Set `[routing].strategy = "sticky"` when multiple backends serve the same public model and you want cache-heavy traffic to keep landing on the same backend. The sticky key is derived from identity, path, public model, and `prompt_cache_key` when provided. The router still forwards `prompt_cache_key` and `prompt_cache_retention` unchanged.
+
 For a backend that should receive any OpenAI-compatible HTTP route it supports, use:
 
 ```toml
@@ -103,6 +110,14 @@ capabilities = ["all", "streaming"]
 - Non-success backend responses are converted to generic OpenAI-style errors; backend error bodies are discarded.
 - Response headers use an allowlist. onair keeps useful API headers such as `content-type` and `content-disposition`, sets its own cache policy, and echoes only a client-supplied `x-request-id`.
 - onair does not try to hide timing, throughput, token rate, or other behavioral fingerprints.
+
+### Prompt caching
+
+- Prompt caching is backend-defined and works best when the backend is OpenAI or another provider with compatible cache behavior.
+- onair preserves `prompt_cache_key` and `prompt_cache_retention`, and only rewrites configured public model IDs to backend model IDs.
+- `prompt_cache_key` also participates in sticky routing when `[routing].strategy = "sticky"`.
+- Static prompt prefixes, tools, schemas, images, and their ordering must remain stable for backend cache hits.
+- Extended cache retention such as `prompt_cache_retention = "24h"` may have data-retention implications and should only be enabled for backends/models where you intend that behavior.
 
 ## API keys
 

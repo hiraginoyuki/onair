@@ -6,6 +6,7 @@ use url::form_urlencoded;
 #[derive(Debug, Clone, Default)]
 pub struct RequestShape {
     pub model: Option<String>,
+    pub prompt_cache_key: Option<String>,
     pub stream: bool,
 }
 
@@ -18,6 +19,9 @@ pub fn inspect_request(
 
     if shape.model.is_none() {
         shape.model = query_field(query, "model");
+    }
+    if shape.prompt_cache_key.is_none() {
+        shape.prompt_cache_key = query_field(query, "prompt_cache_key");
     }
     if !shape.stream {
         shape.stream = query_bool(query, "stream");
@@ -363,6 +367,11 @@ fn inspect_json_body(body: &[u8]) -> RequestShape {
             .and_then(Value::as_str)
             .filter(|model| !model.trim().is_empty())
             .map(str::to_owned),
+        prompt_cache_key: value
+            .get("prompt_cache_key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.trim().is_empty())
+            .map(str::to_owned),
         stream: value
             .get("stream")
             .and_then(Value::as_bool)
@@ -375,6 +384,9 @@ fn inspect_urlencoded_body(body: &[u8]) -> RequestShape {
     for (key, value) in form_urlencoded::parse(body) {
         match key.as_ref() {
             "model" if !value.trim().is_empty() => shape.model = Some(value.into_owned()),
+            "prompt_cache_key" if !value.trim().is_empty() => {
+                shape.prompt_cache_key = Some(value.into_owned())
+            }
             "stream" => shape.stream = truthy(&value),
             _ => {}
         }
@@ -399,6 +411,14 @@ fn inspect_multipart_body(body: &[u8], boundary: &str) -> RequestShape {
         if multipart_field_is(headers, "stream") {
             if let Ok(stream) = std::str::from_utf8(content) {
                 shape.stream = truthy(stream);
+            }
+        }
+        if multipart_field_is(headers, "prompt_cache_key") {
+            if let Ok(key) = std::str::from_utf8(content) {
+                let key = key.trim();
+                if !key.is_empty() {
+                    shape.prompt_cache_key = Some(key.to_owned());
+                }
             }
         }
     }

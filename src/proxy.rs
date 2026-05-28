@@ -64,11 +64,19 @@ pub async fn proxy_v1(
         }
     }
 
+    let sticky_key = routing::sticky_routing_key(
+        &identity.id,
+        &path,
+        request_shape.model.as_deref(),
+        request_shape.prompt_cache_key.as_deref(),
+    );
     let route = match routing::select_backend(
         &state.config.backends,
+        state.config.routing.strategy,
         &path,
         request_shape.model.as_deref(),
         request_shape.stream,
+        Some(&sticky_key),
     ) {
         Ok(route) => route,
         Err(error) => {
@@ -200,6 +208,15 @@ async fn do_proxy(
     let upstream_status = upstream.status();
     if !upstream_status.is_success() {
         let api_error = ApiError::upstream(upstream_status);
+        warn!(
+            upstream_status = upstream_status.as_u16(),
+            client_status = api_error.status.as_u16(),
+            backend = %labels.backend,
+            route = %labels.route,
+            model = %labels.public_model,
+            path = %uri.path(),
+            "upstream returned non-success status"
+        );
         state
             .metrics
             .record_request(&labels, api_error.status.as_u16(), request_timer.elapsed());

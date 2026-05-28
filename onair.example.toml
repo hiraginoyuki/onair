@@ -9,6 +9,10 @@ exporter = "none"
 # otlp_endpoint = "http://127.0.0.1:4317"
 export_interval_ms = 30000
 
+[routing]
+# Use "sticky" when multiple matching backends should share load while preserving prompt-cache affinity.
+strategy = "priority"
+
 [access]
 # Every configured client receives these public models in addition to its own models.
 default_models = ["gpt-4o-mini"]

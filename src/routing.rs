@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
+use std::hash::{Hash, Hasher};
 
-use crate::config::ResolvedBackend;
+use crate::config::{ResolvedBackend, RoutingStrategy};
 use crate::error::ApiError;
 
 #[derive(Debug, Clone)]
@@ -15,11 +16,14 @@ pub struct SelectedRoute {
 
 pub fn select_backend(
     backends: &[ResolvedBackend],
+    strategy: RoutingStrategy,
     path: &str,
     model: Option<&str>,
     stream: bool,
+    sticky_key: Option<&str>,
 ) -> Result<SelectedRoute, ApiError> {
     let path_candidates = path_capability_candidates(path);
+    let mut candidates = Vec::new();
 
     for backend in backends {
         if stream && !has_capability(&backend.capabilities, "streaming") {
@@ -39,7 +43,7 @@ pub fn select_backend(
                 {
                     continue;
                 }
-                return Ok(SelectedRoute {
+                candidates.push(SelectedRoute {
                     backend_id: backend.id.clone(),
                     base_url: backend.base_url.clone(),
                     api_key: backend.api_key.clone(),
@@ -51,7 +55,7 @@ pub fn select_backend(
             continue;
         }
 
-        return Ok(SelectedRoute {
+        candidates.push(SelectedRoute {
             backend_id: backend.id.clone(),
             base_url: backend.base_url.clone(),
             api_key: backend.api_key.clone(),
@@ -61,13 +65,79 @@ pub fn select_backend(
         });
     }
 
-    if let Some(requested_model) = model {
-        Err(ApiError::model_not_found(requested_model))
-    } else {
-        Err(ApiError::not_found(format!(
+    if candidates.is_empty() {
+        if let Some(requested_model) = model {
+            return Err(ApiError::model_not_found(requested_model));
+        }
+        return Err(ApiError::not_found(format!(
             "The requested endpoint '{path}' is unavailable."
-        )))
+        )));
     }
+
+    let selected = match strategy {
+        RoutingStrategy::Priority => candidates.remove(0),
+        RoutingStrategy::Sticky => {
+            let index = sticky_index(sticky_key.unwrap_or(path), candidates.len());
+            candidates.remove(index)
+        }
+    };
+
+    if let Some(requested_model) = model {
+        if selected.public_model.is_none() && selected.backend_model.is_none() {
+            return Err(ApiError::model_not_found(requested_model));
+        }
+    }
+
+    Ok(selected)
+}
+
+fn sticky_index(key: &str, count: usize) -> usize {
+    if count <= 1 {
+        return 0;
+    }
+
+    let mut hasher = FnvHasher::default();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) % count
+}
+
+#[derive(Default)]
+struct FnvHasher(u64);
+
+impl Hasher for FnvHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = if self.0 == 0 {
+            0xcbf29ce484222325
+        } else {
+            self.0
+        };
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        self.0 = hash;
+    }
+
+    fn finish(&self) -> u64 {
+        if self.0 == 0 {
+            0xcbf29ce484222325
+        } else {
+            self.0
+        }
+    }
+}
+
+pub fn sticky_routing_key(
+    identity: &str,
+    path: &str,
+    model: Option<&str>,
+    prompt_cache_key: Option<&str>,
+) -> String {
+    format!(
+        "{identity}\u{0}{path}\u{0}{}\u{0}{}",
+        model.unwrap_or(""),
+        prompt_cache_key.unwrap_or("")
+    )
 }
 
 pub fn path_metric_name(path: &str) -> String {

@@ -16,6 +16,8 @@ pub struct ConfigFile {
     #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
+    pub routing: RoutingConfig,
+    #[serde(default)]
     pub access: AccessConfig,
     #[serde(default, rename = "client")]
     pub clients: Vec<ClientConfig>,
@@ -27,6 +29,7 @@ pub struct ConfigFile {
 pub struct Config {
     pub server: ServerConfig,
     pub telemetry: TelemetryConfig,
+    pub routing: RoutingConfig,
     pub clients: Vec<ResolvedClient>,
     pub backends: Vec<ResolvedBackend>,
 }
@@ -79,6 +82,33 @@ pub enum TelemetryExporter {
 impl Default for TelemetryExporter {
     fn default() -> Self {
         Self::None
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RoutingConfig {
+    pub strategy: RoutingStrategy,
+}
+
+impl Default for RoutingConfig {
+    fn default() -> Self {
+        Self {
+            strategy: RoutingStrategy::Priority,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingStrategy {
+    Priority,
+    Sticky,
+}
+
+impl Default for RoutingStrategy {
+    fn default() -> Self {
+        Self::Priority
     }
 }
 
@@ -267,6 +297,7 @@ impl Config {
         Ok(Self {
             server: file.server,
             telemetry: file.telemetry,
+            routing: file.routing,
             clients,
             backends,
         })
