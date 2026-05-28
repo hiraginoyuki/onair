@@ -1,0 +1,39 @@
+[server]
+bind = "127.0.0.1:8080"
+request_body_limit_bytes = 2097152
+
+[telemetry]
+service_name = "onair"
+# "none" by default. Use "otlp" to export OpenTelemetry metrics to an OTLP collector.
+exporter = "none"
+# otlp_endpoint = "http://127.0.0.1:4317"
+export_interval_ms = 30000
+
+[access]
+# Every configured client receives these public models in addition to its own models.
+default_models = ["gpt-4o-mini"]
+
+[[client]]
+id = "dev"
+# API keys are exact-match bearer tokens. See README.md for the recommended key shape.
+api_key = "sk-ona-AAAAC3NzaC1lZDI1NTE5AAAAIaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+models = ["gpt-4o"]
+
+[[backend]]
+id = "local-vllm"
+base_url = "http://127.0.0.1:8000"
+# api_key_env = "LOCAL_VLLM_API_KEY"
+# Use ["all", "streaming"] for a backend that should receive any OpenAI-compatible /v1/* route it supports.
+capabilities = ["chat", "responses", "streaming"]
+timeout_ms = 120000
+
+# Model routes are optional for model-less endpoints, but required for model-bearing requests and /v1/models output.
+[[backend.model]]
+public = "gpt-4o-mini"
+backend = "llama-3.1-8b-instruct"
+endpoints = ["chat", "responses"]
+
+[[backend.model]]
+public = "gpt-4o"
+backend = "llama-3.1-70b-instruct"
+endpoints = ["chat"]
