@@ -157,6 +157,22 @@ pub fn path_metric_name(path: &str) -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
+pub fn path_requires_model(path: &str) -> bool {
+    let normalized = path.trim_end_matches('/');
+    matches!(
+        normalized,
+        "/v1/chat/completions"
+            | "/v1/chat/completion"
+            | "/v1/responses"
+            | "/v1/embeddings"
+            | "/v1/audio/transcriptions"
+            | "/v1/audio/translations"
+            | "/v1/images/generations"
+            | "/v1/images/edits"
+            | "/v1/images/variations"
+    )
+}
+
 pub fn path_capability_candidates(path: &str) -> Vec<String> {
     let trimmed = path
         .strip_prefix("/v1/")

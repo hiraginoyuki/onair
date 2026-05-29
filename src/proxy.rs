@@ -49,6 +49,22 @@ pub async fn proxy_v1(
 
     let content_type = header_str(&headers, &CONTENT_TYPE).map(str::to_owned);
     let request_shape = openai::inspect_request(&body, content_type.as_deref(), uri.query());
+    if request_shape.model.is_none() && routing::path_requires_model(&path) {
+        let error = ApiError::bad_request(
+            "Missing required parameter: model.",
+            Some("model".to_owned()),
+        );
+        record_preflight_failure(
+            &state,
+            &route_name,
+            &identity.id,
+            None,
+            request_shape.stream,
+            error.status,
+            request_timer.elapsed(),
+        );
+        return Err(error);
+    }
     if let Some(model) = request_shape.model.as_deref() {
         if !identity.models.contains(model) {
             record_preflight_failure(

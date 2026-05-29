@@ -66,6 +66,16 @@ impl ApiError {
         }
     }
 
+    pub fn bad_request(message: impl Into<String>, param: impl Into<Option<String>>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+            kind: "invalid_request_error".to_owned(),
+            code: None,
+            param: param.into(),
+        }
+    }
+
     pub fn model_not_found(model: &str) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,

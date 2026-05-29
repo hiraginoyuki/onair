@@ -326,6 +326,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn model_required_endpoint_without_model_returns_400_without_calling_backend() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let state = test_state(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "input": "hello"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response_body = json_body(response).await;
+        assert_eq!(response_body["error"]["param"], "model");
+        assert_eq!(backend.hits(), 0);
+
+        backend.abort();
+    }
+
+    #[tokio::test]
     async fn models_respect_context_length_output_policy() {
         let state = test_state_with_client_models(
             RoutingStrategy::Priority,
