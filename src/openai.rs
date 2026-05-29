@@ -308,21 +308,24 @@ pub struct ModelObject {
     pub object: &'static str,
     pub created: u64,
     pub owned_by: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u64>,
 }
 
 impl ModelObject {
-    pub fn new(id: String) -> Self {
+    pub fn new(id: String, context_length: Option<u64>) -> Self {
         Self {
             id,
             object: "model",
             created: 0,
             owned_by: "onair",
+            context_length,
         }
     }
 }
 
-pub fn models_response(models: impl IntoIterator<Item = String>) -> Json<ModelsResponse> {
-    let mut data = models.into_iter().map(ModelObject::new).collect::<Vec<_>>();
+pub fn models_response(models: impl IntoIterator<Item = ModelObject>) -> Json<ModelsResponse> {
+    let mut data = models.into_iter().collect::<Vec<_>>();
     data.sort_by(|left, right| left.id.cmp(&right.id));
     Json(ModelsResponse {
         object: "list",
@@ -330,8 +333,8 @@ pub fn models_response(models: impl IntoIterator<Item = String>) -> Json<ModelsR
     })
 }
 
-pub fn model_response(model: String) -> Json<ModelObject> {
-    Json(ModelObject::new(model))
+pub fn model_response(model: String, context_length: Option<u64>) -> Json<ModelObject> {
+    Json(ModelObject::new(model, context_length))
 }
 
 fn inspect_body(body: &[u8], content_type: Option<&str>) -> RequestShape {

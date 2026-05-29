@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -143,6 +143,7 @@ pub struct BackendConfig {
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
     pub timeout_ms: u64,
+    pub context_length: Option<u64>,
     #[serde(alias = "capability")]
     pub capabilities: BTreeSet<String>,
     #[serde(rename = "model")]
@@ -157,6 +158,7 @@ impl Default for BackendConfig {
             api_key: None,
             api_key_env: None,
             timeout_ms: 120_000,
+            context_length: None,
             capabilities: BTreeSet::new(),
             models: Vec::new(),
         }
@@ -169,7 +171,29 @@ pub struct ModelRouteConfig {
     pub public: String,
     pub backend: Option<String>,
     #[serde(default)]
+    pub context_length: ContextLengthConfig,
+    #[serde(default)]
     pub endpoints: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ContextLengthConfig {
+    Value(u64),
+    Mode(ContextLengthMode),
+}
+
+impl Default for ContextLengthConfig {
+    fn default() -> Self {
+        Self::Mode(ContextLengthMode::None)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextLengthMode {
+    None,
+    Inherit,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +210,7 @@ pub struct ResolvedBackend {
 pub struct ModelRoute {
     pub public: String,
     pub backend: String,
+    pub context_length: Option<u64>,
     pub endpoints: BTreeSet<String>,
 }
 
@@ -269,9 +294,16 @@ impl Config {
                         )));
                     }
                     public_models.insert(model.public.clone());
+                    let context_length = resolve_context_length(
+                        &model.context_length,
+                        backend.context_length,
+                        &backend.id,
+                        &model.public,
+                    )?;
                     Ok(ModelRoute {
                         backend: model.backend.unwrap_or_else(|| model.public.clone()),
                         public: model.public,
+                        context_length,
                         endpoints: model.endpoints,
                     })
                 })
@@ -303,11 +335,16 @@ impl Config {
         })
     }
 
-    pub fn public_model_ids(&self) -> BTreeSet<String> {
-        self.backends
-            .iter()
-            .flat_map(|backend| backend.models.iter().map(|model| model.public.clone()))
-            .collect()
+    pub fn public_model_context_lengths(&self) -> BTreeMap<String, Option<u64>> {
+        let mut models = BTreeMap::new();
+        for backend in &self.backends {
+            for model in &backend.models {
+                models
+                    .entry(model.public.clone())
+                    .or_insert(model.context_length);
+            }
+        }
+        models
     }
 }
 
@@ -359,4 +396,101 @@ fn validate_allowed_models(
         }
     }
     Ok(())
+}
+
+fn resolve_context_length(
+    config: &ContextLengthConfig,
+    backend_context_length: Option<u64>,
+    backend_id: &str,
+    public_model: &str,
+) -> Result<Option<u64>> {
+    match config {
+        ContextLengthConfig::Value(value) => Ok(Some(*value)),
+        ContextLengthConfig::Mode(ContextLengthMode::None) => Ok(None),
+        ContextLengthConfig::Mode(ContextLengthMode::Inherit) => backend_context_length
+            .map(Some)
+            .ok_or_else(|| {
+                Error::Config(format!(
+                    "backend '{}' model '{}' uses context_length = 'inherit' but backend context_length is not set",
+                    backend_id, public_model
+                ))
+            }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_length_policies_resolve_from_config() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-inherit", "public-specific", "public-none"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            context_length = 131072
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-inherit"
+            backend = "private-inherit"
+            context_length = "inherit"
+
+            [[backend.model]]
+            public = "public-specific"
+            backend = "private-specific"
+            context_length = 8192
+
+            [[backend.model]]
+            public = "public-none"
+            backend = "private-none"
+            context_length = "none"
+            "#,
+        );
+
+        let models = config.public_model_context_lengths();
+        assert_eq!(models.get("public-inherit"), Some(&Some(131_072)));
+        assert_eq!(models.get("public-specific"), Some(&Some(8_192)));
+        assert_eq!(models.get("public-none"), Some(&None));
+    }
+
+    #[test]
+    fn inherited_context_length_requires_backend_context_length() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [access]
+            default_models = ["public-inherit"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-inherit"
+            backend = "private-inherit"
+            context_length = "inherit"
+            "#,
+        )
+        .unwrap();
+
+        let error = Config::resolve(file).unwrap_err().to_string();
+        assert!(error.contains("uses context_length = 'inherit'"));
+    }
+
+    fn parse_config(raw: &str) -> Config {
+        Config::resolve(toml::from_str(raw).unwrap()).unwrap()
+    }
 }

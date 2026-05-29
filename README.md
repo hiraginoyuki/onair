@@ -52,12 +52,14 @@ models = ["gpt-4o"]
 id = "local-vllm"
 base_url = "http://127.0.0.1:8000"
 api_key_env = "LOCAL_VLLM_API_KEY"
+context_length = 131072
 capabilities = ["chat", "responses", "streaming"]
 timeout_ms = 120000
 
 [[backend.model]]
 public = "gpt-4o-mini"
 backend = "llama-3.1-8b-instruct"
+context_length = "inherit"
 endpoints = ["chat", "responses"]
 ```
 
@@ -91,6 +93,14 @@ endpoints = ["chat", "responses"]
 `[[backend.model]].endpoints` can further restrict a model route to endpoint keys such as `chat`, `chat_completions`, `responses`, `audio`, or `embeddings`. If omitted or empty, the model route is allowed for any endpoint supported by the backend. Backend order is priority order when multiple compatible routes match, and also for model-less requests.
 
 Set `[routing].strategy = "sticky"` when multiple backends serve the same public model and you want cache-heavy traffic to keep landing on the same backend. The sticky key is derived from identity, path, public model, and `prompt_cache_key` when provided. The router still forwards `prompt_cache_key` and `prompt_cache_retention` unchanged.
+
+### Context length
+
+- `[[backend]].context_length` sets a backend-level default context length for inheritance.
+- `[[backend.model]].context_length = "inherit"` copies the backend-level value into the public model listing.
+- `[[backend.model]].context_length = <integer>` returns a specific value for that public model.
+- `[[backend.model]].context_length = "none"` or omitting the field entirely hides the value, which is the default OpenAI-compatible behavior.
+- If you use `"inherit"` without a backend-level `context_length`, config loading fails.
 
 For a backend that should receive any OpenAI-compatible HTTP route it supports, use:
 

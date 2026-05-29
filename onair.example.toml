@@ -27,6 +27,8 @@ models = ["gpt-4o"]
 id = "local-vllm"
 base_url = "http://127.0.0.1:8000"
 # api_key_env = "LOCAL_VLLM_API_KEY"
+# Optional backend-level value for model routes that use context_length = "inherit".
+context_length = 131072
 # Use ["all", "streaming"] for a backend that should receive any OpenAI-compatible /v1/* route it supports.
 capabilities = ["chat", "responses", "streaming"]
 timeout_ms = 120000
@@ -35,6 +37,8 @@ timeout_ms = 120000
 [[backend.model]]
 public = "gpt-4o-mini"
 backend = "llama-3.1-8b-instruct"
+# Optional: "none" or omitted hides it, "inherit" uses backend.context_length, or use an integer.
+context_length = "inherit"
 endpoints = ["chat", "responses"]
 
 [[backend.model]]

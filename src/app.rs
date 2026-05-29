@@ -59,12 +59,17 @@ async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
     let timer = RequestTimer::start();
     let response = match authenticate(&headers, &state.config.clients) {
         Ok(identity) => {
-            let available = state.config.public_model_ids();
+            let available = state.config.public_model_context_lengths();
             let identity_id = identity.id.clone();
             let models = identity
                 .models
                 .into_iter()
-                .filter(|model| available.contains(model))
+                .filter_map(|model| {
+                    available
+                        .get(&model)
+                        .copied()
+                        .map(|context_length| openai::ModelObject::new(model, context_length))
+                })
                 .collect::<Vec<_>>();
             let response = openai::models_response(models).into_response();
             state.metrics.record_request(
@@ -94,15 +99,26 @@ async fn model(
     let timer = RequestTimer::start();
     let response = match authenticate(&headers, &state.config.clients) {
         Ok(identity) => {
-            let available = state.config.public_model_ids();
-            if identity.models.contains(&model) && available.contains(&model) {
-                let response = openai::model_response(model.clone()).into_response();
-                state.metrics.record_request(
-                    &model_route_labels("models_retrieve", &identity.id, &model),
-                    response.status().as_u16(),
-                    timer.elapsed(),
-                );
-                response
+            let available = state.config.public_model_context_lengths();
+            if identity.models.contains(&model) {
+                if let Some(context_length) = available.get(&model).copied() {
+                    let response =
+                        openai::model_response(model.clone(), context_length).into_response();
+                    state.metrics.record_request(
+                        &model_route_labels("models_retrieve", &identity.id, &model),
+                        response.status().as_u16(),
+                        timer.elapsed(),
+                    );
+                    response
+                } else {
+                    let error = ApiError::model_not_found(&model);
+                    state.metrics.record_request(
+                        &model_route_labels("models_retrieve", &identity.id, &model),
+                        error.status.as_u16(),
+                        timer.elapsed(),
+                    );
+                    error.into_response()
+                }
             } else {
                 let error = ApiError::model_not_found(&model);
                 state.metrics.record_request(
@@ -295,7 +311,68 @@ mod tests {
         backend.abort();
     }
 
+    #[tokio::test]
+    async fn models_respect_context_length_output_policy() {
+        let state = test_state_with_client_models(
+            RoutingStrategy::Priority,
+            vec![ResolvedBackend {
+                id: "metadata-only".to_owned(),
+                base_url: "http://127.0.0.1:9".to_owned(),
+                api_key: None,
+                timeout: std::time::Duration::from_secs(5),
+                capabilities: btree_set(["responses"]),
+                models: vec![
+                    ModelRoute {
+                        public: PUBLIC_MODEL.to_owned(),
+                        backend: BACKEND_MODEL.to_owned(),
+                        context_length: Some(131_072),
+                        endpoints: btree_set(["responses"]),
+                    },
+                    ModelRoute {
+                        public: "gpt-no-context".to_owned(),
+                        backend: "backend-no-context".to_owned(),
+                        context_length: None,
+                        endpoints: btree_set(["responses"]),
+                    },
+                ],
+            }],
+            btree_set([PUBLIC_MODEL, "gpt-no-context"]),
+        );
+        let app = router(state);
+
+        let response = app.clone().oneshot(authed_get("/v1/models")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = json_body(response).await;
+        let models = response_body["data"].as_array().unwrap();
+        let model_with_context = models
+            .iter()
+            .find(|model| model["id"] == PUBLIC_MODEL)
+            .unwrap();
+        assert_eq!(model_with_context["context_length"], 131_072);
+        let model_without_context = models
+            .iter()
+            .find(|model| model["id"] == "gpt-no-context")
+            .unwrap();
+        assert!(model_without_context.get("context_length").is_none());
+
+        let response = app
+            .oneshot(authed_get(&format!("/v1/models/{PUBLIC_MODEL}")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = json_body(response).await;
+        assert_eq!(response_body["context_length"], 131_072);
+    }
+
     fn test_state(strategy: RoutingStrategy, backends: Vec<ResolvedBackend>) -> Arc<AppState> {
+        test_state_with_client_models(strategy, backends, btree_set([PUBLIC_MODEL]))
+    }
+
+    fn test_state_with_client_models(
+        strategy: RoutingStrategy,
+        backends: Vec<ResolvedBackend>,
+        client_models: BTreeSet<String>,
+    ) -> Arc<AppState> {
         Arc::new(
             AppState::new(
                 Config {
@@ -305,7 +382,7 @@ mod tests {
                     clients: vec![ResolvedClient {
                         id: "dev".to_owned(),
                         api_key: CLIENT_KEY.to_owned(),
-                        models: btree_set([PUBLIC_MODEL]),
+                        models: client_models,
                     }],
                     backends,
                 },
@@ -325,6 +402,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: PUBLIC_MODEL.to_owned(),
                 backend: BACKEND_MODEL.to_owned(),
+                context_length: None,
                 endpoints: btree_set(["responses"]),
             }],
         }
@@ -337,6 +415,15 @@ mod tests {
             .header(AUTHORIZATION, format!("Bearer {CLIENT_KEY}"))
             .header(CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    fn authed_get(uri: &str) -> Request<Body> {
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header(AUTHORIZATION, format!("Bearer {CLIENT_KEY}"))
+            .body(Body::empty())
             .unwrap()
     }
 
