@@ -1,19 +1,27 @@
 # onair
 
-onair is an OpenAI-compatible HTTP reverse proxy router. It accepts OpenAI-style bearer tokens, exposes only the models each authenticated identity is allowed to see, routes requests to compatible backends, and avoids leaking backend-specific details in client-facing errors or response headers.
+onair is an OpenAI-compatible HTTP reverse proxy router for operating one public API surface over one or more compatible backends.
 
-## Day-one scope
+## Intent
 
-- `GET /v1/models` returns an identity-filtered OpenAI-style model list.
-- `GET /v1/models/{model}` returns a synthetic model object for allowed public model IDs.
-- Any HTTP method under `/v1/*` can be forwarded to a compatible backend, including OpenAI-compatible endpoints that are not explicitly modeled in onair yet.
+onair lets a proxy operator expose stable OpenAI-style API keys, model names, and routing policy without exposing the backend provider, backend URL, backend model ID, or other obvious backend-specific details to clients. The privacy target is backend anonymity from ordinary API-visible server behavior: model listing, model IDs, request/response model fields, headers, and error bodies should not reveal which backend handled a request.
+
+This is not a full traffic-analysis defense. Timing, throughput, token rate, model quality, and other behavioral fingerprints can still reveal information about the backing service. The project focuses on hiding simpler protocol/configuration leaks while preserving compatibility with OpenAI-style clients.
+
+Planned work lives in [ROADMAP.md](ROADMAP.md). This README describes the current behavior and how to operate the software.
+
+## Behavior Summary
+
+- Clients authenticate with OpenAI-style `Authorization: Bearer ...` headers.
+- Each authenticated identity sees only its configured public model whitelist.
+- Public model names are mapped to backend model names after access checks pass.
+- `/v1/*` requests that are not handled by onair itself can be forwarded to a compatible backend when backend capabilities allow it.
 - `POST /v1/chat/completion` is accepted as a typo-compatible alias and forwarded upstream as `/v1/chat/completions`.
-- `stream: true` responses are proxied as server-sent events; JSON/SSE model fields are normalized so backend model names are rewritten to public model names.
-- Model access is whitelist-style. If a known client requests a model outside its whitelist, onair returns `404` with an OpenAI-style `model_not_found` error rather than an authorization error.
-- Backend error bodies and backend response headers are not forwarded. Client responses keep only sanitized headers needed for API compatibility plus a client-supplied `x-request-id` echo.
-- OpenTelemetry metrics cover request counts, status codes, latency, stream duration, backend usage, and token counters when an OpenAI-compatible `usage` object is present.
+- `stream: true` responses are proxied as server-sent events, with configured backend model names rewritten back to public model names in JSON/SSE responses.
+- Backend errors are converted to generic OpenAI-style errors, and response headers are allowlisted before returning to the client.
+- OpenTelemetry metrics record request counts, status codes, latency, stream duration, backend usage, and token counters when an OpenAI-compatible `usage` object is present.
 
-## Configuration
+## Operation
 
 Start from `onair.example.toml`:
 
@@ -22,7 +30,9 @@ cp onair.example.toml onair.toml
 cargo run -- --config onair.toml
 ```
 
-Configuration is TOML. The core sections are:
+Configuration is TOML. The path comes from `--config`, `-c`, or `ONAIR_CONFIG`; if none is provided, onair reads `onair.toml` from the current directory.
+
+The core sections are:
 
 ```toml
 [server]
@@ -62,6 +72,15 @@ backend = "llama-3.1-8b-instruct"
 context_length = "inherit"
 endpoints = ["chat", "responses"]
 ```
+
+onair interprets the file as routing and visibility policy:
+
+- `[server]` and `[telemetry]` configure process-level behavior.
+- `[access].default_models` grants public models to every configured client.
+- Each `[[client]]` adds one authenticated identity and may extend that identity's model whitelist.
+- Each `[[backend]]` defines one upstream OpenAI-compatible service plus capability markers that decide which `/v1/*` request families it can receive.
+- Each `[[backend.model]]` maps one public model name to the backend model name that upstream should receive.
+- `[routing]` chooses how to select among multiple compatible backend routes.
 
 ### Hot reload
 
@@ -134,7 +153,7 @@ capabilities = ["all", "streaming"]
 - Successful JSON and SSE responses rewrite backend model IDs back to public model IDs when a model mapping is known.
 - Non-success backend responses are converted to generic OpenAI-style errors; backend error bodies are discarded.
 - Response headers use an allowlist. onair keeps useful API headers such as `content-type` and `content-disposition`, sets its own cache policy, and echoes only a client-supplied `x-request-id`.
-- onair does not try to hide timing, throughput, token rate, or other behavioral fingerprints.
+- Backend anonymity covers protocol-visible signs. onair does not try to hide timing, throughput, token rate, model quality, or other behavioral fingerprints.
 
 ### Prompt caching
 
