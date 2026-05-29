@@ -1,2 +1,17 @@
 /target
 onair.toml
+
+# Local environment files
+.env
+.env.*
+
+# OS/editor metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local credentials/certificates
+*.pem
+*.key
+*.p12
+*.pfx
