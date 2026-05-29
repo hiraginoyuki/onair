@@ -92,6 +92,8 @@ pub async fn proxy_v1(
             return Err(error);
         }
     };
+    let model_log_fields = ModelLogFields::from_route(request_shape.model.as_deref(), &route);
+    let request_body_bytes = body.len();
 
     let labels = MetricLabels {
         route: route_name,
@@ -109,11 +111,14 @@ pub async fn proxy_v1(
     let span = info_span!(
         "proxy_v1",
         route = %labels.route,
-        model = %labels.public_model,
+        requested_model = %model_log_fields.requested,
+        public_model = %model_log_fields.public,
+        backend_model = %model_log_fields.backend,
         backend = %route.backend_id,
         stream = request_shape.stream,
         method = %method,
         path = %path,
+        request_body_bytes,
     );
     do_proxy(
         state,
@@ -125,6 +130,8 @@ pub async fn proxy_v1(
         request_shape.stream,
         route,
         labels,
+        model_log_fields,
+        request_body_bytes,
         request_timer,
     )
     .instrument(span)
@@ -141,6 +148,8 @@ async fn do_proxy(
     stream: bool,
     route: SelectedRoute,
     labels: MetricLabels,
+    model_log_fields: ModelLogFields,
+    request_body_bytes: usize,
     request_timer: RequestTimer,
 ) -> Result<Response<Body>, ApiError> {
     let outbound_body = openai::rewrite_request_body(
@@ -213,8 +222,11 @@ async fn do_proxy(
             client_status = api_error.status.as_u16(),
             backend = %labels.backend,
             route = %labels.route,
-            model = %labels.public_model,
+            requested_model = %model_log_fields.requested,
+            public_model = %model_log_fields.public,
+            backend_model = %model_log_fields.backend,
             path = %uri.path(),
+            request_body_bytes,
             "upstream returned non-success status"
         );
         state
@@ -468,6 +480,23 @@ fn record_preflight_failure(
     state
         .metrics
         .record_request(&labels, status.as_u16(), duration);
+}
+
+#[derive(Debug, Clone)]
+struct ModelLogFields {
+    requested: String,
+    public: String,
+    backend: String,
+}
+
+impl ModelLogFields {
+    fn from_route(requested_model: Option<&str>, route: &SelectedRoute) -> Self {
+        Self {
+            requested: requested_model.unwrap_or("none").to_owned(),
+            public: route.public_model.as_deref().unwrap_or("none").to_owned(),
+            backend: route.backend_model.as_deref().unwrap_or("none").to_owned(),
+        }
+    }
 }
 
 struct StreamMetrics {
