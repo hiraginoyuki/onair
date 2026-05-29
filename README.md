@@ -65,7 +65,7 @@ endpoints = ["chat", "responses"]
 
 ### Hot reload
 
-onair watches the config file's parent directory and reloads the config when the file changes. Reloads are validated before they are applied, and invalid TOML or invalid model/client/backend rules keep the previous config active.
+onair watches the config file's parent directory and reloads the config when the file changes. Save bursts and atomic replacement writes are debounced before loading. Reloads are validated before they are applied, and invalid TOML or invalid model/client/backend rules keep the previous config active.
 
 Reloaded immediately:
 

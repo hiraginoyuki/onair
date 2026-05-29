@@ -14,6 +14,10 @@ use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
 
+const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
+const CONFIG_RELOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
+const CONFIG_RELOAD_MAX_ATTEMPTS: usize = 5;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
@@ -84,9 +88,9 @@ impl ConfigWatcher {
             })?
             .to_owned();
 
-        let (tx, mut rx) = mpsc::channel::<notify::Result<Event>>(32);
+        let (tx, mut rx) = mpsc::unbounded_channel::<notify::Result<Event>>();
         let mut watcher = notify::recommended_watcher(move |event| {
-            if let Err(error) = tx.try_send(event) {
+            if let Err(error) = tx.send(event) {
                 warn!(?error, "failed to enqueue config watch event");
             }
         })
@@ -101,22 +105,10 @@ impl ConfigWatcher {
             while let Some(event) = rx.recv().await {
                 match event {
                     Ok(event) if is_reload_event(&event, &task_path, &filename) => {
-                        tokio::time::sleep(Duration::from_millis(250)).await;
-                        loop {
-                            match rx.try_recv() {
-                                Ok(Ok(event)) => {
-                                    if !is_reload_event(&event, &task_path, &filename) {
-                                        continue;
-                                    }
-                                }
-                                Ok(Err(error)) => {
-                                    warn!(?error, "config watch event failed");
-                                }
-                                Err(TryRecvError::Empty) => break,
-                                Err(TryRecvError::Disconnected) => return,
-                            }
+                        if !wait_for_reload_quiet(&mut rx, &task_path, &filename).await {
+                            return;
                         }
-                        reload_config(&task_path, &store);
+                        reload_config_with_retries(&task_path, &store).await;
                     }
                     Ok(event) => {
                         debug!(?event, "ignored config watch event");
@@ -138,6 +130,37 @@ impl ConfigWatcher {
 impl Drop for ConfigWatcher {
     fn drop(&mut self) {
         self.task.abort();
+    }
+}
+
+async fn wait_for_reload_quiet(
+    rx: &mut mpsc::UnboundedReceiver<notify::Result<Event>>,
+    path: &Path,
+    filename: &std::ffi::OsStr,
+) -> bool {
+    loop {
+        tokio::time::sleep(CONFIG_RELOAD_DEBOUNCE).await;
+        let mut saw_reload_event = false;
+
+        loop {
+            match rx.try_recv() {
+                Ok(Ok(event)) if is_reload_event(&event, path, filename) => {
+                    saw_reload_event = true;
+                }
+                Ok(Ok(event)) => {
+                    debug!(?event, "ignored config watch event");
+                }
+                Ok(Err(error)) => {
+                    warn!(?error, "config watch event failed");
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return false,
+            }
+        }
+
+        if !saw_reload_event {
+            return true;
+        }
     }
 }
 
@@ -526,42 +549,68 @@ fn resolve_context_length(
 }
 
 fn reload_config(path: &Path, store: &ConfigStore) {
-    match Config::load(path) {
-        Ok(config) => {
-            let previous = store.snapshot();
-            let next = store.replace(config);
-            if previous.server.bind != next.server.bind {
-                warn!(
-                    old = %previous.server.bind,
-                    new = %next.server.bind,
-                    "config reload changed server.bind; listener address is only applied on restart"
-                );
+    if let Err(error) = try_reload_config(path, store) {
+        warn!(?error, "config reload failed; keeping previous config");
+    }
+}
+
+async fn reload_config_with_retries(path: &Path, store: &ConfigStore) {
+    for attempt in 1..=CONFIG_RELOAD_MAX_ATTEMPTS {
+        match try_reload_config(path, store) {
+            Ok(()) => return,
+            Err(error) if attempt == CONFIG_RELOAD_MAX_ATTEMPTS => {
+                warn!(?error, "config reload failed; keeping previous config");
             }
-            if previous.server.request_body_limit_bytes != next.server.request_body_limit_bytes {
-                warn!(
-                    old = previous.server.request_body_limit_bytes,
-                    new = next.server.request_body_limit_bytes,
-                    "config reload changed server.request_body_limit_bytes; body limit is only applied on restart"
+            Err(error) => {
+                debug!(
+                    ?error,
+                    attempt,
+                    max_attempts = CONFIG_RELOAD_MAX_ATTEMPTS,
+                    "config reload attempt failed; retrying"
                 );
+                tokio::time::sleep(CONFIG_RELOAD_RETRY_DELAY).await;
             }
-            if previous.telemetry.exporter != next.telemetry.exporter
-                || previous.telemetry.otlp_endpoint != next.telemetry.otlp_endpoint
-                || previous.telemetry.service_name != next.telemetry.service_name
-            {
-                warn!(
-                    "config reload changed telemetry settings; telemetry exporter is only applied on restart"
-                );
-            }
-            info!(
-                clients = next.clients.len(),
-                backends = next.backends.len(),
-                "config reloaded"
-            );
-        }
-        Err(error) => {
-            warn!(?error, "config reload failed; keeping previous config");
         }
     }
+}
+
+fn try_reload_config(path: &Path, store: &ConfigStore) -> Result<()> {
+    let config = Config::load(path)?;
+    apply_reloaded_config(config, store);
+    Ok(())
+}
+
+fn apply_reloaded_config(config: Config, store: &ConfigStore) {
+    let previous = store.snapshot();
+    let next = store.replace(config);
+    if previous.server.bind != next.server.bind {
+        warn!(
+            old = %previous.server.bind,
+            new = %next.server.bind,
+            "config reload changed server.bind; listener address is only applied on restart"
+        );
+    }
+    if previous.server.request_body_limit_bytes != next.server.request_body_limit_bytes {
+        warn!(
+            old = previous.server.request_body_limit_bytes,
+            new = next.server.request_body_limit_bytes,
+            "config reload changed server.request_body_limit_bytes; body limit is only applied on restart"
+        );
+    }
+    if previous.telemetry.exporter != next.telemetry.exporter
+        || previous.telemetry.otlp_endpoint != next.telemetry.otlp_endpoint
+        || previous.telemetry.service_name != next.telemetry.service_name
+        || previous.telemetry.export_interval_ms != next.telemetry.export_interval_ms
+    {
+        warn!(
+            "config reload changed telemetry settings; telemetry exporter is only applied on restart"
+        );
+    }
+    info!(
+        clients = next.clients.len(),
+        backends = next.backends.len(),
+        "config reloaded"
+    );
 }
 
 fn absolute_path(path: &Path) -> Result<PathBuf> {
@@ -661,16 +710,44 @@ mod tests {
         assert!(error.contains("uses context_length = 'inherit'"));
     }
 
+    #[tokio::test]
+    async fn watcher_reloads_config_after_file_changes() {
+        let path = temp_config_path("watch");
+        std::fs::write(&path, config_with_model("first-model")).unwrap();
+        let store = ConfigStore::new(Config::load(&path).unwrap());
+        let watcher = ConfigWatcher::start(&path, store.clone()).unwrap();
+
+        std::fs::write(&path, config_with_model("second-model")).unwrap();
+        wait_for_model(&store, "second-model").await;
+        assert!(
+            !store
+                .snapshot()
+                .public_model_context_lengths()
+                .contains_key("first-model")
+        );
+
+        let replacement = path.with_extension("replacement.toml");
+        std::fs::write(&replacement, config_with_model("third-model")).unwrap();
+        #[cfg(not(unix))]
+        {
+            let _ = std::fs::remove_file(&path);
+        }
+        std::fs::rename(&replacement, &path).unwrap();
+        wait_for_model(&store, "third-model").await;
+        assert!(
+            !store
+                .snapshot()
+                .public_model_context_lengths()
+                .contains_key("second-model")
+        );
+
+        drop(watcher);
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn reload_keeps_previous_config_when_new_config_is_invalid() {
-        let path = env::temp_dir().join(format!(
-            "onair-config-reload-test-{}-{}.toml",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let path = temp_config_path("reload");
         std::fs::write(&path, config_with_model("first-model")).unwrap();
         let store = ConfigStore::new(Config::load(&path).unwrap());
 
@@ -697,6 +774,34 @@ mod tests {
         assert!(models.contains_key("second-model"));
 
         let _ = std::fs::remove_file(path);
+    }
+
+    async fn wait_for_model(store: &ConfigStore, model: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if store
+                    .snapshot()
+                    .public_model_context_lengths()
+                    .contains_key(model)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for model '{model}' to reload"));
+    }
+
+    fn temp_config_path(label: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "onair-config-{label}-test-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
     }
 
     fn parse_config(raw: &str) -> Config {
