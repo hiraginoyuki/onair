@@ -97,10 +97,12 @@ Set `[routing].strategy = "sticky"` when multiple backends serve the same public
 ### Context length
 
 - `[[backend]].context_length` sets a backend-level default context length for inheritance.
-- `[[backend.model]].context_length = "inherit"` copies the backend-level value into the public model listing.
+- `[[backend.model]].context_length = "inherit"` copies the backend-level value into llama.cpp-style public metadata.
 - `[[backend.model]].context_length = <integer>` returns a specific value for that public model.
 - `[[backend.model]].context_length = "none"` or omitting the field entirely hides the value, which is the default OpenAI-compatible behavior.
 - If you use `"inherit"` without a backend-level `context_length`, config loading fails.
+- When visible, `/v1/models` and `/v1/models/{model}` expose the value as `meta.n_ctx` and `meta.n_ctx_train`, matching llama.cpp's OpenAI-compatible model object shape.
+- `/props?model=<public-model>` and `/v1/props?model=<public-model>` expose the runtime context as `default_generation_settings.n_ctx`, matching llama.cpp's props endpoint shape.
 
 For a backend that should receive any OpenAI-compatible HTTP route it supports, use:
 

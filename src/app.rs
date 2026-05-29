@@ -42,6 +42,8 @@ pub fn router(state: Arc<AppState>) -> Router {
     let body_limit = state.config.server.request_body_limit_bytes;
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/props", get(props))
+        .route("/v1/props", get(props))
         .route("/v1/models", get(models))
         .route("/v1/models/{*model}", get(model))
         .route("/v1/{*path}", any(v1_proxy))
@@ -146,6 +148,70 @@ async fn model(
         Err(error) => {
             state.metrics.record_request(
                 &model_route_labels("models_retrieve", "unknown", &model),
+                error.status.as_u16(),
+                timer.elapsed(),
+            );
+            error.into_response()
+        }
+    };
+    proxy::attach_request_id(response, &headers)
+}
+
+async fn props(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> Response<Body> {
+    let timer = RequestTimer::start();
+    let query_model = uri.query().and_then(|query| {
+        url::form_urlencoded::parse(query.as_bytes())
+            .find(|(key, _)| key == "model")
+            .map(|(_, value)| value.into_owned())
+    });
+
+    let response = match authenticate(&headers, &state.config.clients) {
+        Ok(identity) => {
+            let available = state.config.public_model_context_lengths();
+            let response = match query_model.as_deref() {
+                Some(model) => {
+                    if identity.models.contains(model) {
+                        if let Some(context_length) = available.get(model).copied() {
+                            openai::props_response(
+                                Some("router"),
+                                Some(model.to_owned()),
+                                context_length.unwrap_or(0),
+                            )
+                            .into_response()
+                        } else {
+                            ApiError::model_not_found(&model).into_response()
+                        }
+                    } else {
+                        ApiError::model_not_found(&model).into_response()
+                    }
+                }
+                None => openai::props_response(Some("router"), Some("llama-server".to_owned()), 0)
+                    .into_response(),
+            };
+            state.metrics.record_request(
+                &model_route_labels(
+                    "props",
+                    &identity.id,
+                    query_model.as_deref().unwrap_or("none"),
+                ),
+                response.status().as_u16(),
+                timer.elapsed(),
+            );
+            debug!(
+                identity = %identity.id,
+                response_status = response.status().as_u16(),
+                model = query_model.as_deref().unwrap_or("none"),
+                "props response completed"
+            );
+            response
+        }
+        Err(error) => {
+            state.metrics.record_request(
+                &model_route_labels("props", "unknown", query_model.as_deref().unwrap_or("none")),
                 error.status.as_u16(),
                 timer.elapsed(),
             );
@@ -389,20 +455,50 @@ mod tests {
             .iter()
             .find(|model| model["id"] == PUBLIC_MODEL)
             .unwrap();
-        assert_eq!(model_with_context["context_length"], 131_072);
+        assert_eq!(model_with_context["meta"]["n_ctx"], 131_072);
+        assert_eq!(model_with_context["meta"]["n_ctx_train"], 131_072);
+        assert!(model_with_context.get("context_length").is_none());
         let model_without_context = models
             .iter()
             .find(|model| model["id"] == "gpt-no-context")
             .unwrap();
-        assert!(model_without_context.get("context_length").is_none());
+        assert!(model_without_context.get("meta").is_none());
 
         let response = app
+            .clone()
             .oneshot(authed_get(&format!("/v1/models/{PUBLIC_MODEL}")))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let response_body = json_body(response).await;
-        assert_eq!(response_body["context_length"], 131_072);
+        assert_eq!(response_body["meta"]["n_ctx"], 131_072);
+        assert_eq!(response_body["meta"]["n_ctx_train"], 131_072);
+
+        let response = app
+            .oneshot(authed_get(&format!("/props?model={PUBLIC_MODEL}")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = json_body(response).await;
+        assert_eq!(
+            response_body["default_generation_settings"]["n_ctx"],
+            131_072
+        );
+        assert_eq!(response_body["model_alias"], PUBLIC_MODEL);
+
+        let response = router(test_state_with_client_models(
+            RoutingStrategy::Priority,
+            vec![],
+            BTreeSet::new(),
+        ))
+        .oneshot(authed_get("/props"))
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = json_body(response).await;
+        assert_eq!(response_body["default_generation_settings"]["n_ctx"], 0);
+        assert_eq!(response_body["model_alias"], "llama-server");
+        assert_eq!(response_body["role"], "router");
     }
 
     fn test_state(strategy: RoutingStrategy, backends: Vec<ResolvedBackend>) -> Arc<AppState> {

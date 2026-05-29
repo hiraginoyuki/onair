@@ -309,7 +309,13 @@ pub struct ModelObject {
     pub created: u64,
     pub owned_by: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_length: Option<u64>,
+    pub meta: Option<ModelMeta>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelMeta {
+    pub n_ctx: u64,
+    pub n_ctx_train: u64,
 }
 
 impl ModelObject {
@@ -319,7 +325,10 @@ impl ModelObject {
             object: "model",
             created: 0,
             owned_by: "onair",
-            context_length,
+            meta: context_length.map(|n_ctx| ModelMeta {
+                n_ctx,
+                n_ctx_train: n_ctx,
+            }),
         }
     }
 }
@@ -335,6 +344,38 @@ pub fn models_response(models: impl IntoIterator<Item = ModelObject>) -> Json<Mo
 
 pub fn model_response(model: String, context_length: Option<u64>) -> Json<ModelObject> {
     Json(ModelObject::new(model, context_length))
+}
+
+#[derive(Debug, Serialize)]
+pub struct PropsResponse {
+    pub default_generation_settings: DefaultGenerationSettings,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_alias: Option<String>,
+    pub model_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DefaultGenerationSettings {
+    pub params: serde_json::Value,
+    pub n_ctx: u64,
+}
+
+pub fn props_response(
+    role: Option<&'static str>,
+    model_alias: Option<String>,
+    n_ctx: u64,
+) -> Json<PropsResponse> {
+    Json(PropsResponse {
+        default_generation_settings: DefaultGenerationSettings {
+            params: serde_json::json!({}),
+            n_ctx,
+        },
+        model_alias,
+        model_path: "none".to_owned(),
+        role,
+    })
 }
 
 fn inspect_body(body: &[u8], content_type: Option<&str>) -> RequestShape {
