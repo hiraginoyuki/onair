@@ -149,10 +149,10 @@ impl TelemetryGuard {
     }
 
     pub fn shutdown(self) {
-        if let Some(provider) = self.provider {
-            if let Err(error) = provider.shutdown() {
-                tracing::warn!(?error, "failed to shutdown OpenTelemetry meter provider");
-            }
+        if let Some(provider) = self.provider
+            && let Err(error) = provider.shutdown()
+        {
+            tracing::warn!(?error, "failed to shutdown OpenTelemetry meter provider");
         }
     }
 }

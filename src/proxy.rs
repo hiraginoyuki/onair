@@ -66,19 +66,19 @@ pub async fn proxy_v1(
         );
         return Err(error);
     }
-    if let Some(model) = request_shape.model.as_deref() {
-        if !identity.models.contains(model) {
-            record_preflight_failure(
-                &state,
-                &route_name,
-                &identity.id,
-                Some(model),
-                request_shape.stream,
-                StatusCode::NOT_FOUND,
-                request_timer.elapsed(),
-            );
-            return Err(ApiError::model_not_found(model));
-        }
+    if let Some(model) = request_shape.model.as_deref()
+        && !identity.models.contains(model)
+    {
+        record_preflight_failure(
+            &state,
+            &route_name,
+            &identity.id,
+            Some(model),
+            request_shape.stream,
+            StatusCode::NOT_FOUND,
+            request_timer.elapsed(),
+        );
+        return Err(ApiError::model_not_found(model));
     }
 
     let sticky_key = routing::sticky_routing_key(
@@ -137,58 +137,79 @@ pub async fn proxy_v1(
         path = %path,
         request_body_bytes,
     );
-    do_proxy(
-        state,
-        headers,
+    let request = ProxyRequest {
         method,
         uri,
         body,
         content_type,
-        request_shape.stream,
+        stream: request_shape.stream,
+    };
+    let context = ProxyContext {
+        state,
+        client_headers: headers,
         route,
         labels,
         model_log_fields,
         request_body_bytes,
         request_timer,
-    )
-    .instrument(span)
-    .await
+    };
+
+    do_proxy(context, request).instrument(span).await
 }
 
-async fn do_proxy(
-    state: Arc<AppState>,
-    client_headers: HeaderMap,
+struct ProxyRequest {
     method: Method,
     uri: Uri,
     body: Bytes,
     content_type: Option<String>,
     stream: bool,
+}
+
+struct ProxyContext {
+    state: Arc<AppState>,
+    client_headers: HeaderMap,
     route: SelectedRoute,
     labels: MetricLabels,
     model_log_fields: ModelLogFields,
     request_body_bytes: usize,
     request_timer: RequestTimer,
+}
+
+async fn do_proxy(
+    context: ProxyContext,
+    request: ProxyRequest,
 ) -> Result<Response<Body>, ApiError> {
+    let ProxyRequest {
+        method,
+        uri,
+        body,
+        content_type,
+        stream,
+    } = request;
+    let request_path = uri.path().to_owned();
+    let request_query = uri.query().map(str::to_owned);
     let outbound_body = openai::rewrite_request_body(
         &body,
         content_type.as_deref(),
-        route.backend_model.as_deref(),
+        context.route.backend_model.as_deref(),
     );
     let upstream_url = upstream_url(
-        &route.base_url,
-        uri.path(),
-        uri.query(),
-        route.backend_model.as_deref(),
+        &context.route.base_url,
+        &request_path,
+        request_query.as_deref(),
+        context.route.backend_model.as_deref(),
     );
 
-    let mut request = state
+    let mut request = context
+        .state
         .http
         .request(method, upstream_url)
-        .timeout(route.timeout);
+        .timeout(context.route.timeout);
 
     if !outbound_body.is_empty() {
         request = request.body(outbound_body);
-        if let Some(content_type) = client_headers
+        if let Some(content_type) = context
+            .client_headers
             .get(CONTENT_TYPE)
             .and_then(valid_header_value)
             .cloned()
@@ -199,10 +220,11 @@ async fn do_proxy(
     if stream {
         request = request.header(ACCEPT, "text/event-stream");
     }
-    if let Some(api_key) = &route.api_key {
+    if let Some(api_key) = &context.route.api_key {
         request = request.header(AUTHORIZATION, format!("Bearer {api_key}"));
     }
-    if let Some(request_id) = client_headers
+    if let Some(request_id) = context
+        .client_headers
         .get(X_REQUEST_ID)
         .and_then(valid_header_value)
         .cloned()
@@ -213,19 +235,22 @@ async fn do_proxy(
     let upstream = match request.send().await {
         Ok(response) => response,
         Err(error) if error.is_timeout() => {
-            state.metrics.record_request(
-                &labels,
+            context.state.metrics.record_request(
+                &context.labels,
                 StatusCode::GATEWAY_TIMEOUT.as_u16(),
-                request_timer.elapsed(),
+                context.request_timer.elapsed(),
             );
             return Err(ApiError::timeout());
         }
         Err(error) => {
-            warn!(?error, "upstream request failed");
-            state.metrics.record_request(
-                &labels,
+            warn!(
+                error_kind = upstream_error_kind(&error),
+                "upstream request failed"
+            );
+            context.state.metrics.record_request(
+                &context.labels,
                 StatusCode::BAD_GATEWAY.as_u16(),
-                request_timer.elapsed(),
+                context.request_timer.elapsed(),
             );
             return Err(ApiError::upstream(StatusCode::BAD_GATEWAY));
         }
@@ -237,63 +262,52 @@ async fn do_proxy(
         warn!(
             upstream_status = upstream_status.as_u16(),
             client_status = api_error.status.as_u16(),
-            backend = %labels.backend,
-            route = %labels.route,
-            requested_model = %model_log_fields.requested,
-            public_model = %model_log_fields.public,
-            backend_model = %model_log_fields.backend,
-            path = %uri.path(),
-            request_body_bytes,
+            backend = %context.labels.backend,
+            route = %context.labels.route,
+            requested_model = %context.model_log_fields.requested,
+            public_model = %context.model_log_fields.public,
+            backend_model = %context.model_log_fields.backend,
+            path = %request_path,
+            request_body_bytes = context.request_body_bytes,
             "upstream returned non-success status"
         );
-        state
-            .metrics
-            .record_request(&labels, api_error.status.as_u16(), request_timer.elapsed());
+        context.state.metrics.record_request(
+            &context.labels,
+            api_error.status.as_u16(),
+            context.request_timer.elapsed(),
+        );
         return Err(api_error);
     }
 
     let upstream_content_type = header_str(upstream.headers(), &CONTENT_TYPE).map(str::to_owned);
     if stream || openai::is_event_stream_content_type(upstream_content_type.as_deref()) {
-        Ok(streaming_response(
-            state,
-            client_headers,
-            upstream,
-            route,
-            labels,
-            model_log_fields,
-            request_body_bytes,
-            request_timer,
-        ))
+        Ok(streaming_response(context, upstream))
     } else {
-        buffered_response(
-            state,
-            client_headers,
-            upstream,
-            route,
-            labels,
-            model_log_fields,
-            request_body_bytes,
-            request_timer,
-        )
-        .await
+        buffered_response(context, upstream).await
     }
 }
 
 async fn buffered_response(
-    state: Arc<AppState>,
-    client_headers: HeaderMap,
+    context: ProxyContext,
     upstream: reqwest::Response,
-    route: SelectedRoute,
-    labels: MetricLabels,
-    model_log_fields: ModelLogFields,
-    request_body_bytes: usize,
-    request_timer: RequestTimer,
 ) -> Result<Response<Body>, ApiError> {
+    let ProxyContext {
+        state,
+        client_headers,
+        route,
+        labels,
+        model_log_fields,
+        request_body_bytes,
+        request_timer,
+    } = context;
     let upstream_status = upstream.status();
     let upstream_headers = upstream.headers().clone();
     let content_type = header_str(&upstream_headers, &CONTENT_TYPE).map(str::to_owned);
     let bytes = upstream.bytes().await.map_err(|error| {
-        warn!(?error, "failed to read upstream body");
+        warn!(
+            error_kind = upstream_error_kind(&error),
+            "failed to read upstream body"
+        );
         state.metrics.record_request(
             &labels,
             StatusCode::BAD_GATEWAY.as_u16(),
@@ -336,16 +350,16 @@ async fn buffered_response(
     .map_err(|_| ApiError::internal())
 }
 
-fn streaming_response(
-    state: Arc<AppState>,
-    client_headers: HeaderMap,
-    upstream: reqwest::Response,
-    route: SelectedRoute,
-    labels: MetricLabels,
-    model_log_fields: ModelLogFields,
-    request_body_bytes: usize,
-    request_timer: RequestTimer,
-) -> Response<Body> {
+fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Response<Body> {
+    let ProxyContext {
+        state,
+        client_headers,
+        route,
+        labels,
+        model_log_fields,
+        request_body_bytes,
+        request_timer,
+    } = context;
     let upstream_status = upstream.status();
     let upstream_headers = upstream.headers().clone();
     let content_type = header_str(&upstream_headers, &CONTENT_TYPE).map(str::to_owned);
@@ -380,9 +394,11 @@ fn streaming_response(
         if normalize_sse {
             let mut normalizer = SseNormalizer::new(backend_model, public_model);
             while let Some(chunk) = chunks.next().await {
-                let chunk = chunk.map_err(|error| {
-                    warn!(?error, "upstream stream chunk failed");
-                    error
+                let chunk = chunk.inspect_err(|error| {
+                    warn!(
+                        error_kind = upstream_error_kind(error),
+                        "upstream stream chunk failed"
+                    );
                 })?;
                 let normalized = normalizer.push(&chunk);
                 if !normalized.is_empty() {
@@ -398,9 +414,11 @@ fn streaming_response(
             }
         } else {
             while let Some(chunk) = chunks.next().await {
-                let chunk = chunk.map_err(|error| {
-                    warn!(?error, "upstream stream chunk failed");
-                    error
+                let chunk = chunk.inspect_err(|error| {
+                    warn!(
+                        error_kind = upstream_error_kind(error),
+                        "upstream stream chunk failed"
+                    );
                 })?;
                 yield chunk;
             }
@@ -426,11 +444,11 @@ fn upstream_url(
     backend_model: Option<&str>,
 ) -> String {
     let mut upstream_url = format!("{}{}", base_url, upstream_path(path));
-    if let Some(query) = openai::rewrite_query_model(query, backend_model) {
-        if !query.is_empty() {
-            upstream_url.push('?');
-            upstream_url.push_str(&query);
-        }
+    if let Some(query) = openai::rewrite_query_model(query, backend_model)
+        && !query.is_empty()
+    {
+        upstream_url.push('?');
+        upstream_url.push_str(&query);
     }
     upstream_url
 }
@@ -507,6 +525,24 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &HeaderName) -> Option<&'a str> 
 fn valid_header_value(value: &HeaderValue) -> Option<&HeaderValue> {
     value.to_str().ok()?;
     Some(value)
+}
+
+fn upstream_error_kind(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_request() {
+        "request"
+    } else if error.is_body() {
+        "body"
+    } else if error.is_decode() {
+        "decode"
+    } else if error.is_redirect() {
+        "redirect"
+    } else {
+        "unknown"
+    }
 }
 
 fn record_preflight_failure(

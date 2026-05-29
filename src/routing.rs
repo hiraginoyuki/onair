@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use crate::config::{ResolvedBackend, RoutingStrategy};
 use crate::error::ApiError;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SelectedRoute {
     pub backend_id: String,
     pub base_url: String,
@@ -82,10 +82,11 @@ pub fn select_backend(
         }
     };
 
-    if let Some(requested_model) = model {
-        if selected.public_model.is_none() && selected.backend_model.is_none() {
-            return Err(ApiError::model_not_found(requested_model));
-        }
+    if let Some(requested_model) = model
+        && selected.public_model.is_none()
+        && selected.backend_model.is_none()
+    {
+        return Err(ApiError::model_not_found(requested_model));
     }
 
     Ok(selected)

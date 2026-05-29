@@ -128,6 +128,7 @@ capabilities = ["all", "streaming"]
 
 ### Backend secrecy
 
+- `[[backend]].base_url` must be an absolute `http` or `https` URL without embedded credentials, query strings, or fragments. Use `api_key` or `api_key_env` for backend credentials.
 - `/v1/models` and `/v1/models/{model}` are synthesized from public config; backend model IDs are not listed.
 - Model-bearing requests are rewritten to backend model IDs only after access checks pass.
 - Successful JSON and SSE responses rewrite backend model IDs back to public model IDs when a model mapping is known.

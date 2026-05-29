@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
+use url::Url;
 
 use crate::error::{Error, Result};
 
@@ -18,7 +19,7 @@ const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_MAX_ATTEMPTS: usize = 5;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
     #[serde(default)]
@@ -35,7 +36,7 @@ pub struct ConfigFile {
     pub backends: Vec<BackendConfig>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub server: ServerConfig,
     pub telemetry: TelemetryConfig,
@@ -44,7 +45,7 @@ pub struct Config {
     pub backends: Vec<ResolvedBackend>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConfigStore {
     inner: Arc<RwLock<Arc<Config>>>,
 }
@@ -88,10 +89,22 @@ impl ConfigWatcher {
             })?
             .to_owned();
 
+        let callback_path = path.clone();
+        let callback_filename = filename.clone();
         let (tx, mut rx) = mpsc::unbounded_channel::<notify::Result<Event>>();
         let mut watcher = notify::recommended_watcher(move |event| {
+            let event = match event {
+                Ok(event) if is_reload_event(&event, &callback_path, &callback_filename) => {
+                    Ok(event)
+                }
+                Ok(event) => {
+                    debug!(?event, "ignored config watch event");
+                    return;
+                }
+                Err(error) => Err(error),
+            };
             if let Err(error) = tx.send(event) {
-                warn!(?error, "failed to enqueue config watch event");
+                warn!(?error, "failed to enqueue config reload event");
             }
         })
         .map_err(|error| Error::ConfigWatch(error.to_string()))?;
@@ -202,17 +215,12 @@ impl Default for TelemetryConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TelemetryExporter {
+    #[default]
     None,
     Otlp,
-}
-
-impl Default for TelemetryExporter {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -229,17 +237,12 @@ impl Default for RoutingConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingStrategy {
+    #[default]
     Priority,
     Sticky,
-}
-
-impl Default for RoutingStrategy {
-    fn default() -> Self {
-        Self::Priority
-    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -248,7 +251,7 @@ pub struct AccessConfig {
     pub default_models: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClientConfig {
     pub id: String,
@@ -258,14 +261,14 @@ pub struct ClientConfig {
     pub models: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ResolvedClient {
     pub id: String,
     pub api_key: String,
     pub models: BTreeSet<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BackendConfig {
     pub id: String,
@@ -326,7 +329,7 @@ pub enum ContextLengthMode {
     Inherit,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ResolvedBackend {
     pub id: String,
     pub base_url: String,
@@ -406,12 +409,7 @@ impl Config {
                     backend.id
                 )));
             }
-            if backend.base_url.trim().is_empty() {
-                return Err(Error::Config(format!(
-                    "backend '{}' base_url must not be empty",
-                    backend.id
-                )));
-            }
+            let base_url = normalize_backend_base_url(&backend.base_url, &backend.id)?;
             let api_key = resolve_optional_secret(backend.api_key, backend.api_key_env)?;
             let models = backend
                 .models
@@ -440,7 +438,7 @@ impl Config {
                 .collect::<Result<Vec<_>>>()?;
             backends.push(ResolvedBackend {
                 id: backend.id,
-                base_url: backend.base_url.trim_end_matches('/').to_owned(),
+                base_url,
                 api_key,
                 timeout: Duration::from_millis(backend.timeout_ms),
                 capabilities: backend.capabilities,
@@ -548,6 +546,44 @@ fn resolve_context_length(
     }
 }
 
+fn normalize_backend_base_url(base_url: &str, backend_id: &str) -> Result<String> {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Err(Error::Config(format!(
+            "backend '{backend_id}' base_url must not be empty"
+        )));
+    }
+
+    let parsed = Url::parse(trimmed).map_err(|source| {
+        Error::Config(format!(
+            "backend '{backend_id}' base_url is invalid: {source}"
+        ))
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(Error::Config(format!(
+            "backend '{backend_id}' base_url must use http or https"
+        )));
+    }
+    if parsed.host_str().is_none() {
+        return Err(Error::Config(format!(
+            "backend '{backend_id}' base_url must include a host"
+        )));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(Error::Config(format!(
+            "backend '{backend_id}' base_url must not contain credentials"
+        )));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(Error::Config(format!(
+            "backend '{backend_id}' base_url must not contain a query string or fragment"
+        )));
+    }
+
+    Ok(trimmed.to_owned())
+}
+
+#[cfg(test)]
 fn reload_config(path: &Path, store: &ConfigStore) {
     if let Err(error) = try_reload_config(path, store) {
         warn!(?error, "config reload failed; keeping previous config");
@@ -706,8 +742,21 @@ mod tests {
         )
         .unwrap();
 
-        let error = Config::resolve(file).unwrap_err().to_string();
+        let error = resolve_error(file);
         assert!(error.contains("uses context_length = 'inherit'"));
+    }
+
+    #[test]
+    fn backend_base_url_rejects_credentials_and_query_strings() {
+        let credentials_error = resolve_error(config_file_with_base_url(
+            "http://user:password@127.0.0.1:8000",
+        ));
+        assert!(credentials_error.contains("must not contain credentials"));
+
+        let query_error = resolve_error(config_file_with_base_url(
+            "http://127.0.0.1:8000?api_key=secret",
+        ));
+        assert!(query_error.contains("must not contain a query string or fragment"));
     }
 
     #[tokio::test]
@@ -806,6 +855,36 @@ mod tests {
 
     fn parse_config(raw: &str) -> Config {
         Config::resolve(toml::from_str(raw).unwrap()).unwrap()
+    }
+
+    fn resolve_error(file: ConfigFile) -> String {
+        match Config::resolve(file) {
+            Ok(_) => panic!("expected config resolution to fail"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    fn config_file_with_base_url(base_url: &str) -> ConfigFile {
+        toml::from_str(&format!(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "{base_url}"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#
+        ))
+        .unwrap()
     }
 
     fn config_with_model(model: &str) -> String {

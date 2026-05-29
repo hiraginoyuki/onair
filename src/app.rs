@@ -17,7 +17,6 @@ use crate::metrics::{MetricLabels, Metrics, RequestTimer};
 use crate::openai;
 use crate::proxy;
 
-#[derive(Debug)]
 pub struct AppState {
     pub config: ConfigStore,
     pub http: Client,
@@ -186,10 +185,10 @@ async fn props(
                             )
                             .into_response()
                         } else {
-                            ApiError::model_not_found(&model).into_response()
+                            ApiError::model_not_found(model).into_response()
                         }
                     } else {
-                        ApiError::model_not_found(&model).into_response()
+                        ApiError::model_not_found(model).into_response()
                     }
                 }
                 None => openai::props_response(Some("router"), Some("llama-server".to_owned()), 0)

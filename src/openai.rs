@@ -42,31 +42,29 @@ pub fn rewrite_request_body(
         return Vec::new();
     }
 
-    if should_parse_json(content_type, body) {
-        if let Some(rewritten) = rewrite_json_request_body(body, backend_model) {
-            return rewritten;
-        }
+    if should_parse_json(content_type, body)
+        && let Some(rewritten) = rewrite_json_request_body(body, backend_model)
+    {
+        return rewritten;
     }
 
-    if is_urlencoded_content_type(content_type) || looks_like_urlencoded(body) {
-        if let Some(rewritten) = rewrite_urlencoded_request_body(body, backend_model) {
-            return rewritten;
-        }
+    if (is_urlencoded_content_type(content_type) || looks_like_urlencoded(body))
+        && let Some(rewritten) = rewrite_urlencoded_request_body(body, backend_model)
+    {
+        return rewritten;
     }
 
-    if let Some(boundary) = content_type.and_then(multipart_boundary) {
-        if let Some(rewritten) = rewrite_multipart_body(body, &boundary, backend_model) {
-            return rewritten;
-        }
+    if let Some(boundary) = content_type.and_then(multipart_boundary)
+        && let Some(rewritten) = rewrite_multipart_body(body, &boundary, backend_model)
+    {
+        return rewritten;
     }
 
     body.to_vec()
 }
 
 pub fn rewrite_query_model(query: Option<&str>, backend_model: Option<&str>) -> Option<String> {
-    let Some(query) = query else {
-        return None;
-    };
+    let query = query?;
     let Some(backend_model) = backend_model else {
         return Some(query.to_owned());
     };
@@ -444,25 +442,25 @@ fn inspect_multipart_body(body: &[u8], boundary: &str) -> RequestShape {
         let Some((headers, content)) = split_multipart_part(part) else {
             continue;
         };
-        if multipart_field_is(headers, "model") {
-            if let Ok(model) = std::str::from_utf8(content) {
-                let model = model.trim();
-                if !model.is_empty() {
-                    shape.model = Some(model.to_owned());
-                }
+        if multipart_field_is(headers, "model")
+            && let Ok(model) = std::str::from_utf8(content)
+        {
+            let model = model.trim();
+            if !model.is_empty() {
+                shape.model = Some(model.to_owned());
             }
         }
-        if multipart_field_is(headers, "stream") {
-            if let Ok(stream) = std::str::from_utf8(content) {
-                shape.stream = truthy(stream);
-            }
+        if multipart_field_is(headers, "stream")
+            && let Ok(stream) = std::str::from_utf8(content)
+        {
+            shape.stream = truthy(stream);
         }
-        if multipart_field_is(headers, "prompt_cache_key") {
-            if let Ok(key) = std::str::from_utf8(content) {
-                let key = key.trim();
-                if !key.is_empty() {
-                    shape.prompt_cache_key = Some(key.to_owned());
-                }
+        if multipart_field_is(headers, "prompt_cache_key")
+            && let Ok(key) = std::str::from_utf8(content)
+        {
+            let key = key.trim();
+            if !key.is_empty() {
+                shape.prompt_cache_key = Some(key.to_owned());
             }
         }
     }

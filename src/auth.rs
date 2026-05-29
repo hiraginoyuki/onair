@@ -21,9 +21,14 @@ pub fn authenticate(headers: &HeaderMap, clients: &[ResolvedClient]) -> Result<I
         return Err(ApiError::authentication("Invalid bearer token."));
     };
 
-    clients
-        .iter()
-        .find(|client| token_matches(token, &client.api_key))
+    let mut matched = None;
+    for client in clients {
+        if token_matches(token, &client.api_key) && matched.is_none() {
+            matched = Some(client);
+        }
+    }
+
+    matched
         .map(|client| Identity {
             id: client.id.clone(),
             models: client.models.clone(),
