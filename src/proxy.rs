@@ -9,7 +9,7 @@ use axum::http::header::{
 };
 use axum::http::{HeaderMap, Method, Response, StatusCode, Uri};
 use futures_util::{StreamExt, TryStreamExt};
-use tracing::{Instrument, info_span, warn};
+use tracing::{Instrument, debug, info_span, warn};
 
 use crate::app::AppState;
 use crate::auth::authenticate;
@@ -243,6 +243,8 @@ async fn do_proxy(
             upstream,
             route,
             labels,
+            model_log_fields,
+            request_body_bytes,
             request_timer,
         ))
     } else {
@@ -252,6 +254,8 @@ async fn do_proxy(
             upstream,
             route,
             labels,
+            model_log_fields,
+            request_body_bytes,
             request_timer,
         )
         .await
@@ -264,6 +268,8 @@ async fn buffered_response(
     upstream: reqwest::Response,
     route: SelectedRoute,
     labels: MetricLabels,
+    model_log_fields: ModelLogFields,
+    request_body_bytes: usize,
     request_timer: RequestTimer,
 ) -> Result<Response<Body>, ApiError> {
     let upstream_status = upstream.status();
@@ -290,6 +296,17 @@ async fn buffered_response(
     state
         .metrics
         .record_request(&labels, upstream_status.as_u16(), request_timer.elapsed());
+    debug!(
+        upstream_status = upstream_status.as_u16(),
+        response_bytes = response_bytes.len(),
+        backend = %labels.backend,
+        route = %labels.route,
+        requested_model = %model_log_fields.requested,
+        public_model = %model_log_fields.public,
+        backend_model = %model_log_fields.backend,
+        request_body_bytes,
+        "buffered response completed"
+    );
 
     response_builder(
         upstream_status,
@@ -308,6 +325,8 @@ fn streaming_response(
     upstream: reqwest::Response,
     route: SelectedRoute,
     labels: MetricLabels,
+    model_log_fields: ModelLogFields,
+    request_body_bytes: usize,
     request_timer: RequestTimer,
 ) -> Response<Body> {
     let upstream_status = upstream.status();
@@ -322,6 +341,18 @@ fn streaming_response(
         state.metrics.clone(),
         labels.clone(),
         upstream_status.as_u16(),
+        model_log_fields.clone(),
+        request_body_bytes,
+    );
+    debug!(
+        upstream_status = upstream_status.as_u16(),
+        backend = %labels.backend,
+        route = %labels.route,
+        requested_model = %model_log_fields.requested,
+        public_model = %model_log_fields.public,
+        backend_model = %model_log_fields.backend,
+        request_body_bytes,
+        "streaming response started"
     );
     let backend_model = route.backend_model;
     let public_model = route.public_model;
@@ -503,16 +534,26 @@ struct StreamMetrics {
     metrics: crate::metrics::Metrics,
     labels: MetricLabels,
     status_code: u16,
+    model_log_fields: ModelLogFields,
+    request_body_bytes: usize,
     started: Instant,
     usage: UsageTotals,
 }
 
 impl StreamMetrics {
-    fn new(metrics: crate::metrics::Metrics, labels: MetricLabels, status_code: u16) -> Self {
+    fn new(
+        metrics: crate::metrics::Metrics,
+        labels: MetricLabels,
+        status_code: u16,
+        model_log_fields: ModelLogFields,
+        request_body_bytes: usize,
+    ) -> Self {
         Self {
             metrics,
             labels,
             status_code,
+            model_log_fields,
+            request_body_bytes,
             started: Instant::now(),
             usage: UsageTotals::default(),
         }
@@ -527,10 +568,25 @@ impl StreamMetrics {
 
 impl Drop for StreamMetrics {
     fn drop(&mut self) {
+        let duration = self.started.elapsed();
         if !self.usage.is_empty() {
             self.metrics.record_usage(&self.labels, self.usage);
         }
+        debug!(
+            upstream_status = self.status_code,
+            backend = %self.labels.backend,
+            route = %self.labels.route,
+            requested_model = %self.model_log_fields.requested,
+            public_model = %self.model_log_fields.public,
+            backend_model = %self.model_log_fields.backend,
+            request_body_bytes = self.request_body_bytes,
+            stream_duration_ms = duration.as_millis() as u64,
+            input_tokens = self.usage.input,
+            cached_input_tokens = self.usage.cached_input,
+            output_tokens = self.usage.output,
+            "streaming response completed"
+        );
         self.metrics
-            .record_stream(&self.labels, self.status_code, self.started.elapsed());
+            .record_stream(&self.labels, self.status_code, duration);
     }
 }

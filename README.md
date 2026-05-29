@@ -169,3 +169,13 @@ Metric instruments:
 - `onair.tokens`: counter labeled by `direction=input|cached_input|output` when backend responses include OpenAI-compatible usage data such as `prompt_tokens`, `completion_tokens`, `input_tokens`, `output_tokens`, or `cached_tokens`.
 
 Prompt and response bodies are not logged by onair.
+
+## Logging
+
+onair logs sanitized failures at `warn` and successful proxy/model responses at `debug`. Use higher verbosity when debugging routing without exposing request or response bodies:
+
+```sh
+RUST_LOG=onair=debug,tower_http=info cargo run -- --config onair.toml
+```
+
+Successful proxy logs include route, backend ID, requested/public/backend model IDs, request body size, response status, response size for buffered responses, and stream duration for streaming responses. They intentionally do not include prompt or completion bodies.

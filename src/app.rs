@@ -8,7 +8,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use reqwest::Client;
 use tower_http::trace::TraceLayer;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::auth::authenticate;
 use crate::config::Config;
@@ -71,11 +71,18 @@ async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
                         .map(|context_length| openai::ModelObject::new(model, context_length))
                 })
                 .collect::<Vec<_>>();
+            let model_count = models.len();
             let response = openai::models_response(models).into_response();
             state.metrics.record_request(
                 &model_route_labels("models", &identity_id, "none"),
                 response.status().as_u16(),
                 timer.elapsed(),
+            );
+            debug!(
+                identity = %identity_id,
+                response_status = response.status().as_u16(),
+                model_count,
+                "models response completed"
             );
             response
         }
@@ -108,6 +115,13 @@ async fn model(
                         &model_route_labels("models_retrieve", &identity.id, &model),
                         response.status().as_u16(),
                         timer.elapsed(),
+                    );
+                    debug!(
+                        identity = %identity.id,
+                        model = %model,
+                        context_length = ?context_length,
+                        response_status = response.status().as_u16(),
+                        "model response completed"
                     );
                     response
                 } else {
