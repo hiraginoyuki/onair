@@ -2,7 +2,6 @@
 
 ## Priority 1
 
-- Config hot reload with filesystem watching, validation, and atomic runtime swaps.
 - Admin Web UI for viewing active config, backends, models, identities, metrics, and health.
 - Health checks per backend with compatibility/capability probes.
 - Retry and fallback policies before response streaming starts.

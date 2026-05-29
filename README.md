@@ -63,6 +63,18 @@ context_length = "inherit"
 endpoints = ["chat", "responses"]
 ```
 
+### Hot reload
+
+onair watches the config file's parent directory and reloads the config when the file changes. Reloads are validated before they are applied, and invalid TOML or invalid model/client/backend rules keep the previous config active.
+
+Reloaded immediately:
+
+- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`, `[routing]`, backend auth, model mappings, capabilities, timeouts, and context metadata.
+
+Restart required:
+
+- `[server].bind`, `[server].request_body_limit_bytes`, and `[telemetry]` exporter settings.
+
 ### Access rules
 
 - Every `[[client]]` must have `api_key` or `api_key_env`.

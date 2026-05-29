@@ -11,7 +11,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, warn};
 
 use crate::auth::authenticate;
-use crate::config::Config;
+use crate::config::{Config, ConfigStore};
 use crate::error::{ApiError, Result};
 use crate::metrics::{MetricLabels, Metrics, RequestTimer};
 use crate::openai;
@@ -19,7 +19,7 @@ use crate::proxy;
 
 #[derive(Debug)]
 pub struct AppState {
-    pub config: Config,
+    pub config: ConfigStore,
     pub http: Client,
     pub metrics: Metrics,
 }
@@ -31,7 +31,7 @@ impl AppState {
             .pool_idle_timeout(std::time::Duration::from_secs(90))
             .build()?;
         Ok(Self {
-            config,
+            config: ConfigStore::new(config),
             http,
             metrics,
         })
@@ -39,7 +39,7 @@ impl AppState {
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
-    let body_limit = state.config.server.request_body_limit_bytes;
+    let body_limit = state.config.snapshot().server.request_body_limit_bytes;
     Router::new()
         .route("/healthz", get(healthz))
         .route("/props", get(props))
@@ -59,9 +59,10 @@ async fn healthz() -> StatusCode {
 
 async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response<Body> {
     let timer = RequestTimer::start();
-    let response = match authenticate(&headers, &state.config.clients) {
+    let config = state.config.snapshot();
+    let response = match authenticate(&headers, &config.clients) {
         Ok(identity) => {
-            let available = state.config.public_model_context_lengths();
+            let available = config.public_model_context_lengths();
             let identity_id = identity.id.clone();
             let models = identity
                 .models
@@ -106,9 +107,10 @@ async fn model(
     Path(model): Path<String>,
 ) -> Response<Body> {
     let timer = RequestTimer::start();
-    let response = match authenticate(&headers, &state.config.clients) {
+    let config = state.config.snapshot();
+    let response = match authenticate(&headers, &config.clients) {
         Ok(identity) => {
-            let available = state.config.public_model_context_lengths();
+            let available = config.public_model_context_lengths();
             if identity.models.contains(&model) {
                 if let Some(context_length) = available.get(&model).copied() {
                     let response =
@@ -169,9 +171,10 @@ async fn props(
             .map(|(_, value)| value.into_owned())
     });
 
-    let response = match authenticate(&headers, &state.config.clients) {
+    let config = state.config.snapshot();
+    let response = match authenticate(&headers, &config.clients) {
         Ok(identity) => {
-            let available = state.config.public_model_context_lengths();
+            let available = config.public_model_context_lengths();
             let response = match query_model.as_deref() {
                 Some(model) => {
                     if identity.models.contains(model) {

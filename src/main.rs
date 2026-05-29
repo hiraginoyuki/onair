@@ -17,7 +17,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use crate::app::AppState;
-use crate::config::Config;
+use crate::config::{Config, ConfigWatcher};
 use crate::error::Result;
 use crate::metrics::{Metrics, TelemetryGuard};
 
@@ -43,6 +43,7 @@ async fn main() -> Result<()> {
     let metrics = Metrics::new();
     let bind = config.server.bind;
     let state = Arc::new(AppState::new(config, metrics)?);
+    let _config_watcher = ConfigWatcher::start(&args.config, state.config.clone())?;
     let app = build_router(state);
 
     info!(%bind, "starting onair router");

@@ -1,10 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::task::JoinHandle;
+use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
 
@@ -32,6 +38,107 @@ pub struct Config {
     pub routing: RoutingConfig,
     pub clients: Vec<ResolvedClient>,
     pub backends: Vec<ResolvedBackend>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigStore {
+    inner: Arc<RwLock<Arc<Config>>>,
+}
+
+impl ConfigStore {
+    pub fn new(config: Config) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(Arc::new(config))),
+        }
+    }
+
+    pub fn snapshot(&self) -> Arc<Config> {
+        self.inner
+            .read()
+            .expect("config store lock poisoned")
+            .clone()
+    }
+
+    pub fn replace(&self, config: Config) -> Arc<Config> {
+        let config = Arc::new(config);
+        *self.inner.write().expect("config store lock poisoned") = config.clone();
+        config
+    }
+}
+
+pub struct ConfigWatcher {
+    _watcher: RecommendedWatcher,
+    task: JoinHandle<()>,
+}
+
+impl ConfigWatcher {
+    pub fn start(path: impl AsRef<Path>, store: ConfigStore) -> Result<Self> {
+        let path = absolute_path(path.as_ref())?;
+        let directory = path.parent().ok_or_else(|| {
+            Error::ConfigWatch(format!("config path '{}' has no parent", path.display()))
+        })?;
+        let filename = path
+            .file_name()
+            .ok_or_else(|| {
+                Error::ConfigWatch(format!("config path '{}' has no filename", path.display()))
+            })?
+            .to_owned();
+
+        let (tx, mut rx) = mpsc::channel::<notify::Result<Event>>(32);
+        let mut watcher = notify::recommended_watcher(move |event| {
+            if let Err(error) = tx.try_send(event) {
+                warn!(?error, "failed to enqueue config watch event");
+            }
+        })
+        .map_err(|error| Error::ConfigWatch(error.to_string()))?;
+        watcher
+            .watch(directory, RecursiveMode::NonRecursive)
+            .map_err(|error| Error::ConfigWatch(error.to_string()))?;
+
+        let task_path = path.clone();
+        let task = tokio::spawn(async move {
+            info!(path = %task_path.display(), "watching config file");
+            while let Some(event) = rx.recv().await {
+                match event {
+                    Ok(event) if is_reload_event(&event, &task_path, &filename) => {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        loop {
+                            match rx.try_recv() {
+                                Ok(Ok(event)) => {
+                                    if !is_reload_event(&event, &task_path, &filename) {
+                                        continue;
+                                    }
+                                }
+                                Ok(Err(error)) => {
+                                    warn!(?error, "config watch event failed");
+                                }
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => return,
+                            }
+                        }
+                        reload_config(&task_path, &store);
+                    }
+                    Ok(event) => {
+                        debug!(?event, "ignored config watch event");
+                    }
+                    Err(error) => {
+                        warn!(?error, "config watch event failed");
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            _watcher: watcher,
+            task,
+        })
+    }
+}
+
+impl Drop for ConfigWatcher {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -418,6 +525,70 @@ fn resolve_context_length(
     }
 }
 
+fn reload_config(path: &Path, store: &ConfigStore) {
+    match Config::load(path) {
+        Ok(config) => {
+            let previous = store.snapshot();
+            let next = store.replace(config);
+            if previous.server.bind != next.server.bind {
+                warn!(
+                    old = %previous.server.bind,
+                    new = %next.server.bind,
+                    "config reload changed server.bind; listener address is only applied on restart"
+                );
+            }
+            if previous.server.request_body_limit_bytes != next.server.request_body_limit_bytes {
+                warn!(
+                    old = previous.server.request_body_limit_bytes,
+                    new = next.server.request_body_limit_bytes,
+                    "config reload changed server.request_body_limit_bytes; body limit is only applied on restart"
+                );
+            }
+            if previous.telemetry.exporter != next.telemetry.exporter
+                || previous.telemetry.otlp_endpoint != next.telemetry.otlp_endpoint
+                || previous.telemetry.service_name != next.telemetry.service_name
+            {
+                warn!(
+                    "config reload changed telemetry settings; telemetry exporter is only applied on restart"
+                );
+            }
+            info!(
+                clients = next.clients.len(),
+                backends = next.backends.len(),
+                "config reloaded"
+            );
+        }
+        Err(error) => {
+            warn!(?error, "config reload failed; keeping previous config");
+        }
+    }
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(env::current_dir()?.join(path))
+    }
+}
+
+fn is_reload_event(event: &Event, path: &Path, filename: &std::ffi::OsStr) -> bool {
+    if !matches!(
+        event.kind,
+        EventKind::Any | EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+    ) {
+        return false;
+    }
+
+    event.paths.is_empty()
+        || event.paths.iter().any(|event_path| {
+            event_path == path
+                || event_path
+                    .file_name()
+                    .is_some_and(|event_filename| event_filename == filename)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,7 +661,67 @@ mod tests {
         assert!(error.contains("uses context_length = 'inherit'"));
     }
 
+    #[test]
+    fn reload_keeps_previous_config_when_new_config_is_invalid() {
+        let path = env::temp_dir().join(format!(
+            "onair-config-reload-test-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, config_with_model("first-model")).unwrap();
+        let store = ConfigStore::new(Config::load(&path).unwrap());
+
+        assert!(
+            store
+                .snapshot()
+                .public_model_context_lengths()
+                .contains_key("first-model")
+        );
+
+        std::fs::write(&path, "not valid toml = ]").unwrap();
+        reload_config(&path, &store);
+        assert!(
+            store
+                .snapshot()
+                .public_model_context_lengths()
+                .contains_key("first-model")
+        );
+
+        std::fs::write(&path, config_with_model("second-model")).unwrap();
+        reload_config(&path, &store);
+        let models = store.snapshot().public_model_context_lengths();
+        assert!(!models.contains_key("first-model"));
+        assert!(models.contains_key("second-model"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
     fn parse_config(raw: &str) -> Config {
         Config::resolve(toml::from_str(raw).unwrap()).unwrap()
+    }
+
+    fn config_with_model(model: &str) -> String {
+        format!(
+            r#"
+            [access]
+            default_models = ["{model}"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "{model}"
+            backend = "private-{model}"
+            "#
+        )
     }
 }

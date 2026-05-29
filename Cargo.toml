@@ -9,6 +9,7 @@ axum = { version = "0.8", features = ["macros"] }
 bytes = "1"
 clap = { version = "4.5", features = ["derive", "env"] }
 futures-util = "0.3"
+notify = "8"
 opentelemetry = "0.30"
 opentelemetry-otlp = { version = "0.30", features = ["grpc-tonic", "metrics"] }
 opentelemetry_sdk = { version = "0.30", features = ["rt-tokio"] }

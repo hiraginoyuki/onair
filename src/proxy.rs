@@ -30,8 +30,9 @@ pub async fn proxy_v1(
     let request_timer = RequestTimer::start();
     let path = uri.path().to_owned();
     let route_name = routing::path_metric_name(&path);
+    let config = state.config.snapshot();
 
-    let identity = match authenticate(&headers, &state.config.clients) {
+    let identity = match authenticate(&headers, &config.clients) {
         Ok(identity) => identity,
         Err(error) => {
             record_preflight_failure(
@@ -87,8 +88,8 @@ pub async fn proxy_v1(
         request_shape.prompt_cache_key.as_deref(),
     );
     let route = match routing::select_backend(
-        &state.config.backends,
-        state.config.routing.strategy,
+        &config.backends,
+        config.routing.strategy,
         &path,
         request_shape.model.as_deref(),
         request_shape.stream,

@@ -22,6 +22,8 @@ pub enum Error {
     Config(String),
     #[error("missing environment variable {0}")]
     MissingEnv(String),
+    #[error("config watcher error: {0}")]
+    ConfigWatch(String),
     #[error("http client error: {0}")]
     HttpClient(#[from] reqwest::Error),
     #[error("io error: {0}")]
