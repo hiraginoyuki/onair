@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -13,6 +14,7 @@ use tracing::{Instrument, debug, info_span, warn};
 
 use crate::app::AppState;
 use crate::auth::authenticate;
+use crate::client_info::ClientInfo;
 use crate::config::DebugCaptureConfig;
 use crate::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
 use crate::error::ApiError;
@@ -25,6 +27,7 @@ pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
 pub async fn proxy_v1(
     state: Arc<AppState>,
+    peer_addr: Option<SocketAddr>,
     headers: HeaderMap,
     method: Method,
     uri: Uri,
@@ -35,6 +38,8 @@ pub async fn proxy_v1(
     let path = uri.path().to_owned();
     let route_name = routing::path_metric_name(&path);
     let config = state.config.snapshot();
+    let client_info =
+        ClientInfo::from_headers(&headers, peer_addr, &config.server.trusted_proxy_cidrs);
 
     let identity = match authenticate(&headers, &config.clients) {
         Ok(identity) => {
@@ -52,15 +57,16 @@ pub async fn proxy_v1(
                 error.status,
                 request_timer.elapsed(),
             );
-            warn_preflight_failure(
-                &timeline,
-                &route_name,
-                "unknown",
-                None,
-                false,
-                error.status,
-                "auth",
-            );
+            warn_preflight_failure(PreflightFailureLog {
+                timeline: &timeline,
+                route: &route_name,
+                identity: "unknown",
+                model: None,
+                stream: false,
+                status: error.status,
+                stage: "auth",
+                client_info: &client_info,
+            });
             return Err(error);
         }
     };
@@ -82,15 +88,16 @@ pub async fn proxy_v1(
             error.status,
             request_timer.elapsed(),
         );
-        warn_preflight_failure(
-            &timeline,
-            &route_name,
-            &identity.id,
-            None,
-            request_shape.stream,
-            error.status,
-            "inspect",
-        );
+        warn_preflight_failure(PreflightFailureLog {
+            timeline: &timeline,
+            route: &route_name,
+            identity: &identity.id,
+            model: None,
+            stream: request_shape.stream,
+            status: error.status,
+            stage: "inspect",
+            client_info: &client_info,
+        });
         return Err(error);
     }
     if let Some(model) = request_shape.model.as_deref()
@@ -105,15 +112,16 @@ pub async fn proxy_v1(
             StatusCode::NOT_FOUND,
             request_timer.elapsed(),
         );
-        warn_preflight_failure(
-            &timeline,
-            &route_name,
-            &identity.id,
-            Some(model),
-            request_shape.stream,
-            StatusCode::NOT_FOUND,
-            "access",
-        );
+        warn_preflight_failure(PreflightFailureLog {
+            timeline: &timeline,
+            route: &route_name,
+            identity: &identity.id,
+            model: Some(model),
+            stream: request_shape.stream,
+            status: StatusCode::NOT_FOUND,
+            stage: "access",
+            client_info: &client_info,
+        });
         return Err(ApiError::model_not_found(model));
     }
 
@@ -146,19 +154,21 @@ pub async fn proxy_v1(
                 error.status,
                 request_timer.elapsed(),
             );
-            warn_preflight_failure(
-                &timeline,
-                &route_name,
-                &identity.id,
-                request_shape.model.as_deref(),
-                request_shape.stream,
-                error.status,
-                "route",
-            );
+            warn_preflight_failure(PreflightFailureLog {
+                timeline: &timeline,
+                route: &route_name,
+                identity: &identity.id,
+                model: request_shape.model.as_deref(),
+                stream: request_shape.stream,
+                status: error.status,
+                stage: "route",
+                client_info: &client_info,
+            });
             return Err(error);
         }
     };
     let model_log_fields = ModelLogFields::from_route(request_shape.model.as_deref(), &route);
+    let backend_target = backend_target(&route.base_url);
     let request_body_bytes = body.len();
 
     let labels = MetricLabels {
@@ -184,6 +194,11 @@ pub async fn proxy_v1(
         stream = request_shape.stream,
         method = %method,
         path = %path,
+        peer_addr = %client_info.peer_addr(),
+        effective_client_addr = %client_info.effective_client_addr(),
+        trusted_proxy_addr = %client_info.trusted_proxy_addr(),
+        forwarded_for = %client_info.forwarded_for(),
+        user_agent = %client_info.user_agent(),
         request_body_bytes,
     );
     let request = ProxyRequest {
@@ -198,6 +213,9 @@ pub async fn proxy_v1(
         client_headers: headers,
         debug_capture_config: config.debug_capture.clone(),
         debug_capture: None,
+        client_info,
+        backend_target,
+        backend_remote_addr: None,
         route,
         labels,
         model_log_fields,
@@ -222,6 +240,9 @@ struct ProxyContext {
     client_headers: HeaderMap,
     debug_capture_config: DebugCaptureConfig,
     debug_capture: Option<RequestCapture>,
+    client_info: ClientInfo,
+    backend_target: String,
+    backend_remote_addr: Option<SocketAddr>,
     route: SelectedRoute,
     labels: MetricLabels,
     model_log_fields: ModelLogFields,
@@ -322,6 +343,7 @@ async fn do_proxy(
     let upstream = match request.send().await {
         Ok(response) => {
             context.timeline.mark(TimelineEvent::BackendHeadersReceived);
+            context.backend_remote_addr = response.remote_addr();
             response
         }
         Err(error) if error.is_timeout() => {
@@ -419,6 +441,9 @@ async fn buffered_response(
         client_headers,
         debug_capture_config: _,
         mut debug_capture,
+        client_info,
+        backend_target,
+        backend_remote_addr,
         route,
         labels,
         model_log_fields,
@@ -464,7 +489,14 @@ async fn buffered_response(
         upstream_status = upstream_status.as_u16(),
         response_bytes = response_bytes.len(),
         backend = %labels.backend,
+        backend_target = %backend_target,
+        backend_remote_addr = %socket_addr_or_none(backend_remote_addr),
         route = %labels.route,
+        peer_addr = %client_info.peer_addr(),
+        effective_client_addr = %client_info.effective_client_addr(),
+        trusted_proxy_addr = %client_info.trusted_proxy_addr(),
+        forwarded_for = %client_info.forwarded_for(),
+        user_agent = %client_info.user_agent(),
         requested_model = %model_log_fields.requested,
         public_model = %model_log_fields.public,
         backend_model = %model_log_fields.backend,
@@ -497,6 +529,9 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         client_headers,
         debug_capture_config: _,
         debug_capture,
+        client_info,
+        backend_target,
+        backend_remote_addr,
         route,
         labels,
         model_log_fields,
@@ -513,19 +548,29 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         .metrics
         .record_request(&labels, upstream_status.as_u16(), request_timer.elapsed());
     timeline.mark(TimelineEvent::ClientResponseReady);
-    let stream_metrics = StreamMetrics::new(
-        state.metrics.clone(),
-        labels.clone(),
-        upstream_status.as_u16(),
-        model_log_fields.clone(),
+    let stream_metrics = StreamMetrics::new(StreamMetricsInit {
+        metrics: state.metrics.clone(),
+        labels: labels.clone(),
+        status_code: upstream_status.as_u16(),
+        model_log_fields: model_log_fields.clone(),
         request_body_bytes,
         debug_capture,
+        client_info: client_info.clone(),
+        backend_target: backend_target.clone(),
+        backend_remote_addr,
         timeline,
-    );
+    });
     debug!(
         upstream_status = upstream_status.as_u16(),
         backend = %labels.backend,
+        backend_target = %backend_target,
+        backend_remote_addr = %socket_addr_or_none(backend_remote_addr),
         route = %labels.route,
+        peer_addr = %client_info.peer_addr(),
+        effective_client_addr = %client_info.effective_client_addr(),
+        trusted_proxy_addr = %client_info.trusted_proxy_addr(),
+        forwarded_for = %client_info.forwarded_for(),
+        user_agent = %client_info.user_agent(),
         requested_model = %model_log_fields.requested,
         public_model = %model_log_fields.public,
         backend_model = %model_log_fields.backend,
@@ -617,6 +662,23 @@ fn upstream_path(path: &str) -> &str {
         "/v1/chat/completion" => "/v1/chat/completions",
         path => path,
     }
+}
+
+fn backend_target(base_url: &str) -> String {
+    let Ok(url) = url::Url::parse(base_url) else {
+        return "unknown".to_owned();
+    };
+    let host = url.host_str().unwrap_or("unknown");
+    match url.port_or_known_default() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    }
+}
+
+fn socket_addr_or_none(address: Option<SocketAddr>) -> String {
+    address
+        .map(|address| address.to_string())
+        .unwrap_or_else(|| "none".to_owned())
 }
 
 fn response_builder(
@@ -729,23 +791,31 @@ fn record_preflight_failure(
         .record_request(&labels, status.as_u16(), duration);
 }
 
-fn warn_preflight_failure(
-    timeline: &RequestTimeline,
-    route: &str,
-    identity: &str,
-    model: Option<&str>,
+struct PreflightFailureLog<'a> {
+    timeline: &'a RequestTimeline,
+    route: &'a str,
+    identity: &'a str,
+    model: Option<&'a str>,
     stream: bool,
     status: StatusCode,
     stage: &'static str,
-) {
-    let snapshot = timeline.snapshot();
+    client_info: &'a ClientInfo,
+}
+
+fn warn_preflight_failure(failure: PreflightFailureLog<'_>) {
+    let snapshot = failure.timeline.snapshot();
     warn!(
-        route,
-        identity,
-        model = model.unwrap_or("none"),
-        stream,
-        status = status.as_u16(),
-        stage,
+        route = failure.route,
+        identity = failure.identity,
+        model = failure.model.unwrap_or("none"),
+        stream = failure.stream,
+        status = failure.status.as_u16(),
+        stage = failure.stage,
+        peer_addr = %failure.client_info.peer_addr(),
+        effective_client_addr = %failure.client_info.effective_client_addr(),
+        trusted_proxy_addr = %failure.client_info.trusted_proxy_addr(),
+        forwarded_for = %failure.client_info.forwarded_for(),
+        user_agent = %failure.client_info.user_agent(),
         timeline_started_unix_ms = snapshot.started_unix_ms,
         timeline_total_us = snapshot.total_us,
         timeline_proxy_entry_us = snapshot.proxy_entry_us,
@@ -767,7 +837,14 @@ fn warn_proxy_failure(
         client_status = client_status.as_u16(),
         error_kind,
         backend = %context.labels.backend,
+        backend_target = %context.backend_target,
+        backend_remote_addr = %socket_addr_or_none(context.backend_remote_addr),
         route = %context.labels.route,
+        peer_addr = %context.client_info.peer_addr(),
+        effective_client_addr = %context.client_info.effective_client_addr(),
+        trusted_proxy_addr = %context.client_info.trusted_proxy_addr(),
+        forwarded_for = %context.client_info.forwarded_for(),
+        user_agent = %context.client_info.user_agent(),
         requested_model = %context.model_log_fields.requested,
         public_model = %context.model_log_fields.public,
         backend_model = %context.model_log_fields.backend,
@@ -834,29 +911,40 @@ struct StreamMetrics {
     model_log_fields: ModelLogFields,
     request_body_bytes: usize,
     debug_capture: Option<RequestCapture>,
+    client_info: ClientInfo,
+    backend_target: String,
+    backend_remote_addr: Option<SocketAddr>,
     timeline: RequestTimeline,
     started: Instant,
     usage: UsageTotals,
 }
 
+struct StreamMetricsInit {
+    metrics: crate::metrics::Metrics,
+    labels: MetricLabels,
+    status_code: u16,
+    model_log_fields: ModelLogFields,
+    request_body_bytes: usize,
+    debug_capture: Option<RequestCapture>,
+    client_info: ClientInfo,
+    backend_target: String,
+    backend_remote_addr: Option<SocketAddr>,
+    timeline: RequestTimeline,
+}
+
 impl StreamMetrics {
-    fn new(
-        metrics: crate::metrics::Metrics,
-        labels: MetricLabels,
-        status_code: u16,
-        model_log_fields: ModelLogFields,
-        request_body_bytes: usize,
-        debug_capture: Option<RequestCapture>,
-        timeline: RequestTimeline,
-    ) -> Self {
+    fn new(init: StreamMetricsInit) -> Self {
         Self {
-            metrics,
-            labels,
-            status_code,
-            model_log_fields,
-            request_body_bytes,
-            debug_capture,
-            timeline,
+            metrics: init.metrics,
+            labels: init.labels,
+            status_code: init.status_code,
+            model_log_fields: init.model_log_fields,
+            request_body_bytes: init.request_body_bytes,
+            debug_capture: init.debug_capture,
+            client_info: init.client_info,
+            backend_target: init.backend_target,
+            backend_remote_addr: init.backend_remote_addr,
+            timeline: init.timeline,
             started: Instant::now(),
             usage: UsageTotals::default(),
         }
@@ -887,7 +975,14 @@ impl Drop for StreamMetrics {
         debug!(
             upstream_status = self.status_code,
             backend = %self.labels.backend,
+            backend_target = %self.backend_target,
+            backend_remote_addr = %socket_addr_or_none(self.backend_remote_addr),
             route = %self.labels.route,
+            peer_addr = %self.client_info.peer_addr(),
+            effective_client_addr = %self.client_info.effective_client_addr(),
+            trusted_proxy_addr = %self.client_info.trusted_proxy_addr(),
+            forwarded_for = %self.client_info.forwarded_for(),
+            user_agent = %self.client_info.user_agent(),
             requested_model = %self.model_log_fields.requested,
             public_model = %self.model_log_fields.public,
             backend_model = %self.model_log_fields.backend,

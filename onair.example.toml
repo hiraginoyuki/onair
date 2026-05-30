@@ -1,6 +1,8 @@
 [server]
 bind = "127.0.0.1:8080"
 request_body_limit_bytes = 2097152
+# Only trust Forwarded/X-Forwarded-For/X-Real-IP from these immediate peer CIDRs.
+trusted_proxy_cidrs = []
 
 [telemetry]
 service_name = "onair"

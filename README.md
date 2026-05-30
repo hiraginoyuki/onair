@@ -38,6 +38,8 @@ The core sections are:
 [server]
 bind = "127.0.0.1:8080"
 request_body_limit_bytes = 2097152
+# Only trust Forwarded/X-Forwarded-For/X-Real-IP from these immediate peer CIDRs.
+trusted_proxy_cidrs = []
 
 [telemetry]
 service_name = "onair"
@@ -93,7 +95,7 @@ onair watches the config file's parent directory and reloads the config when the
 
 Reloaded immediately:
 
-- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`, `[routing]`, `[debug_capture]`, backend auth, model mappings, capabilities, timeouts, context metadata, and debug capture settings.
+- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`, `[routing]`, `[debug_capture]`, `[server].trusted_proxy_cidrs`, backend auth, model mappings, capabilities, timeouts, context metadata, client-address trust policy, and debug capture settings.
 
 Restart required:
 
@@ -109,6 +111,10 @@ Restart required:
 - Requests for whitelisted models with no compatible backend route also return `404`.
 - For model-bearing requests, onair detects `model` in JSON bodies, URL-encoded forms, multipart form fields, and query strings.
 - Public model IDs are rewritten to backend model IDs in JSON bodies, URL-encoded forms, multipart form fields, and query strings before forwarding.
+
+### Client address logging
+
+onair logs the immediate socket peer address for proxied requests. If onair is behind a trusted reverse proxy, set `[server].trusted_proxy_cidrs` to the proxy source CIDRs to allow `Forwarded`, `X-Forwarded-For`, or `X-Real-IP` to populate `effective_client_addr` in logs. Forwarded headers are ignored by default and are also ignored when the immediate peer is not trusted.
 
 ### Backend capabilities
 
@@ -241,4 +247,4 @@ onair logs sanitized failures at `warn` and successful proxy/model responses at 
 RUST_LOG=onair=debug,tower_http=info cargo run -- --config onair.toml
 ```
 
-Successful proxy logs include route, backend ID, requested/public/backend model IDs, request body size, response status, response size for buffered responses, and stream duration for streaming responses. Timeline snapshot logs at `debug` include a wall-clock start timestamp plus monotonic microsecond offsets for auth, request inspection, route selection, request rewriting, backend forward start, upstream headers received, first/complete backend body read, response rewriting, response readiness, and stream completion where applicable. They intentionally do not include prompt or completion bodies.
+Successful proxy logs include route, backend ID, configured backend target, backend remote address when available, immediate/effective client address, trusted proxy address when used, user agent, requested/public/backend model IDs, request body size, response status, response size for buffered responses, and stream duration for streaming responses. Timeline snapshot logs at `debug` include a wall-clock start timestamp plus monotonic microsecond offsets for auth, request inspection, route selection, request rewriting, backend forward start, upstream headers received, first/complete backend body read, response rewriting, response readiness, and stream completion where applicable. They intentionally do not include prompt or completion bodies.

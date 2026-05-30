@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
+use crate::client_info::IpCidr;
 use crate::debug_capture;
 use crate::error::{Error, Result};
 
@@ -186,6 +187,7 @@ async fn wait_for_reload_quiet(
 pub struct ServerConfig {
     pub bind: SocketAddr,
     pub request_body_limit_bytes: usize,
+    pub trusted_proxy_cidrs: Vec<IpCidr>,
 }
 
 impl Default for ServerConfig {
@@ -195,6 +197,7 @@ impl Default for ServerConfig {
                 .parse()
                 .expect("valid default bind address"),
             request_body_limit_bytes: 2 * 1024 * 1024,
+            trusted_proxy_cidrs: Vec::new(),
         }
     }
 }
@@ -813,6 +816,36 @@ mod tests {
             config.debug_capture.directory,
             PathBuf::from("onair-debug-captures")
         );
+    }
+
+    #[test]
+    fn trusted_proxy_cidrs_resolve_from_server_config() {
+        let config = parse_config(
+            r#"
+            [server]
+            trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+
+        assert_eq!(config.server.trusted_proxy_cidrs.len(), 2);
+        assert!(config.server.trusted_proxy_cidrs[0].contains("127.0.0.1".parse().unwrap()));
+        assert!(config.server.trusted_proxy_cidrs[1].contains("::1".parse().unwrap()));
     }
 
     #[test]

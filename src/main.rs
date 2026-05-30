@@ -1,5 +1,6 @@
 mod app;
 mod auth;
+mod client_info;
 mod config;
 mod debug_capture;
 mod error;
@@ -60,9 +61,12 @@ fn build_router(state: Arc<AppState>) -> Router {
 
 async fn serve(bind: SocketAddr, app: Router) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

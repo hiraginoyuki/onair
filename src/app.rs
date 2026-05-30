@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, OriginalUri, Path, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, OriginalUri, Path, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
@@ -225,12 +225,13 @@ async fn props(
 
 async fn v1_proxy(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     method: Method,
     OriginalUri(uri): OriginalUri,
     body: Bytes,
 ) -> Response<Body> {
-    match proxy::proxy_v1(state, headers.clone(), method, uri, body).await {
+    match proxy::proxy_v1(state, Some(peer_addr), headers.clone(), method, uri, body).await {
         Ok(response) => response,
         Err(error) => {
             warn!(status = error.status.as_u16(), kind = %error.kind, "request failed before proxy response");
@@ -628,6 +629,9 @@ mod tests {
             .uri(uri)
             .header(AUTHORIZATION, format!("Bearer {CLIENT_KEY}"))
             .header(CONTENT_TYPE, "application/json")
+            .extension(ConnectInfo(
+                "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+            ))
             .body(Body::from(body.to_string()))
             .unwrap()
     }
