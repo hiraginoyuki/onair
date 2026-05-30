@@ -20,6 +20,7 @@ Planned work lives in [ROADMAP.md](ROADMAP.md). This README describes the curren
 - `stream: true` responses are proxied as server-sent events, with configured backend model names rewritten back to public model names in JSON/SSE responses.
 - Backend errors are converted to generic OpenAI-style errors, and response headers are allowlisted before returning to the client.
 - OpenTelemetry metrics record request counts, status codes, latency, stream duration, backend usage, and token counters when an OpenAI-compatible `usage` object is present.
+- A disabled-by-default local inspector can retain recent request metadata and render live timing timelines in a browser without storing prompt or completion bodies.
 
 ## Operation
 
@@ -52,6 +53,12 @@ export_interval_ms = 30000
 enabled = false
 directory = "onair-debug-captures"
 
+[inspector]
+# Disabled by default. Serves /_onair/inspector when enabled.
+enabled = false
+retention_requests = 10000
+allow_remote = false
+
 [routing]
 # "priority" chooses the first matching backend. "sticky" hashes identity/path/model/prompt_cache_key
 # across all matching backends, improving prompt-cache locality when several backends serve a model.
@@ -82,7 +89,7 @@ endpoints = ["chat", "responses"]
 
 onair interprets the file as routing and visibility policy:
 
-- `[server]`, `[telemetry]`, and `[debug_capture]` configure process-level behavior.
+- `[server]`, `[telemetry]`, `[debug_capture]`, and `[inspector]` configure process-level behavior.
 - `[access].default_models` grants public models to every configured client.
 - Each `[[client]]` adds one authenticated identity and may extend that identity's model whitelist.
 - Each `[[backend]]` defines one upstream OpenAI-compatible service plus capability markers that decide which `/v1/*` request families it can receive.
@@ -95,7 +102,7 @@ onair watches the config file's parent directory and reloads the config when the
 
 Reloaded immediately:
 
-- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`, `[routing]`, `[debug_capture]`, `[server].trusted_proxy_cidrs`, backend auth, model mappings, capabilities, timeouts, context metadata, client-address trust policy, and debug capture settings.
+- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`, `[routing]`, `[debug_capture]`, `[inspector]`, `[server].trusted_proxy_cidrs`, backend auth, model mappings, capabilities, timeouts, context metadata, client-address trust policy, debug capture settings, and inspector settings.
 
 Restart required:
 
@@ -241,6 +248,34 @@ Security guidance:
 - The default `onair-debug-captures` directory is ignored by this repository, but custom directories are not automatically protected from commits, backups, or sharing.
 - `debug_capture.directory` may be relative to the current working directory or absolute, but it must not contain `..` path components.
 - onair logs a `warn` event for every captured request so accidental enablement is visible.
+
+## Inspector
+
+`[inspector]` is a default-off, in-process request inspector for timing and routing diagnostics. It keeps recent request records in memory and serves a local Web UI at `/_onair/inspector` when enabled.
+
+```toml
+[inspector]
+enabled = true
+retention_requests = 10000
+allow_remote = false
+```
+
+Endpoints:
+
+- `GET /_onair/inspector`: information-dense browser UI with a live request table, detail pane, and per-request timeline bars.
+- `GET /_onair/inspector/requests`: JSON list of retained records, newest first.
+- `GET /_onair/inspector/requests/{record_id}`: JSON detail for one retained record.
+- `GET /_onair/inspector/events`: server-sent events for low-latency live updates. The UI uses this endpoint and normally reflects completed request records as soon as onair records them.
+
+Each retained record includes route, identity, public/backend model IDs, backend ID/target, backend remote socket when available, immediate/effective client address, trusted proxy details, user agent, body sizes, response status, OpenAI-compatible usage counters when present, and a timeline snapshot. Timeline fields use a wall-clock `started_at_unix_ms` plus monotonic microsecond offsets for proxy/auth/routing/rewrite/backend/response milestones.
+
+Security guidance:
+
+- The inspector does not store prompt or completion bodies. It can still expose sensitive metadata such as model names, client IDs, source addresses, user agents, query strings, request sizes, token counts, and debug capture IDs.
+- With `allow_remote = false`, inspector endpoints are only served to loopback peers. This is the default and is appropriate for `bind = "127.0.0.1:8080"` plus a browser on the same host.
+- Set `allow_remote = true` only if the onair bind address is protected by another access-control layer, such as SSH tunneling, a private VPN, or a trusted reverse proxy with its own authentication.
+- Inspector data is memory-only and disappears on process restart. Increase `retention_requests` only as much as needed; config loading rejects values above `100000` to avoid accidental unbounded memory growth.
+- Inspector responses use `Cache-Control: no-store`; avoid putting them behind shared caches or public reverse proxies.
 
 ## Logging
 

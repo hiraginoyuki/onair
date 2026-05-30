@@ -42,6 +42,10 @@ pub struct RequestCapture {
 }
 
 impl RequestCapture {
+    pub fn id(&self) -> &str {
+        &self.metadata.id
+    }
+
     pub fn record_outcome(&mut self, outcome: CaptureOutcome) {
         self.metadata.outcome = outcome;
         if let Err(error) = self.write_metadata() {
@@ -108,6 +112,13 @@ pub enum CaptureOutcome {
         cached_input_tokens: u64,
         output_tokens: u64,
     },
+    StreamIncomplete {
+        upstream_status: u16,
+        stream_duration_ms: u128,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+    },
     UpstreamNonSuccess {
         upstream_status: u16,
         client_status: u16,
@@ -122,6 +133,14 @@ pub enum CaptureOutcome {
     UpstreamBodyReadFailed {
         client_status: u16,
         error_kind: &'static str,
+    },
+    UpstreamStreamFailed {
+        upstream_status: u16,
+        stream_duration_ms: u128,
+        error_kind: &'static str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
     },
 }
 

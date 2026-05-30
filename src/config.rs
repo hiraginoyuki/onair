@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::error::{Error, Result};
-use crate::observe::{IpCidr, debug_capture};
+use crate::observe::{IpCidr, debug_capture, inspector};
 
 const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
@@ -30,6 +30,8 @@ pub struct ConfigFile {
     #[serde(default)]
     pub debug_capture: DebugCaptureConfig,
     #[serde(default)]
+    pub inspector: InspectorConfig,
+    #[serde(default)]
     pub routing: RoutingConfig,
     #[serde(default)]
     pub access: AccessConfig,
@@ -44,6 +46,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub telemetry: TelemetryConfig,
     pub debug_capture: DebugCaptureConfig,
+    pub inspector: InspectorConfig,
     pub routing: RoutingConfig,
     pub clients: Vec<ResolvedClient>,
     pub backends: Vec<ResolvedBackend>,
@@ -247,6 +250,24 @@ impl Default for DebugCaptureConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct InspectorConfig {
+    pub enabled: bool,
+    pub retention_requests: usize,
+    pub allow_remote: bool,
+}
+
+impl Default for InspectorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            retention_requests: inspector::default_retention_requests(),
+            allow_remote: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct RoutingConfig {
     pub strategy: RoutingStrategy,
 }
@@ -386,6 +407,7 @@ impl Config {
 
     fn resolve(file: ConfigFile) -> Result<Self> {
         debug_capture::validate_config(&file.debug_capture)?;
+        inspector::validate_config(&file.inspector)?;
 
         let mut client_ids = BTreeSet::new();
         let mut clients = Vec::with_capacity(file.clients.len());
@@ -482,6 +504,7 @@ impl Config {
             server: file.server,
             telemetry: file.telemetry,
             debug_capture: file.debug_capture,
+            inspector: file.inspector,
             routing: file.routing,
             clients,
             backends,
@@ -815,6 +838,69 @@ mod tests {
             config.debug_capture.directory,
             PathBuf::from("onair-debug-captures")
         );
+    }
+
+    #[test]
+    fn inspector_config_resolves_when_enabled() {
+        let config = parse_config(
+            r#"
+            [inspector]
+            enabled = true
+            retention_requests = 128
+            allow_remote = true
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+
+        assert!(config.inspector.enabled);
+        assert!(config.inspector.allow_remote);
+        assert_eq!(config.inspector.retention_requests, 128);
+    }
+
+    #[test]
+    fn inspector_config_rejects_zero_retention_requests() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [inspector]
+            enabled = true
+            retention_requests = 0
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        )
+        .unwrap();
+
+        let error = resolve_error(file);
+        assert!(error.contains("inspector.retention_requests must be greater than zero"));
     }
 
     #[test]

@@ -18,11 +18,15 @@ use crate::config::DebugCaptureConfig;
 use crate::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
 use crate::observe::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
-use crate::observe::{ClientInfo, RequestTimeline, TimelineEvent, TimelineSnapshot};
+use crate::observe::{
+    ClientInfo, InspectorOutcome, InspectorRequestBase, InspectorStore, InspectorTokenCounts,
+    RequestTimeline, TimelineEvent, TimelineSnapshot,
+};
 use crate::openai::{self, SseNormalizer, UsageTotals};
 use crate::routing::{self, SelectedRoute};
 
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
+const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
 
 pub async fn proxy_v1(
     state: Arc<AppState>,
@@ -39,6 +43,21 @@ pub async fn proxy_v1(
     let config = state.config.snapshot();
     let client_info =
         ClientInfo::from_headers(&headers, peer_addr, &config.server.trusted_proxy_cidrs);
+    let request_body_bytes = body.len();
+    let client_request_id = header_str(&headers, &X_REQUEST_ID).map(inspector_text);
+    let started_at_unix_ms = timeline.snapshot().started_unix_ms;
+    let observation = RequestObservationBase {
+        inspector_enabled: config.inspector.enabled,
+        inspector_retention_requests: config.inspector.retention_requests,
+        record_id: InspectorStore::next_record_id(started_at_unix_ms, client_request_id.as_deref()),
+        client_request_id,
+        started_at_unix_ms,
+        method: method.as_str().to_owned(),
+        path: inspector_text(&path),
+        query: uri.query().map(inspector_text),
+        client_info: client_info.clone(),
+        request_body_bytes,
+    };
 
     let identity = match authenticate(&headers, &config.clients) {
         Ok(identity) => {
@@ -65,6 +84,17 @@ pub async fn proxy_v1(
                 status: error.status,
                 stage: "auth",
                 client_info: &client_info,
+            });
+            record_preflight_inspector(PreflightInspectorRecord {
+                state: &state,
+                observation: &observation,
+                timeline: &timeline,
+                route: &route_name,
+                identity: "unknown",
+                model: None,
+                stream: false,
+                status: error.status,
+                stage: "auth",
             });
             return Err(error);
         }
@@ -97,6 +127,17 @@ pub async fn proxy_v1(
             stage: "inspect",
             client_info: &client_info,
         });
+        record_preflight_inspector(PreflightInspectorRecord {
+            state: &state,
+            observation: &observation,
+            timeline: &timeline,
+            route: &route_name,
+            identity: &identity.id,
+            model: None,
+            stream: request_shape.stream,
+            status: error.status,
+            stage: "inspect",
+        });
         return Err(error);
     }
     if let Some(model) = request_shape.model.as_deref()
@@ -120,6 +161,17 @@ pub async fn proxy_v1(
             status: StatusCode::NOT_FOUND,
             stage: "access",
             client_info: &client_info,
+        });
+        record_preflight_inspector(PreflightInspectorRecord {
+            state: &state,
+            observation: &observation,
+            timeline: &timeline,
+            route: &route_name,
+            identity: &identity.id,
+            model: Some(model),
+            stream: request_shape.stream,
+            status: StatusCode::NOT_FOUND,
+            stage: "access",
         });
         return Err(ApiError::model_not_found(model));
     }
@@ -163,12 +215,22 @@ pub async fn proxy_v1(
                 stage: "route",
                 client_info: &client_info,
             });
+            record_preflight_inspector(PreflightInspectorRecord {
+                state: &state,
+                observation: &observation,
+                timeline: &timeline,
+                route: &route_name,
+                identity: &identity.id,
+                model: request_shape.model.as_deref(),
+                stream: request_shape.stream,
+                status: error.status,
+                stage: "route",
+            });
             return Err(error);
         }
     };
     let model_log_fields = ModelLogFields::from_route(request_shape.model.as_deref(), &route);
     let backend_target = backend_target(&route.base_url);
-    let request_body_bytes = body.len();
 
     let labels = MetricLabels {
         route: route_name,
@@ -182,6 +244,8 @@ pub async fn proxy_v1(
         stream: request_shape.stream,
     };
     state.metrics.record_backend_attempt(&labels);
+    let inspector_base =
+        routed_inspector_base(&observation, &labels, &model_log_fields, &backend_target);
 
     let span = info_span!(
         "proxy_v1",
@@ -212,6 +276,9 @@ pub async fn proxy_v1(
         client_headers: headers,
         debug_capture_config: config.debug_capture.clone(),
         debug_capture: None,
+        inspector_base,
+        inspector_enabled: observation.inspector_enabled,
+        inspector_retention_requests: observation.inspector_retention_requests,
         client_info,
         backend_target,
         backend_remote_addr: None,
@@ -239,6 +306,9 @@ struct ProxyContext {
     client_headers: HeaderMap,
     debug_capture_config: DebugCaptureConfig,
     debug_capture: Option<RequestCapture>,
+    inspector_base: InspectorRequestBase,
+    inspector_enabled: bool,
+    inspector_retention_requests: usize,
     client_info: ClientInfo,
     backend_target: String,
     backend_remote_addr: Option<SocketAddr>,
@@ -356,6 +426,14 @@ async fn do_proxy(
                     client_status: StatusCode::GATEWAY_TIMEOUT.as_u16(),
                 });
             }
+            record_context_inspector(
+                &context,
+                InspectorOutcome::UpstreamTimeout,
+                StatusCode::GATEWAY_TIMEOUT,
+                None,
+                None,
+                InspectorTokenCounts::default(),
+            );
             warn_proxy_failure(
                 &context,
                 StatusCode::GATEWAY_TIMEOUT,
@@ -378,6 +456,14 @@ async fn do_proxy(
                     error_kind,
                 });
             }
+            record_context_inspector(
+                &context,
+                InspectorOutcome::UpstreamRequestFailed,
+                StatusCode::BAD_GATEWAY,
+                Some(error_kind),
+                None,
+                InspectorTokenCounts::default(),
+            );
             warn_proxy_failure(
                 &context,
                 StatusCode::BAD_GATEWAY,
@@ -414,6 +500,14 @@ async fn do_proxy(
                 client_status: api_error.status.as_u16(),
             });
         }
+        record_context_inspector(
+            &context,
+            InspectorOutcome::UpstreamNonSuccess,
+            api_error.status,
+            None,
+            None,
+            InspectorTokenCounts::default(),
+        );
         warn_proxy_failure(
             &context,
             api_error.status,
@@ -440,6 +534,9 @@ async fn buffered_response(
         client_headers,
         debug_capture_config: _,
         mut debug_capture,
+        inspector_base,
+        inspector_enabled,
+        inspector_retention_requests,
         client_info,
         backend_target,
         backend_remote_addr,
@@ -469,6 +566,26 @@ async fn buffered_response(
                     error_kind,
                 });
             }
+            let mut inspector_base = inspector_base.clone();
+            inspector_base.backend_remote_addr =
+                backend_remote_addr.map(|address| address.to_string());
+            inspector_base.debug_capture_id = debug_capture
+                .as_ref()
+                .map(|capture| capture.id().to_owned());
+            record_inspector_request(
+                &state.inspector,
+                inspector_enabled,
+                inspector_retention_requests,
+                InspectorRecord {
+                    base: inspector_base,
+                    timeline: &timeline,
+                    outcome: InspectorOutcome::UpstreamBodyReadFailed,
+                    status: StatusCode::BAD_GATEWAY,
+                    error_kind: Some(error_kind),
+                    response_body_bytes: None,
+                    tokens: InspectorTokenCounts::default(),
+                },
+            );
             ApiError::upstream(StatusCode::BAD_GATEWAY)
         })?;
 
@@ -508,6 +625,26 @@ async fn buffered_response(
         });
     }
     timeline.mark(TimelineEvent::ClientResponseReady);
+    let mut final_inspector_base = inspector_base;
+    final_inspector_base.backend_remote_addr =
+        backend_remote_addr.map(|address| address.to_string());
+    final_inspector_base.debug_capture_id = debug_capture
+        .as_ref()
+        .map(|capture| capture.id().to_owned());
+    record_inspector_request(
+        &state.inspector,
+        inspector_enabled,
+        inspector_retention_requests,
+        InspectorRecord {
+            base: final_inspector_base,
+            timeline: &timeline,
+            outcome: InspectorOutcome::Completed,
+            status: upstream_status,
+            error_kind: None,
+            response_body_bytes: Some(response_bytes.len()),
+            tokens: inspector_tokens(usage),
+        },
+    );
     let timeline_snapshot = timeline.snapshot();
     debug_timeline_fields(timeline_snapshot, "buffered response timeline snapshot");
 
@@ -528,6 +665,9 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         client_headers,
         debug_capture_config: _,
         debug_capture,
+        inspector_base,
+        inspector_enabled,
+        inspector_retention_requests,
         client_info,
         backend_target,
         backend_remote_addr,
@@ -549,6 +689,10 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
     timeline.mark(TimelineEvent::ClientResponseReady);
     let stream_metrics = StreamMetrics::new(StreamMetricsInit {
         metrics: state.metrics.clone(),
+        inspector_store: state.inspector.clone(),
+        inspector_base,
+        inspector_enabled,
+        inspector_retention_requests,
         labels: labels.clone(),
         status_code: upstream_status.as_u16(),
         model_log_fields: model_log_fields.clone(),
@@ -585,12 +729,15 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         if normalize_sse {
             let mut normalizer = SseNormalizer::new(backend_model, public_model);
             while let Some(chunk) = chunks.next().await {
-                let chunk = chunk.inspect_err(|error| {
-                    warn!(
-                        error_kind = upstream_error_kind(error),
-                        "upstream stream chunk failed"
-                    );
-                })?;
+                let chunk = match chunk {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        let error_kind = upstream_error_kind(&error);
+                        stream_metrics.mark_stream_error(error_kind);
+                        warn!(error_kind, "upstream stream chunk failed");
+                        Err(error)?
+                    }
+                };
                 stream_metrics.mark_body_chunk();
                 let normalized = normalizer.push(&chunk);
                 if !normalized.is_empty() {
@@ -607,12 +754,15 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
             }
         } else {
             while let Some(chunk) = chunks.next().await {
-                let chunk = chunk.inspect_err(|error| {
-                    warn!(
-                        error_kind = upstream_error_kind(error),
-                        "upstream stream chunk failed"
-                    );
-                })?;
+                let chunk = match chunk {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        let error_kind = upstream_error_kind(&error);
+                        stream_metrics.mark_stream_error(error_kind);
+                        warn!(error_kind, "upstream stream chunk failed");
+                        Err(error)?
+                    }
+                };
                 stream_metrics.mark_body_chunk();
                 yield chunk;
             }
@@ -751,6 +901,20 @@ fn valid_header_value(value: &HeaderValue) -> Option<&HeaderValue> {
     Some(value)
 }
 
+fn inspector_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                '_'
+            } else {
+                character
+            }
+        })
+        .take(MAX_INSPECTOR_TEXT_CHARS)
+        .collect()
+}
+
 fn upstream_error_kind(error: &reqwest::Error) -> &'static str {
     if error.is_timeout() {
         "timeout"
@@ -788,6 +952,197 @@ fn record_preflight_failure(
     state
         .metrics
         .record_request(&labels, status.as_u16(), duration);
+}
+
+struct RequestObservationBase {
+    inspector_enabled: bool,
+    inspector_retention_requests: usize,
+    record_id: String,
+    client_request_id: Option<String>,
+    started_at_unix_ms: u64,
+    method: String,
+    path: String,
+    query: Option<String>,
+    client_info: ClientInfo,
+    request_body_bytes: usize,
+}
+
+struct PreflightInspectorRecord<'a> {
+    state: &'a Arc<AppState>,
+    observation: &'a RequestObservationBase,
+    timeline: &'a RequestTimeline,
+    route: &'a str,
+    identity: &'a str,
+    model: Option<&'a str>,
+    stream: bool,
+    status: StatusCode,
+    stage: &'static str,
+}
+
+fn routed_inspector_base(
+    observation: &RequestObservationBase,
+    labels: &MetricLabels,
+    model_log_fields: &ModelLogFields,
+    backend_target: &str,
+) -> InspectorRequestBase {
+    InspectorRequestBase {
+        record_id: observation.record_id.clone(),
+        client_request_id: observation.client_request_id.clone(),
+        started_at_unix_ms: observation.started_at_unix_ms,
+        method: observation.method.clone(),
+        path: observation.path.clone(),
+        query: observation.query.clone(),
+        route: labels.route.clone(),
+        identity: labels.identity.clone(),
+        requested_model: model_log_fields.requested.clone(),
+        public_model: model_log_fields.public.clone(),
+        backend_model: model_log_fields.backend.clone(),
+        backend: labels.backend.clone(),
+        backend_target: backend_target.to_owned(),
+        backend_remote_addr: None,
+        stream: labels.stream,
+        peer_addr: observation.client_info.peer_addr().to_owned(),
+        effective_client_addr: observation.client_info.effective_client_addr().to_owned(),
+        trusted_proxy_addr: observation.client_info.trusted_proxy_addr().to_owned(),
+        forwarded_for: observation.client_info.forwarded_for().to_owned(),
+        user_agent: observation.client_info.user_agent().to_owned(),
+        request_body_bytes: observation.request_body_bytes,
+        debug_capture_id: None,
+    }
+}
+
+fn preflight_inspector_base(record: &PreflightInspectorRecord<'_>) -> InspectorRequestBase {
+    let model = record.model.unwrap_or("none").to_owned();
+    InspectorRequestBase {
+        record_id: record.observation.record_id.clone(),
+        client_request_id: record.observation.client_request_id.clone(),
+        started_at_unix_ms: record.observation.started_at_unix_ms,
+        method: record.observation.method.clone(),
+        path: record.observation.path.clone(),
+        query: record.observation.query.clone(),
+        route: record.route.to_owned(),
+        identity: record.identity.to_owned(),
+        requested_model: model.clone(),
+        public_model: model,
+        backend_model: "none".to_owned(),
+        backend: "none".to_owned(),
+        backend_target: "none".to_owned(),
+        backend_remote_addr: None,
+        stream: record.stream,
+        peer_addr: record.observation.client_info.peer_addr().to_owned(),
+        effective_client_addr: record
+            .observation
+            .client_info
+            .effective_client_addr()
+            .to_owned(),
+        trusted_proxy_addr: record
+            .observation
+            .client_info
+            .trusted_proxy_addr()
+            .to_owned(),
+        forwarded_for: record.observation.client_info.forwarded_for().to_owned(),
+        user_agent: record.observation.client_info.user_agent().to_owned(),
+        request_body_bytes: record.observation.request_body_bytes,
+        debug_capture_id: None,
+    }
+}
+
+fn record_preflight_inspector(record: PreflightInspectorRecord<'_>) {
+    if !record.observation.inspector_enabled {
+        return;
+    }
+
+    record_inspector_request(
+        &record.state.inspector,
+        record.observation.inspector_enabled,
+        record.observation.inspector_retention_requests,
+        InspectorRecord {
+            base: preflight_inspector_base(&record),
+            timeline: record.timeline,
+            outcome: InspectorOutcome::Preflight {
+                stage: record.stage,
+            },
+            status: record.status,
+            error_kind: None,
+            response_body_bytes: None,
+            tokens: InspectorTokenCounts::default(),
+        },
+    );
+}
+
+fn record_context_inspector(
+    context: &ProxyContext,
+    outcome: InspectorOutcome,
+    status: StatusCode,
+    error_kind: Option<&'static str>,
+    response_body_bytes: Option<usize>,
+    tokens: InspectorTokenCounts,
+) {
+    let mut base = context.inspector_base.clone();
+    base.backend_remote_addr = context
+        .backend_remote_addr
+        .map(|address| address.to_string());
+    base.debug_capture_id = context
+        .debug_capture
+        .as_ref()
+        .map(|capture| capture.id().to_owned());
+    record_inspector_request(
+        &context.state.inspector,
+        context.inspector_enabled,
+        context.inspector_retention_requests,
+        InspectorRecord {
+            base,
+            timeline: &context.timeline,
+            outcome,
+            status,
+            error_kind,
+            response_body_bytes,
+            tokens,
+        },
+    );
+}
+
+struct InspectorRecord<'a> {
+    base: InspectorRequestBase,
+    timeline: &'a RequestTimeline,
+    outcome: InspectorOutcome,
+    status: StatusCode,
+    error_kind: Option<&'static str>,
+    response_body_bytes: Option<usize>,
+    tokens: InspectorTokenCounts,
+}
+
+fn record_inspector_request(
+    store: &InspectorStore,
+    enabled: bool,
+    retention_requests: usize,
+    record: InspectorRecord<'_>,
+) {
+    if !enabled {
+        return;
+    }
+
+    store.record(
+        enabled,
+        retention_requests,
+        crate::observe::InspectorRequestRecord::new(
+            record.base,
+            record.outcome,
+            record.status.as_u16(),
+            record.error_kind.map(str::to_owned),
+            record.response_body_bytes,
+            record.tokens,
+            record.timeline.snapshot(),
+        ),
+    );
+}
+
+fn inspector_tokens(usage: UsageTotals) -> InspectorTokenCounts {
+    InspectorTokenCounts {
+        input: usage.input,
+        cached_input: usage.cached_input,
+        output: usage.output,
+    }
 }
 
 struct PreflightFailureLog<'a> {
@@ -905,6 +1260,10 @@ impl ModelLogFields {
 
 struct StreamMetrics {
     metrics: crate::metrics::Metrics,
+    inspector_store: InspectorStore,
+    inspector_enabled: bool,
+    inspector_retention_requests: usize,
+    inspector_base: InspectorRequestBase,
     labels: MetricLabels,
     status_code: u16,
     model_log_fields: ModelLogFields,
@@ -916,10 +1275,16 @@ struct StreamMetrics {
     timeline: RequestTimeline,
     started: Instant,
     usage: UsageTotals,
+    body_complete: bool,
+    stream_error_kind: Option<&'static str>,
 }
 
 struct StreamMetricsInit {
     metrics: crate::metrics::Metrics,
+    inspector_store: InspectorStore,
+    inspector_base: InspectorRequestBase,
+    inspector_enabled: bool,
+    inspector_retention_requests: usize,
     labels: MetricLabels,
     status_code: u16,
     model_log_fields: ModelLogFields,
@@ -935,6 +1300,10 @@ impl StreamMetrics {
     fn new(init: StreamMetricsInit) -> Self {
         Self {
             metrics: init.metrics,
+            inspector_store: init.inspector_store,
+            inspector_base: init.inspector_base,
+            inspector_enabled: init.inspector_enabled,
+            inspector_retention_requests: init.inspector_retention_requests,
             labels: init.labels,
             status_code: init.status_code,
             model_log_fields: init.model_log_fields,
@@ -946,6 +1315,8 @@ impl StreamMetrics {
             timeline: init.timeline,
             started: Instant::now(),
             usage: UsageTotals::default(),
+            body_complete: false,
+            stream_error_kind: None,
         }
     }
 
@@ -954,6 +1325,7 @@ impl StreamMetrics {
     }
 
     fn mark_body_complete(&mut self) {
+        self.body_complete = true;
         self.timeline.mark(TimelineEvent::BackendBodyComplete);
     }
 
@@ -961,6 +1333,14 @@ impl StreamMetrics {
         self.usage.input += usage.input;
         self.usage.cached_input += usage.cached_input;
         self.usage.output += usage.output;
+    }
+
+    fn mark_stream_error(&mut self, error_kind: &'static str) {
+        self.stream_error_kind = Some(error_kind);
+    }
+
+    fn inspect_base(&self) -> InspectorRequestBase {
+        self.inspector_base.clone()
     }
 }
 
@@ -992,15 +1372,57 @@ impl Drop for StreamMetrics {
             output_tokens = self.usage.output,
             "streaming response completed"
         );
+        let inspector_outcome = match self.stream_error_kind {
+            Some(_) => InspectorOutcome::UpstreamStreamFailed,
+            None if !self.body_complete => InspectorOutcome::StreamIncomplete,
+            None => InspectorOutcome::Completed,
+        };
         if let Some(capture) = &mut self.debug_capture {
-            capture.record_outcome(CaptureOutcome::StreamCompleted {
-                upstream_status: self.status_code,
-                stream_duration_ms: duration.as_millis(),
-                input_tokens: self.usage.input,
-                cached_input_tokens: self.usage.cached_input,
-                output_tokens: self.usage.output,
-            });
+            let capture_outcome = match self.stream_error_kind {
+                Some(error_kind) => CaptureOutcome::UpstreamStreamFailed {
+                    upstream_status: self.status_code,
+                    stream_duration_ms: duration.as_millis(),
+                    error_kind,
+                    input_tokens: self.usage.input,
+                    cached_input_tokens: self.usage.cached_input,
+                    output_tokens: self.usage.output,
+                },
+                None if !self.body_complete => CaptureOutcome::StreamIncomplete {
+                    upstream_status: self.status_code,
+                    stream_duration_ms: duration.as_millis(),
+                    input_tokens: self.usage.input,
+                    cached_input_tokens: self.usage.cached_input,
+                    output_tokens: self.usage.output,
+                },
+                None => CaptureOutcome::StreamCompleted {
+                    upstream_status: self.status_code,
+                    stream_duration_ms: duration.as_millis(),
+                    input_tokens: self.usage.input,
+                    cached_input_tokens: self.usage.cached_input,
+                    output_tokens: self.usage.output,
+                },
+            };
+            capture.record_outcome(capture_outcome);
         }
+        let mut inspector_base = self.inspect_base();
+        inspector_base.debug_capture_id = self
+            .debug_capture
+            .as_ref()
+            .map(|capture| capture.id().to_owned());
+        record_inspector_request(
+            &self.inspector_store,
+            self.inspector_enabled,
+            self.inspector_retention_requests,
+            InspectorRecord {
+                base: inspector_base,
+                timeline: &self.timeline,
+                outcome: inspector_outcome,
+                status: StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::OK),
+                error_kind: self.stream_error_kind,
+                response_body_bytes: None,
+                tokens: inspector_tokens(self.usage),
+            },
+        );
         debug_timeline_fields(
             self.timeline.snapshot(),
             "streaming response timeline snapshot",

@@ -1,11 +1,16 @@
+use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
-use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, OriginalUri, Path, State};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE};
+use axum::http::{HeaderMap, Method, Request, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
+use axum::{Json, Router};
 use reqwest::Client;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, warn};
@@ -14,12 +19,14 @@ use crate::auth::authenticate;
 use crate::config::{Config, ConfigStore};
 use crate::error::{ApiError, Result};
 use crate::metrics::{MetricLabels, Metrics, RequestTimer};
+use crate::observe::{InspectorRequestRecord, InspectorStore, inspector};
 use crate::openai;
 use crate::proxy;
 
 pub struct AppState {
     pub config: ConfigStore,
     pub http: Client,
+    pub inspector: InspectorStore,
     pub metrics: Metrics,
 }
 
@@ -32,6 +39,7 @@ impl AppState {
         Ok(Self {
             config: ConfigStore::new(config),
             http,
+            inspector: InspectorStore::new(),
             metrics,
         })
     }
@@ -43,6 +51,13 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/healthz", get(healthz))
         .route("/props", get(props))
         .route("/v1/props", get(props))
+        .route("/_onair/inspector", get(inspector_ui))
+        .route("/_onair/inspector/events", get(inspector_events))
+        .route("/_onair/inspector/requests", get(inspector_requests))
+        .route(
+            "/_onair/inspector/requests/{*request_id}",
+            get(inspector_request),
+        )
         .route("/v1/models", get(models))
         .route("/v1/models/{*model}", get(model))
         .route("/v1/{*path}", any(v1_proxy))
@@ -225,7 +240,7 @@ async fn props(
 
 async fn v1_proxy(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     method: Method,
     OriginalUri(uri): OriginalUri,
@@ -238,6 +253,148 @@ async fn v1_proxy(
             proxy::attach_request_id(error.into_response(), &headers)
         }
     }
+}
+
+async fn inspector_ui(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = inspector_gate(&state, &request) {
+        return response;
+    }
+
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(Body::from(inspector::UI_HTML))
+        .expect("inspector UI response builder is valid");
+    add_inspector_headers(&mut response);
+    response.headers_mut().insert(
+        CONTENT_SECURITY_POLICY,
+        "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            .parse()
+            .expect("static content security policy is valid"),
+    );
+    response
+}
+
+async fn inspector_requests(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = inspector_gate(&state, &request) {
+        return response;
+    }
+
+    let mut records = state.inspector.records();
+    records.reverse();
+    let mut response = Json(records).into_response();
+    add_inspector_headers(&mut response);
+    response
+}
+
+async fn inspector_request(
+    State(state): State<Arc<AppState>>,
+    Path(request_id): Path<String>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = inspector_gate(&state, &request) {
+        return response;
+    }
+
+    let mut response = state
+        .inspector
+        .get(&request_id)
+        .map(Json)
+        .map(IntoResponse::into_response)
+        .unwrap_or_else(|| {
+            ApiError::not_found("The requested inspector record does not exist.").into_response()
+        });
+    add_inspector_headers(&mut response);
+    response
+}
+
+async fn inspector_events(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = inspector_gate(&state, &request) {
+        return response;
+    }
+
+    let mut receiver = state.inspector.subscribe();
+    let snapshot = state.inspector.records();
+    let stream = async_stream::stream! {
+        for record in snapshot {
+            yield Ok::<_, Infallible>(inspector_sse_event("snapshot", record));
+        }
+
+        loop {
+            match receiver.recv().await {
+                Ok(record) => yield Ok::<_, Infallible>(inspector_sse_event("request", record)),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    let event = Event::default()
+                        .event("lagged")
+                        .data(skipped.to_string());
+                    yield Ok::<_, Infallible>(event);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    let mut response = Sse::new(stream)
+        .keep_alive(
+            KeepAlive::default()
+                .interval(Duration::from_secs(15))
+                .text("keepalive"),
+        )
+        .into_response();
+    add_inspector_headers(&mut response);
+    response
+}
+
+fn inspector_sse_event(event_name: &'static str, record: InspectorRequestRecord) -> Event {
+    let data = serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_owned());
+    Event::default().event(event_name).data(data)
+}
+
+fn inspector_gate(state: &AppState, request: &Request<Body>) -> Option<Response<Body>> {
+    let config = state.config.snapshot();
+    if !config.inspector.enabled {
+        return Some(inspector_not_found());
+    }
+    if !config.inspector.allow_remote {
+        let peer_addr = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|connect_info| connect_info.0);
+        if !peer_addr
+            .map(|address| address.ip().is_loopback())
+            .unwrap_or(false)
+        {
+            return Some(inspector_not_found());
+        }
+    }
+    None
+}
+
+fn inspector_not_found() -> Response<Body> {
+    let mut response =
+        ApiError::not_found("The requested endpoint does not exist.").into_response();
+    add_inspector_headers(&mut response);
+    response
+}
+
+fn add_inspector_headers(response: &mut Response<Body>) {
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        "no-store".parse().expect("static header is valid"),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        "nosniff".parse().expect("static header is valid"),
+    );
 }
 
 async fn fallback(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response<Body> {
@@ -269,7 +426,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use axum::body::{Body, to_bytes};
-    use axum::extract::State;
+    use axum::extract::{ConnectInfo, State};
     use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
     use axum::http::{Request, StatusCode};
     use axum::routing::post;
@@ -281,8 +438,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        Config, DebugCaptureConfig, ModelRoute, ResolvedBackend, ResolvedClient, RoutingConfig,
-        RoutingStrategy, ServerConfig, TelemetryConfig,
+        Config, DebugCaptureConfig, InspectorConfig, ModelRoute, ResolvedBackend, ResolvedClient,
+        RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig,
     };
 
     const CLIENT_KEY: &str = "sk-test";
@@ -474,6 +631,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inspector_records_completed_requests_and_serves_details() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let state = test_state_with_inspector(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+        );
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/v1/responses?metadata=keep",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello inspector"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = json_body(response).await;
+
+        let response = app
+            .clone()
+            .oneshot(inspector_get("/_onair/inspector/requests"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        let requests = body.as_array().unwrap();
+        assert_eq!(requests.len(), 1);
+        let record = &requests[0];
+        assert_eq!(record["route"], "responses");
+        assert_eq!(record["backend"], "backend-a");
+        assert_eq!(record["peer_addr"], "127.0.0.1:55432");
+        assert_eq!(record["effective_client_addr"], "127.0.0.1:55432");
+        assert_eq!(record["outcome"]["kind"], "completed");
+        assert!(record["timeline"]["backend_forward_start_us"].is_number());
+
+        let record_id = record["record_id"].as_str().unwrap();
+        let response = app
+            .oneshot(inspector_get(&format!(
+                "/_onair/inspector/requests/{record_id}"
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let detail = json_body(response).await;
+        assert_eq!(detail["record_id"], record_id);
+        assert_eq!(detail["debug_capture_id"], serde_json::Value::Null);
+
+        backend.abort();
+    }
+
+    #[tokio::test]
+    async fn inspector_is_local_only_by_default() {
+        let state = test_state_with_inspector(
+            RoutingStrategy::Priority,
+            vec![],
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(inspector_get_with_peer(
+                "/_onair/inspector/requests",
+                "198.51.100.20:55432",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn models_respect_context_length_output_policy() {
         let state = test_state_with_client_models(
             RoutingStrategy::Priority,
@@ -568,6 +808,20 @@ mod tests {
         test_state_with_config(strategy, backends, btree_set([PUBLIC_MODEL]), debug_capture)
     }
 
+    fn test_state_with_inspector(
+        strategy: RoutingStrategy,
+        backends: Vec<ResolvedBackend>,
+        inspector: InspectorConfig,
+    ) -> Arc<AppState> {
+        test_state_with_config_and_inspector(
+            strategy,
+            backends,
+            btree_set([PUBLIC_MODEL]),
+            DebugCaptureConfig::default(),
+            inspector,
+        )
+    }
+
     fn test_state_with_client_models(
         strategy: RoutingStrategy,
         backends: Vec<ResolvedBackend>,
@@ -587,12 +841,29 @@ mod tests {
         client_models: BTreeSet<String>,
         debug_capture: DebugCaptureConfig,
     ) -> Arc<AppState> {
+        test_state_with_config_and_inspector(
+            strategy,
+            backends,
+            client_models,
+            debug_capture,
+            InspectorConfig::default(),
+        )
+    }
+
+    fn test_state_with_config_and_inspector(
+        strategy: RoutingStrategy,
+        backends: Vec<ResolvedBackend>,
+        client_models: BTreeSet<String>,
+        debug_capture: DebugCaptureConfig,
+        inspector: InspectorConfig,
+    ) -> Arc<AppState> {
         Arc::new(
             AppState::new(
                 Config {
                     server: ServerConfig::default(),
                     telemetry: TelemetryConfig::default(),
                     debug_capture,
+                    inspector,
                     routing: RoutingConfig { strategy },
                     clients: vec![ResolvedClient {
                         id: "dev".to_owned(),
@@ -633,6 +904,23 @@ mod tests {
                 "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
             ))
             .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    fn inspector_get(uri: &str) -> Request<Body> {
+        inspector_request(uri, "127.0.0.1:55432")
+    }
+
+    fn inspector_get_with_peer(uri: &str, peer: &str) -> Request<Body> {
+        inspector_request(uri, peer)
+    }
+
+    fn inspector_request(uri: &str, peer: &str) -> Request<Body> {
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .extension(ConnectInfo(peer.parse::<std::net::SocketAddr>().unwrap()))
+            .body(Body::empty())
             .unwrap()
     }
 

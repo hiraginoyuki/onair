@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>onair inspector</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: #111827;
+      --panel-2: #0f172a;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --border: #273449;
+      --accent: #38bdf8;
+      --good: #34d399;
+      --warn: #fbbf24;
+      --bad: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(17, 24, 39, 0.95);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    h1 {
+      font: 600 16px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      letter-spacing: 0.02em;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--warn);
+      box-shadow: 0 0 12px currentColor;
+    }
+    .dot.live { background: var(--good); }
+    .dot.dead { background: var(--bad); }
+    .toolbar {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    input, button {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 6px 8px;
+      font: inherit;
+    }
+    input {
+      width: min(36vw, 420px);
+    }
+    button {
+      cursor: pointer;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 38vw);
+      gap: 1px;
+      background: var(--border);
+      min-height: calc(100vh - 50px);
+    }
+    section {
+      background: var(--bg);
+      min-width: 0;
+    }
+    .table-wrap {
+      overflow: auto;
+      max-height: calc(100vh - 51px);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: var(--panel);
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      font-weight: 600;
+    }
+    th, td {
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(39, 52, 73, 0.72);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: top;
+    }
+    tbody tr {
+      cursor: pointer;
+    }
+    tbody tr:hover,
+    tbody tr.selected {
+      background: rgba(56, 189, 248, 0.10);
+    }
+    .c-time { width: 92px; }
+    .c-status { width: 62px; }
+    .c-ms { width: 70px; text-align: right; }
+    .c-route { width: 110px; }
+    .c-stream { width: 54px; }
+    .status-code.ok { color: var(--good); }
+    .status-code.warn { color: var(--warn); }
+    .status-code.bad { color: var(--bad); }
+    .outcome-bad { color: var(--bad); }
+    .detail {
+      max-height: calc(100vh - 51px);
+      overflow: auto;
+      padding: 14px;
+    }
+    .empty {
+      color: var(--muted);
+      padding: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .card h2 {
+      margin: 0;
+      padding: 9px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.7);
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 1px;
+      background: var(--border);
+    }
+    .kv div {
+      background: var(--panel);
+      padding: 6px 8px;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .kv .key {
+      color: var(--muted);
+      background: var(--panel-2);
+    }
+    .timeline {
+      display: grid;
+      gap: 6px;
+      padding: 10px;
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 190px 72px minmax(80px, 1fr);
+      align-items: center;
+      gap: 8px;
+    }
+    .bar-label {
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .bar-value {
+      text-align: right;
+    }
+    .bar-track {
+      height: 8px;
+      border-radius: 999px;
+      background: #1e293b;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      min-width: 2px;
+      border-radius: inherit;
+      background: var(--accent);
+    }
+    pre {
+      margin: 0;
+      padding: 10px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    @media (max-width: 980px) {
+      header { align-items: stretch; flex-direction: column; }
+      .toolbar { margin-left: 0; }
+      input { width: 100%; }
+      main { grid-template-columns: 1fr; }
+      .detail { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>onair inspector</h1>
+    <span class="status"><span id="dot" class="dot"></span><span id="status">connecting</span></span>
+    <span id="count" class="status">0 requests</span>
+    <div class="toolbar">
+      <input id="filter" type="search" autocomplete="off" spellcheck="false" placeholder="filter route, model, backend, client, user-agent">
+      <button id="reload" type="button">reload</button>
+    </div>
+  </header>
+  <main>
+    <section class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="c-time">time</th>
+            <th class="c-status">status</th>
+            <th class="c-ms">total ms</th>
+            <th class="c-route">route</th>
+            <th>model</th>
+            <th>backend</th>
+            <th>client</th>
+            <th>user-agent</th>
+            <th class="c-stream">stream</th>
+            <th>outcome</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="empty" class="empty">Waiting for requests…</div>
+    </section>
+    <section id="detail" class="detail">
+      <div class="empty">Select a request to inspect timings and metadata.</div>
+    </section>
+  </main>
+  <script>
+    "use strict";
+
+    const base = "/_onair/inspector";
+    const rows = document.getElementById("rows");
+    const empty = document.getElementById("empty");
+    const detail = document.getElementById("detail");
+    const filter = document.getElementById("filter");
+    const statusText = document.getElementById("status");
+    const statusDot = document.getElementById("dot");
+    const countText = document.getElementById("count");
+    const records = new Map();
+    let selectedId = null;
+    let source = null;
+
+    const timelineFields = [
+      ["proxy entry", "proxy_entry_us"],
+      ["auth done", "auth_done_us"],
+      ["request inspected", "request_inspected_us"],
+      ["route selected", "route_selected_us"],
+      ["request rewritten", "request_rewritten_us"],
+      ["debug capture done", "debug_capture_done_us"],
+      ["backend forward start", "backend_forward_start_us"],
+      ["backend headers received", "backend_headers_received_us"],
+      ["backend body first chunk", "backend_body_first_chunk_us"],
+      ["backend body complete", "backend_body_complete_us"],
+      ["response rewritten", "response_rewritten_us"],
+      ["client response ready", "client_response_ready_us"],
+      ["stream complete", "stream_complete_us"],
+    ];
+
+    function setStatus(text, className) {
+      statusText.textContent = text;
+      statusDot.className = `dot ${className || ""}`;
+    }
+
+    function outcomeText(record) {
+      if (!record || !record.outcome) return "unknown";
+      if (typeof record.outcome === "string") return record.outcome;
+      if (record.outcome.kind === "preflight") return `preflight:${record.outcome.stage}`;
+      return record.outcome.kind || "unknown";
+    }
+
+    function statusClass(status) {
+      if (status >= 500) return "bad";
+      if (status >= 400) return "warn";
+      return "ok";
+    }
+
+    function ms(us) {
+      if (us === null || us === undefined) return "";
+      return (Number(us) / 1000).toFixed(1);
+    }
+
+    function timeOf(msSinceEpoch) {
+      return new Date(msSinceEpoch).toLocaleTimeString(undefined, { hour12: false });
+    }
+
+    function searchable(record) {
+      return [
+        record.record_id,
+        record.client_request_id,
+        record.route,
+        record.identity,
+        record.requested_model,
+        record.public_model,
+        record.backend_model,
+        record.backend,
+        record.backend_target,
+        record.backend_remote_addr,
+        record.peer_addr,
+        record.effective_client_addr,
+        record.trusted_proxy_addr,
+        record.forwarded_for,
+        record.user_agent,
+        record.path,
+        record.query,
+        outcomeText(record),
+      ].filter(Boolean).join(" ").toLowerCase();
+    }
+
+    function upsert(record) {
+      records.set(record.record_id, record);
+      renderRows();
+      if (selectedId === record.record_id) renderDetail(record);
+    }
+
+    function recordList() {
+      const needle = filter.value.trim().toLowerCase();
+      const list = Array.from(records.values()).sort((a, b) => {
+        if (a.started_at_unix_ms !== b.started_at_unix_ms) return b.started_at_unix_ms - a.started_at_unix_ms;
+        return String(b.record_id).localeCompare(String(a.record_id));
+      });
+      return needle ? list.filter(record => searchable(record).includes(needle)) : list;
+    }
+
+    function renderRows() {
+      const list = recordList();
+      rows.replaceChildren();
+      countText.textContent = `${records.size} request${records.size === 1 ? "" : "s"}`;
+      empty.style.display = list.length ? "none" : "block";
+
+      for (const record of list.slice(0, 1000)) {
+        const tr = document.createElement("tr");
+        if (record.record_id === selectedId) tr.classList.add("selected");
+        tr.addEventListener("click", () => {
+          selectedId = record.record_id;
+          renderRows();
+          renderDetail(record);
+        });
+        const cells = [
+          timeOf(record.started_at_unix_ms),
+          record.status,
+          ms(record.timeline && record.timeline.total_us),
+          record.route,
+          record.public_model || record.requested_model,
+          record.backend,
+          record.effective_client_addr,
+          record.user_agent,
+          record.stream ? "yes" : "no",
+          outcomeText(record),
+        ];
+        cells.forEach((value, index) => {
+          const td = document.createElement("td");
+          td.textContent = value == null ? "" : String(value);
+          if (index === 1) td.className = `status-code ${statusClass(Number(value))}`;
+          if (index === 2) td.className = "c-ms";
+          if (index === 9 && outcomeText(record) !== "completed") td.className = "outcome-bad";
+          tr.appendChild(td);
+        });
+        rows.appendChild(tr);
+      }
+    }
+
+    function kvCard(title, pairs) {
+      const card = document.createElement("div");
+      card.className = "card";
+      const heading = document.createElement("h2");
+      heading.textContent = title;
+      const grid = document.createElement("div");
+      grid.className = "kv";
+      for (const [key, value] of pairs) {
+        const k = document.createElement("div");
+        k.className = "key";
+        k.textContent = key;
+        const v = document.createElement("div");
+        v.textContent = value === null || value === undefined || value === "" ? "none" : String(value);
+        grid.append(k, v);
+      }
+      card.append(heading, grid);
+      return card;
+    }
+
+    function timelineCard(record) {
+      const card = document.createElement("div");
+      card.className = "card";
+      const heading = document.createElement("h2");
+      heading.textContent = "timeline";
+      const list = document.createElement("div");
+      list.className = "timeline";
+      const timeline = record.timeline || {};
+      const total = Number(timeline.total_us || 0);
+      for (const [label, field] of timelineFields) {
+        const value = timeline[field];
+        if (value === null || value === undefined) continue;
+        const row = document.createElement("div");
+        row.className = "bar-row";
+        const name = document.createElement("div");
+        name.className = "bar-label";
+        name.textContent = label;
+        const number = document.createElement("div");
+        number.className = "bar-value";
+        number.textContent = `${ms(value)} ms`;
+        const track = document.createElement("div");
+        track.className = "bar-track";
+        const fill = document.createElement("div");
+        fill.className = "bar-fill";
+        fill.style.width = `${Math.max(1, Math.min(100, total ? Number(value) / total * 100 : 1))}%`;
+        track.appendChild(fill);
+        row.append(name, number, track);
+        list.appendChild(row);
+      }
+      card.append(heading, list);
+      return card;
+    }
+
+    function jsonCard(record) {
+      const card = document.createElement("div");
+      card.className = "card";
+      const heading = document.createElement("h2");
+      heading.textContent = "raw json";
+      const pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(record, null, 2);
+      card.append(heading, pre);
+      return card;
+    }
+
+    function renderDetail(record) {
+      detail.replaceChildren(
+        kvCard("request", [
+          ["record id", record.record_id],
+          ["client request id", record.client_request_id],
+          ["started", new Date(record.started_at_unix_ms).toISOString()],
+          ["completed", new Date(record.completed_at_unix_ms).toISOString()],
+          ["method", record.method],
+          ["path", record.query ? `${record.path}?${record.query}` : record.path],
+          ["route", record.route],
+          ["identity", record.identity],
+          ["status", record.status],
+          ["outcome", outcomeText(record)],
+          ["error kind", record.error_kind],
+        ]),
+        kvCard("routing", [
+          ["requested model", record.requested_model],
+          ["public model", record.public_model],
+          ["backend model", record.backend_model],
+          ["backend", record.backend],
+          ["backend target", record.backend_target],
+          ["backend remote addr", record.backend_remote_addr],
+          ["stream", record.stream ? "yes" : "no"],
+        ]),
+        kvCard("client", [
+          ["peer addr", record.peer_addr],
+          ["effective client", record.effective_client_addr],
+          ["trusted proxy", record.trusted_proxy_addr],
+          ["forwarded for", record.forwarded_for],
+          ["user agent", record.user_agent],
+        ]),
+        kvCard("sizes and usage", [
+          ["request body bytes", record.request_body_bytes],
+          ["response body bytes", record.response_body_bytes],
+          ["input tokens", record.input_tokens],
+          ["cached input tokens", record.cached_input_tokens],
+          ["output tokens", record.output_tokens],
+          ["debug capture id", record.debug_capture_id],
+        ]),
+        timelineCard(record),
+        jsonCard(record),
+      );
+    }
+
+    async function reload() {
+      const response = await fetch(`${base}/requests`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`reload failed: HTTP ${response.status}`);
+      const list = await response.json();
+      records.clear();
+      for (const record of list) records.set(record.record_id, record);
+      renderRows();
+      if (selectedId && records.has(selectedId)) renderDetail(records.get(selectedId));
+    }
+
+    function connect() {
+      if (source) source.close();
+      source = new EventSource(`${base}/events`);
+      source.addEventListener("open", () => setStatus("live", "live"));
+      source.addEventListener("snapshot", event => upsert(JSON.parse(event.data)));
+      source.addEventListener("request", event => upsert(JSON.parse(event.data)));
+      source.addEventListener("lagged", () => reload().catch(error => setStatus(error.message, "dead")));
+      source.addEventListener("error", () => {
+        setStatus("reconnecting", "dead");
+      });
+    }
+
+    document.getElementById("reload").addEventListener("click", () => {
+      reload().then(() => setStatus("reloaded", "live")).catch(error => setStatus(error.message, "dead"));
+    });
+    filter.addEventListener("input", renderRows);
+
+    reload().catch(() => {}).finally(connect);
+  </script>
+</body>
+</html>

@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use serde::Serialize;
+
 #[derive(Debug, Clone)]
 pub struct RequestTimeline {
     started: Instant,
@@ -102,7 +104,7 @@ pub enum TimelineEvent {
     StreamComplete,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct TimelineSnapshot {
     pub started_unix_ms: u64,
     pub total_us: u64,

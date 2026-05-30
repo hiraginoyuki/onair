@@ -19,8 +19,8 @@ These items are ordered roughly by dependency and operator value, not by impleme
 ## Priority 3
 
 - Per-identity rate limits, token quotas, and spend caps.
-- Admin API and Web UI for model/backend/client lifecycle changes.
-- Persistent audit log with body redaction guarantees.
+- Admin API and Web UI for model/backend/client lifecycle changes beyond the local request inspector.
+- Persistent inspector/audit log with body redaction guarantees.
 - Request queueing, load shedding, circuit breakers, and adaptive routing.
 - Multi-tenant policy packs and config provenance tracking.
 - Optional Prometheus exposition bridge.
