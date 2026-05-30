@@ -19,8 +19,8 @@ use crate::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
 use crate::observe::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
 use crate::observe::{
-    ClientInfo, InspectorOutcome, InspectorRequestBase, InspectorStore, InspectorTokenCounts,
-    RequestTimeline, TimelineEvent, TimelineSnapshot,
+    BackendHealthStore, ClientInfo, InspectorOutcome, InspectorRequestBase, InspectorStore,
+    InspectorTokenCounts, RequestTimeline, TimelineEvent, TimelineSnapshot,
 };
 use crate::openai::{self, SseNormalizer, UsageTotals};
 use crate::routing::{self, SelectedRoute};
@@ -426,6 +426,12 @@ async fn do_proxy(
                     client_status: StatusCode::GATEWAY_TIMEOUT.as_u16(),
                 });
             }
+            context.state.health.record_failure(
+                &context.labels.backend,
+                context.request_timer.elapsed(),
+                StatusCode::GATEWAY_TIMEOUT.as_u16(),
+                "timeout",
+            );
             record_context_inspector(
                 &context,
                 InspectorOutcome::UpstreamTimeout,
@@ -456,6 +462,12 @@ async fn do_proxy(
                     error_kind,
                 });
             }
+            context.state.health.record_failure(
+                &context.labels.backend,
+                context.request_timer.elapsed(),
+                StatusCode::BAD_GATEWAY.as_u16(),
+                error_kind,
+            );
             record_context_inspector(
                 &context,
                 InspectorOutcome::UpstreamRequestFailed,
@@ -500,6 +512,12 @@ async fn do_proxy(
                 client_status: api_error.status.as_u16(),
             });
         }
+        context.state.health.record_failure(
+            &context.labels.backend,
+            context.request_timer.elapsed(),
+            upstream_status.as_u16(),
+            "upstream_non_success",
+        );
         record_context_inspector(
             &context,
             InspectorOutcome::UpstreamNonSuccess,
@@ -566,6 +584,12 @@ async fn buffered_response(
                     error_kind,
                 });
             }
+            state.health.record_failure(
+                &labels.backend,
+                request_timer.elapsed(),
+                StatusCode::BAD_GATEWAY.as_u16(),
+                error_kind,
+            );
             let mut inspector_base = inspector_base.clone();
             inspector_base.backend_remote_addr =
                 backend_remote_addr.map(|address| address.to_string());
@@ -624,6 +648,11 @@ async fn buffered_response(
             upstream_status: upstream_status.as_u16(),
         });
     }
+    state.health.record_success(
+        &labels.backend,
+        request_timer.elapsed(),
+        upstream_status.as_u16(),
+    );
     timeline.mark(TimelineEvent::ClientResponseReady);
     let mut final_inspector_base = inspector_base;
     final_inspector_base.backend_remote_addr =
@@ -689,6 +718,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
     timeline.mark(TimelineEvent::ClientResponseReady);
     let stream_metrics = StreamMetrics::new(StreamMetricsInit {
         metrics: state.metrics.clone(),
+        health_store: state.health.clone(),
         inspector_store: state.inspector.clone(),
         inspector_base,
         inspector_enabled,
@@ -1260,6 +1290,7 @@ impl ModelLogFields {
 
 struct StreamMetrics {
     metrics: crate::metrics::Metrics,
+    health_store: BackendHealthStore,
     inspector_store: InspectorStore,
     inspector_enabled: bool,
     inspector_retention_requests: usize,
@@ -1281,6 +1312,7 @@ struct StreamMetrics {
 
 struct StreamMetricsInit {
     metrics: crate::metrics::Metrics,
+    health_store: BackendHealthStore,
     inspector_store: InspectorStore,
     inspector_base: InspectorRequestBase,
     inspector_enabled: bool,
@@ -1300,6 +1332,7 @@ impl StreamMetrics {
     fn new(init: StreamMetricsInit) -> Self {
         Self {
             metrics: init.metrics,
+            health_store: init.health_store,
             inspector_store: init.inspector_store,
             inspector_base: init.inspector_base,
             inspector_enabled: init.inspector_enabled,
@@ -1377,6 +1410,17 @@ impl Drop for StreamMetrics {
             None if !self.body_complete => InspectorOutcome::StreamIncomplete,
             None => InspectorOutcome::Completed,
         };
+        if let Some(error_kind) = self.stream_error_kind {
+            self.health_store.record_failure(
+                &self.labels.backend,
+                duration,
+                self.status_code,
+                error_kind,
+            );
+        } else if self.body_complete {
+            self.health_store
+                .record_success(&self.labels.backend, duration, self.status_code);
+        }
         if let Some(capture) = &mut self.debug_capture {
             let capture_outcome = match self.stream_error_kind {
                 Some(error_kind) => CaptureOutcome::UpstreamStreamFailed {

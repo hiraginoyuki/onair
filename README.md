@@ -273,6 +273,7 @@ Read-only operator endpoints use the same `[inspector]` enablement and loopback/
 - `GET /_onair/operator/runtime`: process uptime, current time, retained inspector record count, route object counts, and telemetry exporter status.
 - `GET /_onair/operator/config`: sanitized active config. Client and backend API keys are never returned; backends expose only whether an API key is configured.
 - `GET /_onair/operator/models`: effective public model visibility per client plus configured backend routes for each public model.
+- `GET /_onair/operator/health`: passive backend health observed from proxied traffic, including success/failure counters, consecutive failures, last status, last error kind, and last observed latency.
 
 Each retained record includes route, identity, public/backend model IDs, backend ID/target, backend remote socket when available, immediate/effective client address, trusted proxy details, user agent, body sizes, response status, OpenAI-compatible usage counters when present, and a timeline snapshot. Timeline fields use a wall-clock `started_at_unix_ms` plus monotonic microsecond offsets for proxy/auth/routing/rewrite/backend/response milestones.
 
@@ -284,6 +285,7 @@ Security guidance:
 - Set `allow_remote = true` only if the onair bind address is protected by another access-control layer, such as SSH tunneling, a private VPN, or a trusted reverse proxy with its own authentication.
 - Inspector data is memory-only and disappears on process restart. Increase `retention_requests` only as much as needed; config loading rejects values above `100000` to avoid accidental unbounded memory growth.
 - Inspector responses use `Cache-Control: no-store`; avoid putting them behind shared caches or public reverse proxies.
+- Backend health is passive in the current implementation. It reflects requests that onair has already routed; it does not yet probe idle backends or remove unhealthy backends from routing.
 
 ## Logging
 

@@ -20,7 +20,7 @@ use crate::auth::authenticate;
 use crate::config::{Config, ConfigStore};
 use crate::error::{ApiError, Result};
 use crate::metrics::{MetricLabels, Metrics, RequestTimer};
-use crate::observe::{InspectorRequestRecord, InspectorStore, inspector};
+use crate::observe::{BackendHealthStore, InspectorRequestRecord, InspectorStore, inspector};
 use crate::openai;
 use crate::operator;
 use crate::proxy;
@@ -31,6 +31,7 @@ const MAX_INSPECTOR_SNAPSHOT_LIMIT: usize = 10_000;
 pub struct AppState {
     pub config: ConfigStore,
     pub http: Client,
+    pub health: BackendHealthStore,
     pub inspector: InspectorStore,
     pub metrics: Metrics,
     started: Instant,
@@ -48,6 +49,7 @@ impl AppState {
         Ok(Self {
             config: ConfigStore::new(config),
             http,
+            health: BackendHealthStore::new(),
             inspector: InspectorStore::new(),
             metrics,
             started,
@@ -75,6 +77,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/_onair/operator/config", get(operator_config))
         .route("/_onair/operator/models", get(operator_models))
+        .route("/_onair/operator/health", get(operator_health))
         .route("/_onair/operator/runtime", get(operator_runtime))
         .route("/v1/models", get(models))
         .route("/v1/models/{*model}", get(model))
@@ -438,6 +441,20 @@ async fn operator_models(
 
     let config = state.config.snapshot();
     let mut response = Json(operator::models_snapshot(&config)).into_response();
+    add_inspector_headers(&mut response);
+    response
+}
+
+async fn operator_health(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = local_operator_gate(&state, &request) {
+        return response;
+    }
+
+    let config = state.config.snapshot();
+    let mut response = Json(operator::health_snapshot(&config, &state.health)).into_response();
     add_inspector_headers(&mut response);
     response
 }
@@ -880,6 +897,103 @@ mod tests {
         assert!(runtime_body["uptime_ms"].is_number());
 
         backend.abort();
+    }
+
+    #[tokio::test]
+    async fn operator_health_tracks_backend_successes() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let state = test_state_with_inspector(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+        );
+        let app = router(state);
+
+        let initial = json_body(
+            app.clone()
+                .oneshot(inspector_get("/_onair/operator/health"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(initial["backends"][0]["backend"], "backend-a");
+        assert_eq!(initial["backends"][0]["status"], "unknown");
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello health"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = json_body(response).await;
+
+        let health = json_body(
+            app.oneshot(inspector_get("/_onair/operator/health"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(health["backends"][0]["status"], "healthy");
+        assert_eq!(health["backends"][0]["successes"], 1);
+        assert_eq!(health["backends"][0]["failures"], 0);
+        assert_eq!(health["backends"][0]["last_status"], 200);
+        assert!(health["backends"][0]["last_latency_ms"].is_number());
+
+        backend.abort();
+    }
+
+    #[tokio::test]
+    async fn operator_health_tracks_backend_failures() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+
+        let state = test_state_with_inspector(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", format!("http://{address}"))],
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+        );
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello failure"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        let health = json_body(
+            app.oneshot(inspector_get("/_onair/operator/health"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(health["backends"][0]["status"], "degraded");
+        assert_eq!(health["backends"][0]["successes"], 0);
+        assert_eq!(health["backends"][0]["failures"], 1);
+        assert_eq!(health["backends"][0]["consecutive_failures"], 1);
+        assert_eq!(health["backends"][0]["last_status"], 502);
+        assert!(health["backends"][0]["last_error_kind"].is_string());
     }
 
     #[tokio::test]

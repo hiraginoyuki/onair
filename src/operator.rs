@@ -7,6 +7,7 @@ use crate::config::{
     Config, DebugCaptureConfig, InspectorConfig, ResolvedBackend, ResolvedClient, RoutingStrategy,
     ServerConfig, TelemetryConfig, TelemetryExporter,
 };
+use crate::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct OperatorRuntimeSnapshot {
@@ -35,6 +36,11 @@ pub(crate) struct OperatorConfigSnapshot {
 pub(crate) struct OperatorModelsSnapshot {
     pub(crate) public_models: Vec<PublicModelSnapshot>,
     pub(crate) clients: Vec<ClientSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct OperatorHealthSnapshot {
+    pub(crate) backends: Vec<BackendHealthSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
@@ -109,6 +115,21 @@ pub(crate) struct ModelRouteSnapshot {
     pub(crate) endpoints: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct BackendHealthSnapshot {
+    pub(crate) backend: String,
+    pub(crate) status: &'static str,
+    pub(crate) successes: u64,
+    pub(crate) failures: u64,
+    pub(crate) consecutive_failures: u64,
+    pub(crate) last_success_unix_ms: Option<u64>,
+    pub(crate) last_failure_unix_ms: Option<u64>,
+    pub(crate) last_observed_unix_ms: Option<u64>,
+    pub(crate) last_status: Option<u16>,
+    pub(crate) last_error_kind: Option<String>,
+    pub(crate) last_latency_ms: Option<u64>,
+}
+
 pub(crate) fn runtime_snapshot(
     config: &Config,
     started_at_unix_ms: u64,
@@ -176,6 +197,24 @@ pub(crate) fn models_snapshot(config: &Config) -> OperatorModelsSnapshot {
     OperatorModelsSnapshot {
         public_models: models.into_values().collect(),
         clients: clients_snapshot(&config.clients),
+    }
+}
+
+pub(crate) fn health_snapshot(
+    config: &Config,
+    health: &BackendHealthStore,
+) -> OperatorHealthSnapshot {
+    let backend_ids = config
+        .backends
+        .iter()
+        .map(|backend| backend.id.clone())
+        .collect::<Vec<_>>();
+    OperatorHealthSnapshot {
+        backends: health
+            .snapshot(&backend_ids)
+            .into_iter()
+            .map(backend_health_snapshot)
+            .collect(),
     }
 }
 
@@ -251,6 +290,22 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
                 endpoints: sorted_strings(&model.endpoints),
             })
             .collect(),
+    }
+}
+
+fn backend_health_snapshot(observed: ObservedBackendHealth) -> BackendHealthSnapshot {
+    BackendHealthSnapshot {
+        backend: observed.backend,
+        status: observed.status,
+        successes: observed.successes,
+        failures: observed.failures,
+        consecutive_failures: observed.consecutive_failures,
+        last_success_unix_ms: observed.last_success_unix_ms,
+        last_failure_unix_ms: observed.last_failure_unix_ms,
+        last_observed_unix_ms: observed.last_observed_unix_ms,
+        last_status: observed.last_status,
+        last_error_kind: observed.last_error_kind,
+        last_latency_ms: observed.last_latency_ms,
     }
 }
 

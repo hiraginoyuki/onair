@@ -6,10 +6,11 @@ These items are ordered roughly by dependency and operator value, not by impleme
 
 - Local read-only operator API and inspector overview cards for sanitized active config, effective model visibility, runtime state, and telemetry exporter status.
 - Local request inspector with live request table, detail view, bounded SSE replay, and per-request timing timelines.
+- Passive backend health snapshots from proxied traffic.
 
 ## Priority 1
 
-- Health checks per backend with compatibility and capability probes.
+- Active health checks per backend with compatibility and capability probes.
 - Richer operator telemetry snapshots beyond exporter status.
 - Retry and fallback policies before response streaming starts.
 - Weighted backend selection for compatible routes.
