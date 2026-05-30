@@ -19,6 +19,7 @@ use crate::observe::{IpCidr, debug_capture, inspector};
 const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_MAX_ATTEMPTS: usize = 5;
+const MAX_FALLBACK_ATTEMPTS: usize = 16;
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -293,12 +294,14 @@ impl Default for InspectorConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct RoutingConfig {
     pub strategy: RoutingStrategy,
+    pub fallback_attempts: usize,
 }
 
 impl Default for RoutingConfig {
     fn default() -> Self {
         Self {
             strategy: RoutingStrategy::Priority,
+            fallback_attempts: 1,
         }
     }
 }
@@ -432,6 +435,7 @@ impl Config {
         debug_capture::validate_config(&file.debug_capture)?;
         inspector::validate_config(&file.inspector)?;
         validate_health_config(&file.health)?;
+        validate_routing_config(&file.routing)?;
 
         let mut client_ids = BTreeSet::new();
         let mut clients = Vec::with_capacity(file.clients.len());
@@ -624,6 +628,15 @@ fn validate_health_config(config: &HealthConfig) -> Result<()> {
         return Err(Error::Config(
             "health.path must not contain control characters".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_routing_config(config: &RoutingConfig) -> Result<()> {
+    if config.fallback_attempts > MAX_FALLBACK_ATTEMPTS {
+        return Err(Error::Config(format!(
+            "routing.fallback_attempts must be at most {MAX_FALLBACK_ATTEMPTS}"
+        )));
     }
     Ok(())
 }
@@ -926,6 +939,66 @@ mod tests {
         assert_eq!(config.health.interval_ms, 5000);
         assert_eq!(config.health.timeout_ms, 750);
         assert_eq!(config.health.path, "/v1/models");
+    }
+
+    #[test]
+    fn routing_config_resolves_fallback_attempts() {
+        let config = parse_config(
+            r#"
+            [routing]
+            strategy = "sticky"
+            fallback_attempts = 2
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+
+        assert_eq!(config.routing.strategy, RoutingStrategy::Sticky);
+        assert_eq!(config.routing.fallback_attempts, 2);
+    }
+
+    #[test]
+    fn routing_config_rejects_excessive_fallback_attempts() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [routing]
+            fallback_attempts = 17
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        )
+        .unwrap();
+
+        let error = resolve_error(file);
+        assert!(error.contains("routing.fallback_attempts must be at most 16"));
     }
 
     #[test]

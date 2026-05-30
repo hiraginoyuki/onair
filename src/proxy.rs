@@ -19,8 +19,9 @@ use crate::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
 use crate::observe::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
 use crate::observe::{
-    BackendHealthStore, ClientInfo, InspectorOutcome, InspectorRequestBase, InspectorStore,
-    InspectorTokenCounts, RequestTimeline, TimelineEvent, TimelineSnapshot,
+    BackendHealthStore, ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
+    InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts, RequestTimeline,
+    TimelineEvent, TimelineSnapshot,
 };
 use crate::openai::{self, SseNormalizer, UsageTotals};
 use crate::routing::{self, SelectedRoute};
@@ -182,7 +183,7 @@ pub async fn proxy_v1(
         request_shape.model.as_deref(),
         request_shape.prompt_cache_key.as_deref(),
     );
-    let route = match routing::select_backend(
+    let routes = match routing::select_backend_candidates(
         &config.backends,
         config.routing.strategy,
         &path,
@@ -190,9 +191,9 @@ pub async fn proxy_v1(
         request_shape.stream,
         Some(&sticky_key),
     ) {
-        Ok(route) => {
+        Ok(routes) => {
             timeline.mark(TimelineEvent::RouteSelected);
-            route
+            routes
         }
         Err(error) => {
             timeline.mark(TimelineEvent::RouteSelected);
@@ -229,6 +230,12 @@ pub async fn proxy_v1(
             return Err(error);
         }
     };
+    let mut routes = routes.into_iter();
+    let route = routes.next().expect("candidate list is not empty");
+    let fallback_routes = routes
+        .take(config.routing.fallback_attempts)
+        .collect::<Vec<_>>();
+    let max_attempts = 1 + fallback_routes.len();
     let model_log_fields = ModelLogFields::from_route(request_shape.model.as_deref(), &route);
     let backend_target = backend_target(&route.base_url);
 
@@ -243,7 +250,6 @@ pub async fn proxy_v1(
         backend: route.backend_id.clone(),
         stream: request_shape.stream,
     };
-    state.metrics.record_backend_attempt(&labels);
     let inspector_base =
         routed_inspector_base(&observation, &labels, &model_log_fields, &backend_target);
 
@@ -254,6 +260,8 @@ pub async fn proxy_v1(
         public_model = %model_log_fields.public,
         backend_model = %model_log_fields.backend,
         backend = %route.backend_id,
+        attempt = 1usize,
+        max_attempts,
         stream = request_shape.stream,
         method = %method,
         path = %path,
@@ -285,12 +293,18 @@ pub async fn proxy_v1(
         route,
         labels,
         model_log_fields,
+        requested_model: request_shape.model.clone(),
         request_body_bytes,
         request_timer,
         timeline,
+        attempt: 1,
+        max_attempts,
+        retried_attempts: Vec::new(),
     };
 
-    do_proxy(context, request).instrument(span).await
+    do_proxy(context, request, fallback_routes)
+        .instrument(span)
+        .await
 }
 
 struct ProxyRequest {
@@ -315,14 +329,65 @@ struct ProxyContext {
     route: SelectedRoute,
     labels: MetricLabels,
     model_log_fields: ModelLogFields,
+    requested_model: Option<String>,
     request_body_bytes: usize,
     request_timer: RequestTimer,
     timeline: RequestTimeline,
+    attempt: usize,
+    max_attempts: usize,
+    retried_attempts: Vec<InspectorAttemptRecord>,
+}
+
+impl ProxyContext {
+    fn apply_route(&mut self, route: SelectedRoute) {
+        self.backend_target = backend_target(&route.base_url);
+        self.backend_remote_addr = None;
+        self.debug_capture = None;
+        self.model_log_fields = ModelLogFields::from_route(self.requested_model.as_deref(), &route);
+        self.labels.backend = route.backend_id.clone();
+        self.labels.public_model = route
+            .public_model
+            .clone()
+            .or_else(|| self.requested_model.clone())
+            .unwrap_or_else(|| "none".to_owned());
+        self.inspector_base.requested_model = self.model_log_fields.requested.clone();
+        self.inspector_base.public_model = self.model_log_fields.public.clone();
+        self.inspector_base.backend_model = self.model_log_fields.backend.clone();
+        self.inspector_base.backend = self.labels.backend.clone();
+        self.inspector_base.backend_target = self.backend_target.clone();
+        self.inspector_base.backend_remote_addr = None;
+        self.inspector_base.debug_capture_id = None;
+        self.route = route;
+    }
+
+    fn record_retried_attempt(
+        &mut self,
+        status: StatusCode,
+        outcome: &'static str,
+        error_kind: Option<&'static str>,
+        elapsed: std::time::Duration,
+    ) {
+        self.retried_attempts.push(InspectorAttemptRecord {
+            attempt: self.attempt,
+            backend: self.labels.backend.clone(),
+            backend_target: self.backend_target.clone(),
+            backend_remote_addr: self.backend_remote_addr.map(|address| address.to_string()),
+            debug_capture_id: self
+                .debug_capture
+                .as_ref()
+                .map(|capture| capture.id().to_owned()),
+            status: status.as_u16(),
+            outcome: outcome.to_owned(),
+            error_kind: error_kind.map(str::to_owned),
+            elapsed_ms: duration_millis(elapsed),
+        });
+    }
 }
 
 async fn do_proxy(
     mut context: ProxyContext,
     request: ProxyRequest,
+    fallback_routes: Vec<SelectedRoute>,
 ) -> Result<Response<Body>, ApiError> {
     let ProxyRequest {
         method,
@@ -333,156 +398,229 @@ async fn do_proxy(
     } = request;
     let request_path = uri.path().to_owned();
     let request_query = uri.query().map(str::to_owned);
-    let outbound_body = openai::rewrite_request_body(
-        &body,
-        content_type.as_deref(),
-        context.route.backend_model.as_deref(),
-    );
-    context.timeline.mark(TimelineEvent::RequestRewritten);
     let upstream_path = upstream_path(&request_path).to_owned();
-    let upstream_query = openai::rewrite_query_model(
-        request_query.as_deref(),
-        context.route.backend_model.as_deref(),
-    )
-    .filter(|query| !query.is_empty());
-    let upstream_url = upstream_url(
-        &context.route.base_url,
-        &upstream_path,
-        upstream_query.as_deref(),
-    );
-
     let request_id = context
         .client_headers
         .get(X_REQUEST_ID)
         .and_then(header_str_value)
         .map(str::to_owned);
-    context.debug_capture = debug_capture::capture_request(
-        &context.debug_capture_config,
-        CaptureRequest {
-            method: &method,
-            client_path: &request_path,
-            client_query: request_query.as_deref(),
-            upstream_path: &upstream_path,
-            upstream_query: upstream_query.as_deref(),
-            content_type: content_type.as_deref(),
-            request_id: request_id.as_deref(),
-            labels: &context.labels,
-            requested_model: &context.model_log_fields.requested,
-            public_model: &context.model_log_fields.public,
-            backend_model: &context.model_log_fields.backend,
-            inbound_body: &body,
-            upstream_body: &outbound_body,
-        },
-    );
-    context.timeline.mark(TimelineEvent::DebugCaptureDone);
+    let mut fallback_routes = fallback_routes.into_iter();
+    let upstream = loop {
+        let attempt_started = Instant::now();
+        context
+            .state
+            .metrics
+            .record_backend_attempt(&context.labels);
+        let outbound_body = openai::rewrite_request_body(
+            &body,
+            content_type.as_deref(),
+            context.route.backend_model.as_deref(),
+        );
+        context.timeline.mark(TimelineEvent::RequestRewritten);
+        let upstream_query = openai::rewrite_query_model(
+            request_query.as_deref(),
+            context.route.backend_model.as_deref(),
+        )
+        .filter(|query| !query.is_empty());
+        let upstream_url = upstream_url(
+            &context.route.base_url,
+            &upstream_path,
+            upstream_query.as_deref(),
+        );
 
-    let mut request = context
-        .state
-        .http
-        .request(method, upstream_url)
-        .timeout(context.route.timeout);
+        context.debug_capture = debug_capture::capture_request(
+            &context.debug_capture_config,
+            CaptureRequest {
+                method: &method,
+                client_path: &request_path,
+                client_query: request_query.as_deref(),
+                upstream_path: &upstream_path,
+                upstream_query: upstream_query.as_deref(),
+                content_type: content_type.as_deref(),
+                request_id: request_id.as_deref(),
+                labels: &context.labels,
+                requested_model: &context.model_log_fields.requested,
+                public_model: &context.model_log_fields.public,
+                backend_model: &context.model_log_fields.backend,
+                inbound_body: &body,
+                upstream_body: &outbound_body,
+            },
+        );
+        context.timeline.mark(TimelineEvent::DebugCaptureDone);
 
-    if !outbound_body.is_empty() {
-        request = request.body(outbound_body);
-        if let Some(content_type) = context
+        let mut upstream_request = context
+            .state
+            .http
+            .request(method.clone(), upstream_url)
+            .timeout(context.route.timeout);
+
+        if !outbound_body.is_empty() {
+            upstream_request = upstream_request.body(outbound_body);
+            if let Some(content_type) = context
+                .client_headers
+                .get(CONTENT_TYPE)
+                .and_then(valid_header_value)
+                .cloned()
+            {
+                upstream_request = upstream_request.header(CONTENT_TYPE, content_type);
+            }
+        }
+        if stream {
+            upstream_request = upstream_request.header(ACCEPT, "text/event-stream");
+        }
+        if let Some(api_key) = &context.route.api_key {
+            upstream_request = upstream_request.header(AUTHORIZATION, format!("Bearer {api_key}"));
+        }
+        if let Some(request_id) = context
             .client_headers
-            .get(CONTENT_TYPE)
+            .get(X_REQUEST_ID)
             .and_then(valid_header_value)
             .cloned()
         {
-            request = request.header(CONTENT_TYPE, content_type);
+            upstream_request = upstream_request.header(X_REQUEST_ID, request_id);
         }
-    }
-    if stream {
-        request = request.header(ACCEPT, "text/event-stream");
-    }
-    if let Some(api_key) = &context.route.api_key {
-        request = request.header(AUTHORIZATION, format!("Bearer {api_key}"));
-    }
-    if let Some(request_id) = context
-        .client_headers
-        .get(X_REQUEST_ID)
-        .and_then(valid_header_value)
-        .cloned()
-    {
-        request = request.header(X_REQUEST_ID, request_id);
-    }
 
-    context.timeline.mark(TimelineEvent::BackendForwardStart);
-    let upstream = match request.send().await {
-        Ok(response) => {
-            context.timeline.mark(TimelineEvent::BackendHeadersReceived);
-            context.backend_remote_addr = response.remote_addr();
-            response
-        }
-        Err(error) if error.is_timeout() => {
-            context.state.metrics.record_request(
-                &context.labels,
-                StatusCode::GATEWAY_TIMEOUT.as_u16(),
-                context.request_timer.elapsed(),
-            );
-            if let Some(capture) = &mut context.debug_capture {
-                capture.record_outcome(CaptureOutcome::UpstreamTimeout {
-                    client_status: StatusCode::GATEWAY_TIMEOUT.as_u16(),
-                });
+        context.timeline.mark(TimelineEvent::BackendForwardStart);
+        match upstream_request.send().await {
+            Ok(response) => {
+                context.timeline.mark(TimelineEvent::BackendHeadersReceived);
+                context.backend_remote_addr = response.remote_addr();
+                break response;
             }
-            context.state.health.record_failure(
-                &context.labels.backend,
-                context.request_timer.elapsed(),
-                StatusCode::GATEWAY_TIMEOUT.as_u16(),
-                "timeout",
-            );
-            record_context_inspector(
-                &context,
-                InspectorOutcome::UpstreamTimeout,
-                StatusCode::GATEWAY_TIMEOUT,
-                None,
-                None,
-                InspectorTokenCounts::default(),
-            );
-            warn_proxy_failure(
-                &context,
-                StatusCode::GATEWAY_TIMEOUT,
-                "timeout",
-                "upstream request timed out",
-            );
-            return Err(ApiError::timeout());
-        }
-        Err(error) => {
-            let error_kind = upstream_error_kind(&error);
-            warn!(error_kind = error_kind, "upstream request failed");
-            context.state.metrics.record_request(
-                &context.labels,
-                StatusCode::BAD_GATEWAY.as_u16(),
-                context.request_timer.elapsed(),
-            );
-            if let Some(capture) = &mut context.debug_capture {
-                capture.record_outcome(CaptureOutcome::UpstreamRequestFailed {
-                    client_status: StatusCode::BAD_GATEWAY.as_u16(),
+            Err(error) if error.is_timeout() => {
+                if let Some(next_route) = fallback_routes.next() {
+                    let attempt_elapsed = attempt_started.elapsed();
+                    if let Some(capture) = &mut context.debug_capture {
+                        capture.record_outcome(CaptureOutcome::UpstreamTimeout {
+                            client_status: StatusCode::GATEWAY_TIMEOUT.as_u16(),
+                        });
+                    }
+                    context.state.health.record_failure(
+                        &context.labels.backend,
+                        attempt_elapsed,
+                        StatusCode::GATEWAY_TIMEOUT.as_u16(),
+                        "timeout",
+                    );
+                    context.record_retried_attempt(
+                        StatusCode::GATEWAY_TIMEOUT,
+                        "upstream_timeout",
+                        Some("timeout"),
+                        attempt_elapsed,
+                    );
+                    warn_proxy_retry(
+                        &context,
+                        &next_route,
+                        StatusCode::GATEWAY_TIMEOUT,
+                        "timeout",
+                        "upstream request timed out; retrying fallback backend",
+                    );
+                    context.attempt += 1;
+                    context.apply_route(next_route);
+                    continue;
+                }
+
+                context.state.metrics.record_request(
+                    &context.labels,
+                    StatusCode::GATEWAY_TIMEOUT.as_u16(),
+                    context.request_timer.elapsed(),
+                );
+                if let Some(capture) = &mut context.debug_capture {
+                    capture.record_outcome(CaptureOutcome::UpstreamTimeout {
+                        client_status: StatusCode::GATEWAY_TIMEOUT.as_u16(),
+                    });
+                }
+                context.state.health.record_failure(
+                    &context.labels.backend,
+                    context.request_timer.elapsed(),
+                    StatusCode::GATEWAY_TIMEOUT.as_u16(),
+                    "timeout",
+                );
+                record_context_inspector(
+                    &context,
+                    InspectorOutcome::UpstreamTimeout,
+                    StatusCode::GATEWAY_TIMEOUT,
+                    None,
+                    None,
+                    InspectorTokenCounts::default(),
+                );
+                warn_proxy_failure(
+                    &context,
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "timeout",
+                    "upstream request timed out",
+                );
+                return Err(ApiError::timeout());
+            }
+            Err(error) => {
+                let error_kind = upstream_error_kind(&error);
+                if retryable_send_error(&error)
+                    && let Some(next_route) = fallback_routes.next()
+                {
+                    let attempt_elapsed = attempt_started.elapsed();
+                    if let Some(capture) = &mut context.debug_capture {
+                        capture.record_outcome(CaptureOutcome::UpstreamRequestFailed {
+                            client_status: StatusCode::BAD_GATEWAY.as_u16(),
+                            error_kind,
+                        });
+                    }
+                    context.state.health.record_failure(
+                        &context.labels.backend,
+                        attempt_elapsed,
+                        StatusCode::BAD_GATEWAY.as_u16(),
+                        error_kind,
+                    );
+                    context.record_retried_attempt(
+                        StatusCode::BAD_GATEWAY,
+                        "upstream_request_failed",
+                        Some(error_kind),
+                        attempt_elapsed,
+                    );
+                    warn_proxy_retry(
+                        &context,
+                        &next_route,
+                        StatusCode::BAD_GATEWAY,
+                        error_kind,
+                        "upstream request failed before response; retrying fallback backend",
+                    );
+                    context.attempt += 1;
+                    context.apply_route(next_route);
+                    continue;
+                }
+
+                warn!(error_kind = error_kind, "upstream request failed");
+                context.state.metrics.record_request(
+                    &context.labels,
+                    StatusCode::BAD_GATEWAY.as_u16(),
+                    context.request_timer.elapsed(),
+                );
+                if let Some(capture) = &mut context.debug_capture {
+                    capture.record_outcome(CaptureOutcome::UpstreamRequestFailed {
+                        client_status: StatusCode::BAD_GATEWAY.as_u16(),
+                        error_kind,
+                    });
+                }
+                context.state.health.record_failure(
+                    &context.labels.backend,
+                    context.request_timer.elapsed(),
+                    StatusCode::BAD_GATEWAY.as_u16(),
                     error_kind,
-                });
+                );
+                record_context_inspector(
+                    &context,
+                    InspectorOutcome::UpstreamRequestFailed,
+                    StatusCode::BAD_GATEWAY,
+                    Some(error_kind),
+                    None,
+                    InspectorTokenCounts::default(),
+                );
+                warn_proxy_failure(
+                    &context,
+                    StatusCode::BAD_GATEWAY,
+                    error_kind,
+                    "upstream request failed",
+                );
+                return Err(ApiError::upstream(StatusCode::BAD_GATEWAY));
             }
-            context.state.health.record_failure(
-                &context.labels.backend,
-                context.request_timer.elapsed(),
-                StatusCode::BAD_GATEWAY.as_u16(),
-                error_kind,
-            );
-            record_context_inspector(
-                &context,
-                InspectorOutcome::UpstreamRequestFailed,
-                StatusCode::BAD_GATEWAY,
-                Some(error_kind),
-                None,
-                InspectorTokenCounts::default(),
-            );
-            warn_proxy_failure(
-                &context,
-                StatusCode::BAD_GATEWAY,
-                error_kind,
-                "upstream request failed",
-            );
-            return Err(ApiError::upstream(StatusCode::BAD_GATEWAY));
         }
     };
 
@@ -497,6 +635,8 @@ async fn do_proxy(
             requested_model = %context.model_log_fields.requested,
             public_model = %context.model_log_fields.public,
             backend_model = %context.model_log_fields.backend,
+            attempt = context.attempt,
+            max_attempts = context.max_attempts,
             path = %request_path,
             request_body_bytes = context.request_body_bytes,
             "upstream returned non-success status"
@@ -561,9 +701,13 @@ async fn buffered_response(
         route,
         labels,
         model_log_fields,
+        requested_model: _,
         request_body_bytes,
         request_timer,
         mut timeline,
+        attempt,
+        max_attempts,
+        retried_attempts,
     } = context;
     let upstream_status = upstream.status();
     let upstream_headers = upstream.headers().clone();
@@ -606,6 +750,7 @@ async fn buffered_response(
                     outcome: InspectorOutcome::UpstreamBodyReadFailed,
                     status: StatusCode::BAD_GATEWAY,
                     error_kind: Some(error_kind),
+                    retried_attempts: retried_attempts.clone(),
                     response_body_bytes: None,
                     tokens: InspectorTokenCounts::default(),
                 },
@@ -640,6 +785,8 @@ async fn buffered_response(
         requested_model = %model_log_fields.requested,
         public_model = %model_log_fields.public,
         backend_model = %model_log_fields.backend,
+        attempt,
+        max_attempts,
         request_body_bytes,
         "buffered response completed"
     );
@@ -670,6 +817,7 @@ async fn buffered_response(
             outcome: InspectorOutcome::Completed,
             status: upstream_status,
             error_kind: None,
+            retried_attempts,
             response_body_bytes: Some(response_bytes.len()),
             tokens: inspector_tokens(usage),
         },
@@ -703,9 +851,13 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         route,
         labels,
         model_log_fields,
+        requested_model: _,
         request_body_bytes,
         request_timer,
         mut timeline,
+        attempt,
+        max_attempts,
+        retried_attempts,
     } = context;
     let upstream_status = upstream.status();
     let upstream_headers = upstream.headers().clone();
@@ -732,6 +884,9 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         backend_target: backend_target.clone(),
         backend_remote_addr,
         timeline,
+        attempt,
+        max_attempts,
+        retried_attempts,
     });
     debug!(
         upstream_status = upstream_status.as_u16(),
@@ -747,6 +902,8 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         requested_model = %model_log_fields.requested,
         public_model = %model_log_fields.public,
         backend_model = %model_log_fields.backend,
+        attempt,
+        max_attempts,
         request_body_bytes,
         "streaming response started"
     );
@@ -860,6 +1017,10 @@ fn socket_addr_or_none(address: Option<SocketAddr>) -> String {
         .unwrap_or_else(|| "none".to_owned())
 }
 
+fn duration_millis(duration: std::time::Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
 fn response_builder(
     status: StatusCode,
     client_headers: &HeaderMap,
@@ -961,6 +1122,11 @@ fn upstream_error_kind(error: &reqwest::Error) -> &'static str {
     } else {
         "unknown"
     }
+}
+
+fn retryable_send_error(error: &reqwest::Error) -> bool {
+    error.is_connect()
+        || (error.is_request() && !error.is_body() && !error.is_decode() && !error.is_redirect())
 }
 
 fn record_preflight_failure(
@@ -1094,6 +1260,7 @@ fn record_preflight_inspector(record: PreflightInspectorRecord<'_>) {
             },
             status: record.status,
             error_kind: None,
+            retried_attempts: Vec::new(),
             response_body_bytes: None,
             tokens: InspectorTokenCounts::default(),
         },
@@ -1126,6 +1293,7 @@ fn record_context_inspector(
             outcome,
             status,
             error_kind,
+            retried_attempts: context.retried_attempts.clone(),
             response_body_bytes,
             tokens,
         },
@@ -1138,6 +1306,7 @@ struct InspectorRecord<'a> {
     outcome: InspectorOutcome,
     status: StatusCode,
     error_kind: Option<&'static str>,
+    retried_attempts: Vec<InspectorAttemptRecord>,
     response_body_bytes: Option<usize>,
     tokens: InspectorTokenCounts,
 }
@@ -1155,15 +1324,16 @@ fn record_inspector_request(
     store.record(
         enabled,
         retention_requests,
-        crate::observe::InspectorRequestRecord::new(
-            record.base,
-            record.outcome,
-            record.status.as_u16(),
-            record.error_kind.map(str::to_owned),
-            record.response_body_bytes,
-            record.tokens,
-            record.timeline.snapshot(),
-        ),
+        crate::observe::InspectorRequestRecord::new(InspectorRequestRecordInit {
+            base: record.base,
+            outcome: record.outcome,
+            status: record.status.as_u16(),
+            error_kind: record.error_kind.map(str::to_owned),
+            retried_attempts: record.retried_attempts,
+            response_body_bytes: record.response_body_bytes,
+            tokens: record.tokens,
+            timeline: record.timeline.snapshot(),
+        }),
     );
 }
 
@@ -1232,6 +1402,8 @@ fn warn_proxy_failure(
         requested_model = %context.model_log_fields.requested,
         public_model = %context.model_log_fields.public,
         backend_model = %context.model_log_fields.backend,
+        attempt = context.attempt,
+        max_attempts = context.max_attempts,
         stream = context.labels.stream,
         request_body_bytes = context.request_body_bytes,
         timeline_started_unix_ms = snapshot.started_unix_ms,
@@ -1246,6 +1418,51 @@ fn warn_proxy_failure(
         timeline_backend_headers_received_us = ?snapshot.backend_headers_received_us,
         event = message,
         "proxy failure timeline"
+    );
+}
+
+fn warn_proxy_retry(
+    context: &ProxyContext,
+    next_route: &SelectedRoute,
+    client_status: StatusCode,
+    error_kind: &'static str,
+    message: &'static str,
+) {
+    let snapshot = context.timeline.snapshot();
+    warn!(
+        client_status = client_status.as_u16(),
+        error_kind,
+        backend = %context.labels.backend,
+        backend_target = %context.backend_target,
+        backend_remote_addr = %socket_addr_or_none(context.backend_remote_addr),
+        next_backend = %next_route.backend_id,
+        next_backend_target = %backend_target(&next_route.base_url),
+        route = %context.labels.route,
+        peer_addr = %context.client_info.peer_addr(),
+        effective_client_addr = %context.client_info.effective_client_addr(),
+        trusted_proxy_addr = %context.client_info.trusted_proxy_addr(),
+        forwarded_for = %context.client_info.forwarded_for(),
+        user_agent = %context.client_info.user_agent(),
+        requested_model = %context.model_log_fields.requested,
+        public_model = %context.model_log_fields.public,
+        backend_model = %context.model_log_fields.backend,
+        attempt = context.attempt,
+        max_attempts = context.max_attempts,
+        next_attempt = context.attempt + 1,
+        stream = context.labels.stream,
+        request_body_bytes = context.request_body_bytes,
+        timeline_started_unix_ms = snapshot.started_unix_ms,
+        timeline_total_us = snapshot.total_us,
+        timeline_proxy_entry_us = snapshot.proxy_entry_us,
+        timeline_auth_done_us = ?snapshot.auth_done_us,
+        timeline_request_inspected_us = ?snapshot.request_inspected_us,
+        timeline_route_selected_us = ?snapshot.route_selected_us,
+        timeline_request_rewritten_us = ?snapshot.request_rewritten_us,
+        timeline_debug_capture_done_us = ?snapshot.debug_capture_done_us,
+        timeline_backend_forward_start_us = ?snapshot.backend_forward_start_us,
+        timeline_backend_headers_received_us = ?snapshot.backend_headers_received_us,
+        event = message,
+        "proxy retry timeline"
     );
 }
 
@@ -1304,6 +1521,9 @@ struct StreamMetrics {
     backend_target: String,
     backend_remote_addr: Option<SocketAddr>,
     timeline: RequestTimeline,
+    attempt: usize,
+    max_attempts: usize,
+    retried_attempts: Vec<InspectorAttemptRecord>,
     started: Instant,
     usage: UsageTotals,
     body_complete: bool,
@@ -1326,6 +1546,9 @@ struct StreamMetricsInit {
     backend_target: String,
     backend_remote_addr: Option<SocketAddr>,
     timeline: RequestTimeline,
+    attempt: usize,
+    max_attempts: usize,
+    retried_attempts: Vec<InspectorAttemptRecord>,
 }
 
 impl StreamMetrics {
@@ -1346,6 +1569,9 @@ impl StreamMetrics {
             backend_target: init.backend_target,
             backend_remote_addr: init.backend_remote_addr,
             timeline: init.timeline,
+            attempt: init.attempt,
+            max_attempts: init.max_attempts,
+            retried_attempts: init.retried_attempts,
             started: Instant::now(),
             usage: UsageTotals::default(),
             body_complete: false,
@@ -1398,6 +1624,8 @@ impl Drop for StreamMetrics {
             requested_model = %self.model_log_fields.requested,
             public_model = %self.model_log_fields.public,
             backend_model = %self.model_log_fields.backend,
+            attempt = self.attempt,
+            max_attempts = self.max_attempts,
             request_body_bytes = self.request_body_bytes,
             stream_duration_ms = duration.as_millis() as u64,
             input_tokens = self.usage.input,
@@ -1463,6 +1691,7 @@ impl Drop for StreamMetrics {
                 outcome: inspector_outcome,
                 status: StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::OK),
                 error_kind: self.stream_error_kind,
+                retried_attempts: self.retried_attempts.clone(),
                 response_body_bytes: None,
                 tokens: inspector_tokens(self.usage),
             },

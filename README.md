@@ -69,7 +69,9 @@ path = "/v1/models"
 [routing]
 # "priority" chooses the first matching backend. "sticky" hashes identity/path/model/prompt_cache_key
 # across all matching backends, improving prompt-cache locality when several backends serve a model.
+# fallback_attempts tries extra compatible backends after a pre-response connect/send/timeout failure.
 strategy = "priority"
+fallback_attempts = 1
 
 [access]
 default_models = ["gpt-4o-mini"]
@@ -101,7 +103,7 @@ onair interprets the file as routing and visibility policy:
 - Each `[[client]]` adds one authenticated identity and may extend that identity's model whitelist.
 - Each `[[backend]]` defines one upstream OpenAI-compatible service plus capability markers that decide which `/v1/*` request families it can receive.
 - Each `[[backend.model]]` maps one public model name to the backend model name that upstream should receive.
-- `[routing]` chooses how to select among multiple compatible backend routes.
+- `[routing]` chooses how to select among multiple compatible backend routes and how many fallback attempts to allow before response commitment.
 
 ### Hot reload
 
@@ -152,6 +154,10 @@ Repeated `Forwarded` or `X-Forwarded-For` header lines are treated as one chain 
 `[[backend.model]].endpoints` can further restrict a model route to endpoint keys such as `chat`, `chat_completions`, `responses`, `audio`, or `embeddings`. If omitted or empty, the model route is allowed for any endpoint supported by the backend. Backend order is priority order when multiple compatible routes match, and also for model-less requests.
 
 Set `[routing].strategy = "sticky"` when multiple backends serve the same public model and you want cache-heavy traffic to keep landing on the same backend. The sticky key is derived from identity, path, public model, and `prompt_cache_key` when provided. The router still forwards `prompt_cache_key` and `prompt_cache_retention` unchanged.
+
+`[routing].fallback_attempts` adds a limited number of extra backend tries after a pre-response connect/send/timeout failure. The selected backend is still tried first, and the fallback only happens before any upstream response headers or client-visible body bytes are committed. Non-success HTTP responses are not retried by default, and streaming responses are never retried once response bytes begin flowing to the client. The default `fallback_attempts = 1` gives one recovery attempt after the preferred backend fails early.
+
+Set `fallback_attempts = 0` to preserve strict single-backend behavior. Even conservative pre-response fallback can duplicate upstream work if a backend times out after accepting a request, so use low values and check backend billing/side-effect semantics before increasing it.
 
 ### Context length
 
@@ -282,7 +288,7 @@ Read-only operator endpoints use the same `[inspector]` enablement and loopback/
 - `GET /_onair/operator/models`: effective public model visibility per client plus configured backend routes for each public model.
 - `GET /_onair/operator/health`: backend health observed from proxied traffic and optional active probes, including split traffic/probe counters, consecutive failures, last status, last error kind, last source, and last observed latency.
 
-Each retained record includes route, identity, public/backend model IDs, backend ID/target, backend remote socket when available, immediate/effective client address, trusted proxy details, user agent, body sizes, response status, OpenAI-compatible usage counters when present, and a timeline snapshot. Timeline fields use a wall-clock `started_at_unix_ms` plus monotonic microsecond offsets for proxy/auth/routing/rewrite/backend/response milestones.
+Each retained record includes route, identity, public/backend model IDs, final backend ID/target, backend remote socket when available, immediate/effective client address, trusted proxy details, user agent, body sizes, response status, OpenAI-compatible usage counters when present, retried pre-response attempts when fallback occurred, and a timeline snapshot. Timeline fields use a wall-clock `started_at_unix_ms` plus monotonic microsecond offsets for proxy/auth/routing/rewrite/backend/response milestones.
 
 Security guidance:
 
@@ -295,7 +301,7 @@ Security guidance:
 - Backend health always reflects requests that onair has already routed. If `[health].active = true`, onair also probes each configured backend at `[health].path` using the backend API key when configured.
 - Active health probes are disabled by default because they send HTTP requests to every configured backend. Use a low-cost path such as `/v1/models`, and keep in mind that probes can be visible to upstream providers.
 - onair does not follow backend redirects for normal proxy requests or health probes; redirect responses are treated as non-success.
-- Backend health does not yet remove unhealthy backends from routing or perform retry/fallback; it is currently an operator signal.
+- Backend health is currently an operator signal; it does not automatically remove unhealthy backends from routing.
 
 ## Logging
 
@@ -305,4 +311,4 @@ onair logs sanitized failures at `warn` and successful proxy/model responses at 
 RUST_LOG=onair=debug,tower_http=info cargo run -- --config onair.toml
 ```
 
-Successful proxy logs include route, backend ID, configured backend target, backend remote address when available, immediate/effective client address, trusted proxy address when used, user agent, requested/public/backend model IDs, request body size, response status, response size for buffered responses, and stream duration for streaming responses. Timeline snapshot logs at `debug` include a wall-clock start timestamp plus monotonic microsecond offsets for auth, request inspection, route selection, request rewriting, backend forward start, upstream headers received, first/complete backend body read, response rewriting, response readiness, and stream completion where applicable. They intentionally do not include prompt or completion bodies.
+Successful proxy logs include route, backend ID, configured backend target, backend remote address when available, immediate/effective client address, trusted proxy address when used, user agent, requested/public/backend model IDs, attempt index/count, request body size, response status, response size for buffered responses, and stream duration for streaming responses. Retry logs at `warn` show the failed backend and next fallback backend for pre-response send failures. Timeline snapshot logs at `debug` include a wall-clock start timestamp plus monotonic microsecond offsets for auth, request inspection, route selection, request rewriting, backend forward start, upstream headers received, first/complete backend body read, response rewriting, response readiness, and stream completion where applicable. They intentionally do not include prompt or completion bodies.

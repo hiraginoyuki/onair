@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::config::{
     Config, DebugCaptureConfig, HealthConfig, InspectorConfig, ResolvedBackend, ResolvedClient,
-    RoutingStrategy, ServerConfig, TelemetryConfig, TelemetryExporter,
+    RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig, TelemetryExporter,
 };
 use crate::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 
@@ -83,6 +83,7 @@ pub(crate) struct HealthConfigSnapshot {
 #[derive(Debug, Serialize)]
 pub(crate) struct RoutingSnapshot {
     pub(crate) strategy: &'static str,
+    pub(crate) fallback_attempts: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -169,7 +170,7 @@ pub(crate) fn config_snapshot(config: &Config) -> OperatorConfigSnapshot {
         debug_capture: debug_capture_snapshot(&config.debug_capture),
         inspector: inspector_snapshot(&config.inspector),
         health: health_config_snapshot(&config.health),
-        routing: routing_snapshot(config.routing.strategy),
+        routing: routing_snapshot(&config.routing),
         clients: clients_snapshot(&config.clients),
         backends: config.backends.iter().map(backend_snapshot).collect(),
     }
@@ -278,12 +279,13 @@ fn health_config_snapshot(config: &HealthConfig) -> HealthConfigSnapshot {
     }
 }
 
-fn routing_snapshot(strategy: RoutingStrategy) -> RoutingSnapshot {
+fn routing_snapshot(config: &RoutingConfig) -> RoutingSnapshot {
     RoutingSnapshot {
-        strategy: match strategy {
+        strategy: match config.strategy {
             RoutingStrategy::Priority => "priority",
             RoutingStrategy::Sticky => "sticky",
         },
+        fallback_attempts: config.fallback_attempts,
     }
 }
 

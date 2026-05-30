@@ -33,6 +33,8 @@ path = "/v1/models"
 [routing]
 # Use "sticky" when multiple matching backends should share load while preserving prompt-cache affinity.
 strategy = "priority"
+# Extra compatible backends to try after a pre-response connect/send/timeout failure. Set 0 to disable.
+fallback_attempts = 1
 
 [access]
 # Every configured client receives these public models in addition to its own models.

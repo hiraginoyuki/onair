@@ -1077,6 +1077,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_failure_falls_back_before_response_commit() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let fallback = TestBackend::spawn("backend-b").await;
+        let state = test_state_with_inspector_and_health(
+            RoutingStrategy::Priority,
+            vec![
+                test_backend("backend-a", format!("http://{address}")),
+                test_backend("backend-b", fallback.base_url()),
+            ],
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+            HealthConfig::default(),
+        );
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello fallback"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = json_body(response).await;
+        assert_eq!(fallback.hits(), 1);
+
+        let records = json_body(
+            app.clone()
+                .oneshot(inspector_get("/_onair/inspector/requests?limit=1"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let record = &records.as_array().unwrap()[0];
+        assert_eq!(record["backend"], "backend-b");
+        assert_eq!(record["outcome"]["kind"], "completed");
+        assert_eq!(record["retried_attempts"][0]["backend"], "backend-a");
+        assert_eq!(record["retried_attempts"][0]["status"], 502);
+        assert_eq!(
+            record["retried_attempts"][0]["outcome"],
+            "upstream_request_failed"
+        );
+
+        let health = json_body(
+            app.oneshot(inspector_get("/_onair/operator/health"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(health["backends"][0]["traffic_failures"], 1);
+        assert_eq!(health["backends"][1]["traffic_successes"], 1);
+
+        fallback.abort();
+    }
+
+    #[tokio::test]
+    async fn upstream_non_success_does_not_fall_back() {
+        let redirect = RedirectBackend::spawn().await;
+        let fallback = TestBackend::spawn("backend-b").await;
+        let state = test_state_with_inspector_and_health(
+            RoutingStrategy::Priority,
+            vec![
+                test_backend("backend-a", redirect.base_url()),
+                test_backend("backend-b", fallback.base_url()),
+            ],
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+            HealthConfig::default(),
+        );
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello redirect"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let _ = json_body(response).await;
+        assert_eq!(fallback.hits(), 0);
+        assert_eq!(redirect.leak_hits(), 0);
+
+        let records = json_body(
+            app.oneshot(inspector_get("/_onair/inspector/requests?limit=1"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let record = &records.as_array().unwrap()[0];
+        assert_eq!(record["backend"], "backend-a");
+        assert_eq!(record["outcome"]["kind"], "upstream_non_success");
+        assert!(record.get("retried_attempts").is_none());
+
+        redirect.abort();
+        fallback.abort();
+    }
+
+    #[tokio::test]
     async fn inspector_is_local_only_by_default() {
         let state = test_state_with_inspector(
             RoutingStrategy::Priority,
@@ -1263,7 +1378,10 @@ mod tests {
                     debug_capture,
                     inspector,
                     health,
-                    routing: RoutingConfig { strategy },
+                    routing: RoutingConfig {
+                        strategy,
+                        ..RoutingConfig::default()
+                    },
                     clients: vec![ResolvedClient {
                         id: "dev".to_owned(),
                         api_key: CLIENT_KEY.to_owned(),

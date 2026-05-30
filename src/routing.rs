@@ -14,14 +14,14 @@ pub struct SelectedRoute {
     pub backend_model: Option<String>,
 }
 
-pub fn select_backend(
+pub fn select_backend_candidates(
     backends: &[ResolvedBackend],
     strategy: RoutingStrategy,
     path: &str,
     model: Option<&str>,
     stream: bool,
     sticky_key: Option<&str>,
-) -> Result<SelectedRoute, ApiError> {
+) -> Result<Vec<SelectedRoute>, ApiError> {
     let path_candidates = path_capability_candidates(path);
     let mut candidates = Vec::new();
 
@@ -74,22 +74,15 @@ pub fn select_backend(
         )));
     }
 
-    let selected = match strategy {
-        RoutingStrategy::Priority => candidates.remove(0),
+    match strategy {
+        RoutingStrategy::Priority => {}
         RoutingStrategy::Sticky => {
             let index = sticky_index(sticky_key.unwrap_or(path), candidates.len());
-            candidates.remove(index)
+            candidates.rotate_left(index);
         }
-    };
-
-    if let Some(requested_model) = model
-        && selected.public_model.is_none()
-        && selected.backend_model.is_none()
-    {
-        return Err(ApiError::model_not_found(requested_model));
     }
 
-    Ok(selected)
+    Ok(candidates)
 }
 
 fn sticky_index(key: &str, count: usize) -> usize {
@@ -262,5 +255,83 @@ fn singularize(segment: &str) -> String {
 fn push_unique(candidates: &mut Vec<String>, candidate: String) {
     if !candidate.is_empty() && !candidates.iter().any(|value| value == &candidate) {
         candidates.push(candidate);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::time::Duration;
+
+    use crate::config::{ModelRoute, ResolvedBackend};
+
+    use super::*;
+
+    #[test]
+    fn sticky_candidates_start_with_hashed_backend_and_keep_fallbacks() {
+        let backends = vec![
+            backend("backend-a"),
+            backend("backend-b"),
+            backend("backend-c"),
+        ];
+        let sticky_key = sticky_routing_key(
+            "client-a",
+            "/v1/responses",
+            Some("public-model"),
+            Some("cache-key"),
+        );
+
+        let priority = select_backend_candidates(
+            &backends,
+            RoutingStrategy::Priority,
+            "/v1/responses",
+            Some("public-model"),
+            false,
+            Some(&sticky_key),
+        )
+        .unwrap();
+        let sticky = select_backend_candidates(
+            &backends,
+            RoutingStrategy::Sticky,
+            "/v1/responses",
+            Some("public-model"),
+            false,
+            Some(&sticky_key),
+        )
+        .unwrap();
+
+        let selected_index = sticky_index(&sticky_key, priority.len());
+        assert_eq!(sticky[0].backend_id, priority[selected_index].backend_id);
+        assert_eq!(sticky.len(), priority.len());
+        assert_eq!(
+            sticky
+                .iter()
+                .map(|route| route.backend_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            priority
+                .iter()
+                .map(|route| route.backend_id.as_str())
+                .collect::<BTreeSet<_>>()
+        );
+    }
+
+    fn backend(id: &str) -> ResolvedBackend {
+        ResolvedBackend {
+            id: id.to_owned(),
+            base_url: format!("http://{id}.example.invalid"),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["responses", "streaming"]),
+            models: vec![ModelRoute {
+                public: "public-model".to_owned(),
+                backend: format!("{id}-private"),
+                context_length: None,
+                endpoints: btree_set(["responses"]),
+            }],
+        }
+    }
+
+    fn btree_set<const N: usize>(values: [&str; N]) -> BTreeSet<String> {
+        values.into_iter().map(str::to_owned).collect()
     }
 }

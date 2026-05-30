@@ -386,6 +386,13 @@
         record.path,
         record.query,
         outcomeText(record),
+        ...(record.retried_attempts || []).flatMap(attempt => [
+          attempt.backend,
+          attempt.backend_target,
+          attempt.outcome,
+          attempt.error_kind,
+          attempt.debug_capture_id,
+        ]),
       ].filter(Boolean).join(" ").toLowerCase();
     }
 
@@ -515,7 +522,7 @@
         kvCard("backend health", backendHealthRows.length ? backendHealthRows : [["state", "none"]]),
         kvCard("active config", [
           ["bind", operatorConfig.server.bind],
-          ["routing", operatorConfig.routing.strategy],
+          ["routing", `${operatorConfig.routing.strategy}, fallback attempts ${operatorConfig.routing.fallback_attempts}`],
           ["body limit bytes", operatorConfig.server.request_body_limit_bytes],
           ["trusted proxies", compactList(operatorConfig.server.trusted_proxy_cidrs)],
           ["debug capture", operatorConfig.debug_capture.enabled ? `enabled: ${operatorConfig.debug_capture.directory}` : "disabled"],
@@ -582,6 +589,23 @@
       return card;
     }
 
+    function retryAttemptsCard(record) {
+      const attempts = record.retried_attempts || [];
+      if (!attempts.length) return null;
+      return kvCard("retried attempts", attempts.map(attempt => [
+        `#${attempt.attempt} ${attempt.backend}`,
+        [
+          attempt.outcome,
+          `status ${attempt.status}`,
+          attempt.error_kind,
+          `${attempt.elapsed_ms} ms`,
+          attempt.backend_target,
+          attempt.backend_remote_addr,
+          attempt.debug_capture_id ? `capture ${attempt.debug_capture_id}` : null,
+        ].filter(Boolean).join(" · "),
+      ]));
+    }
+
     function jsonCard(record) {
       const card = document.createElement("div");
       card.className = "card";
@@ -594,7 +618,7 @@
     }
 
     function renderDetail(record) {
-      detail.replaceChildren(
+      const cards = [
         kvCard("request", [
           ["record id", record.record_id],
           ["deep link", recordLink(record)],
@@ -633,9 +657,11 @@
           ["output tokens", record.output_tokens],
           ["debug capture id", record.debug_capture_id],
         ]),
-        timelineCard(record),
-        jsonCard(record),
-      );
+      ];
+      const retryCard = retryAttemptsCard(record);
+      if (retryCard) cards.push(retryCard);
+      cards.push(timelineCard(record), jsonCard(record));
+      detail.replaceChildren(...cards);
     }
 
     async function fetchJson(path) {

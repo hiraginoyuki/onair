@@ -10,7 +10,7 @@ pub(crate) use client_info::{ClientInfo, IpCidr};
 pub(crate) use health::{BackendHealthSnapshot, BackendHealthStore};
 pub(crate) use health_probe::HealthProbeTask;
 pub(crate) use inspector::{
-    InspectorOutcome, InspectorRequestBase, InspectorRequestRecord, InspectorStore,
-    InspectorTokenCounts,
+    InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase, InspectorRequestRecord,
+    InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts,
 };
 pub(crate) use timeline::{RequestTimeline, TimelineEvent, TimelineSnapshot};

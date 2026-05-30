@@ -119,6 +119,8 @@ pub(crate) struct InspectorRequestRecord {
     pub(crate) status: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error_kind: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) retried_attempts: Vec<InspectorAttemptRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) response_body_bytes: Option<usize>,
     pub(crate) input_tokens: u64,
@@ -129,28 +131,49 @@ pub(crate) struct InspectorRequestRecord {
 }
 
 impl InspectorRequestRecord {
-    pub(crate) fn new(
-        base: InspectorRequestBase,
-        outcome: InspectorOutcome,
-        status: u16,
-        error_kind: Option<String>,
-        response_body_bytes: Option<usize>,
-        tokens: InspectorTokenCounts,
-        timeline: TimelineSnapshot,
-    ) -> Self {
+    pub(crate) fn new(init: InspectorRequestRecordInit) -> Self {
         Self {
-            base,
-            outcome,
-            status,
-            error_kind,
-            response_body_bytes,
-            input_tokens: tokens.input,
-            cached_input_tokens: tokens.cached_input,
-            output_tokens: tokens.output,
+            base: init.base,
+            outcome: init.outcome,
+            status: init.status,
+            error_kind: init.error_kind,
+            retried_attempts: init.retried_attempts,
+            response_body_bytes: init.response_body_bytes,
+            input_tokens: init.tokens.input,
+            cached_input_tokens: init.tokens.cached_input,
+            output_tokens: init.tokens.output,
             completed_at_unix_ms: unix_millis(),
-            timeline,
+            timeline: init.timeline,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InspectorRequestRecordInit {
+    pub(crate) base: InspectorRequestBase,
+    pub(crate) outcome: InspectorOutcome,
+    pub(crate) status: u16,
+    pub(crate) error_kind: Option<String>,
+    pub(crate) retried_attempts: Vec<InspectorAttemptRecord>,
+    pub(crate) response_body_bytes: Option<usize>,
+    pub(crate) tokens: InspectorTokenCounts,
+    pub(crate) timeline: TimelineSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct InspectorAttemptRecord {
+    pub(crate) attempt: usize,
+    pub(crate) backend: String,
+    pub(crate) backend_target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) backend_remote_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) debug_capture_id: Option<String>,
+    pub(crate) status: u16,
+    pub(crate) outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error_kind: Option<String>,
+    pub(crate) elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -252,8 +275,8 @@ mod tests {
     use super::*;
 
     fn test_record(record_id: &str) -> InspectorRequestRecord {
-        InspectorRequestRecord::new(
-            InspectorRequestBase {
+        InspectorRequestRecord::new(InspectorRequestRecordInit {
+            base: InspectorRequestBase {
                 record_id: record_id.to_owned(),
                 client_request_id: None,
                 started_at_unix_ms: 1,
@@ -277,13 +300,14 @@ mod tests {
                 request_body_bytes: 12,
                 debug_capture_id: None,
             },
-            InspectorOutcome::Completed,
-            200,
-            None,
-            Some(32),
-            InspectorTokenCounts::default(),
-            TimelineSnapshot::default(),
-        )
+            outcome: InspectorOutcome::Completed,
+            status: 200,
+            error_kind: None,
+            retried_attempts: Vec::new(),
+            response_body_bytes: Some(32),
+            tokens: InspectorTokenCounts::default(),
+            timeline: TimelineSnapshot::default(),
+        })
     }
 
     #[test]
