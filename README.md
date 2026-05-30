@@ -241,4 +241,4 @@ onair logs sanitized failures at `warn` and successful proxy/model responses at 
 RUST_LOG=onair=debug,tower_http=info cargo run -- --config onair.toml
 ```
 
-Successful proxy logs include route, backend ID, requested/public/backend model IDs, request body size, response status, response size for buffered responses, and stream duration for streaming responses. They intentionally do not include prompt or completion bodies.
+Successful proxy logs include route, backend ID, requested/public/backend model IDs, request body size, response status, response size for buffered responses, and stream duration for streaming responses. Timeline snapshot logs at `debug` include a wall-clock start timestamp plus monotonic microsecond offsets for auth, request inspection, route selection, request rewriting, backend forward start, upstream headers received, first/complete backend body read, response rewriting, response readiness, and stream completion where applicable. They intentionally do not include prompt or completion bodies.

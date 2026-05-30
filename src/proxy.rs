@@ -19,6 +19,7 @@ use crate::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
 use crate::openai::{self, SseNormalizer, UsageTotals};
 use crate::routing::{self, SelectedRoute};
+use crate::timeline::{RequestTimeline, TimelineEvent, TimelineSnapshot};
 
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
@@ -30,13 +31,18 @@ pub async fn proxy_v1(
     body: Bytes,
 ) -> Result<Response<Body>, ApiError> {
     let request_timer = RequestTimer::start();
+    let mut timeline = RequestTimeline::start();
     let path = uri.path().to_owned();
     let route_name = routing::path_metric_name(&path);
     let config = state.config.snapshot();
 
     let identity = match authenticate(&headers, &config.clients) {
-        Ok(identity) => identity,
+        Ok(identity) => {
+            timeline.mark(TimelineEvent::AuthDone);
+            identity
+        }
         Err(error) => {
+            timeline.mark(TimelineEvent::AuthDone);
             record_preflight_failure(
                 &state,
                 &route_name,
@@ -46,12 +52,22 @@ pub async fn proxy_v1(
                 error.status,
                 request_timer.elapsed(),
             );
+            warn_preflight_failure(
+                &timeline,
+                &route_name,
+                "unknown",
+                None,
+                false,
+                error.status,
+                "auth",
+            );
             return Err(error);
         }
     };
 
     let content_type = header_str(&headers, &CONTENT_TYPE).map(str::to_owned);
     let request_shape = openai::inspect_request(&body, content_type.as_deref(), uri.query());
+    timeline.mark(TimelineEvent::RequestInspected);
     if request_shape.model.is_none() && routing::path_requires_model(&path) {
         let error = ApiError::bad_request(
             "Missing required parameter: model.",
@@ -66,6 +82,15 @@ pub async fn proxy_v1(
             error.status,
             request_timer.elapsed(),
         );
+        warn_preflight_failure(
+            &timeline,
+            &route_name,
+            &identity.id,
+            None,
+            request_shape.stream,
+            error.status,
+            "inspect",
+        );
         return Err(error);
     }
     if let Some(model) = request_shape.model.as_deref()
@@ -79,6 +104,15 @@ pub async fn proxy_v1(
             request_shape.stream,
             StatusCode::NOT_FOUND,
             request_timer.elapsed(),
+        );
+        warn_preflight_failure(
+            &timeline,
+            &route_name,
+            &identity.id,
+            Some(model),
+            request_shape.stream,
+            StatusCode::NOT_FOUND,
+            "access",
         );
         return Err(ApiError::model_not_found(model));
     }
@@ -97,8 +131,12 @@ pub async fn proxy_v1(
         request_shape.stream,
         Some(&sticky_key),
     ) {
-        Ok(route) => route,
+        Ok(route) => {
+            timeline.mark(TimelineEvent::RouteSelected);
+            route
+        }
         Err(error) => {
+            timeline.mark(TimelineEvent::RouteSelected);
             record_preflight_failure(
                 &state,
                 &route_name,
@@ -107,6 +145,15 @@ pub async fn proxy_v1(
                 request_shape.stream,
                 error.status,
                 request_timer.elapsed(),
+            );
+            warn_preflight_failure(
+                &timeline,
+                &route_name,
+                &identity.id,
+                request_shape.model.as_deref(),
+                request_shape.stream,
+                error.status,
+                "route",
             );
             return Err(error);
         }
@@ -156,6 +203,7 @@ pub async fn proxy_v1(
         model_log_fields,
         request_body_bytes,
         request_timer,
+        timeline,
     };
 
     do_proxy(context, request).instrument(span).await
@@ -179,6 +227,7 @@ struct ProxyContext {
     model_log_fields: ModelLogFields,
     request_body_bytes: usize,
     request_timer: RequestTimer,
+    timeline: RequestTimeline,
 }
 
 async fn do_proxy(
@@ -199,6 +248,7 @@ async fn do_proxy(
         content_type.as_deref(),
         context.route.backend_model.as_deref(),
     );
+    context.timeline.mark(TimelineEvent::RequestRewritten);
     let upstream_path = upstream_path(&request_path).to_owned();
     let upstream_query = openai::rewrite_query_model(
         request_query.as_deref(),
@@ -234,6 +284,7 @@ async fn do_proxy(
             upstream_body: &outbound_body,
         },
     );
+    context.timeline.mark(TimelineEvent::DebugCaptureDone);
 
     let mut request = context
         .state
@@ -267,8 +318,12 @@ async fn do_proxy(
         request = request.header(X_REQUEST_ID, request_id);
     }
 
+    context.timeline.mark(TimelineEvent::BackendForwardStart);
     let upstream = match request.send().await {
-        Ok(response) => response,
+        Ok(response) => {
+            context.timeline.mark(TimelineEvent::BackendHeadersReceived);
+            response
+        }
         Err(error) if error.is_timeout() => {
             context.state.metrics.record_request(
                 &context.labels,
@@ -280,6 +335,12 @@ async fn do_proxy(
                     client_status: StatusCode::GATEWAY_TIMEOUT.as_u16(),
                 });
             }
+            warn_proxy_failure(
+                &context,
+                StatusCode::GATEWAY_TIMEOUT,
+                "timeout",
+                "upstream request timed out",
+            );
             return Err(ApiError::timeout());
         }
         Err(error) => {
@@ -296,6 +357,12 @@ async fn do_proxy(
                     error_kind,
                 });
             }
+            warn_proxy_failure(
+                &context,
+                StatusCode::BAD_GATEWAY,
+                error_kind,
+                "upstream request failed",
+            );
             return Err(ApiError::upstream(StatusCode::BAD_GATEWAY));
         }
     };
@@ -326,6 +393,12 @@ async fn do_proxy(
                 client_status: api_error.status.as_u16(),
             });
         }
+        warn_proxy_failure(
+            &context,
+            api_error.status,
+            "upstream_non_success",
+            "upstream returned non-success status",
+        );
         return Err(api_error);
     }
 
@@ -351,26 +424,29 @@ async fn buffered_response(
         model_log_fields,
         request_body_bytes,
         request_timer,
+        mut timeline,
     } = context;
     let upstream_status = upstream.status();
     let upstream_headers = upstream.headers().clone();
     let content_type = header_str(&upstream_headers, &CONTENT_TYPE).map(str::to_owned);
-    let bytes = upstream.bytes().await.map_err(|error| {
-        let error_kind = upstream_error_kind(&error);
-        warn!(error_kind = error_kind, "failed to read upstream body");
-        state.metrics.record_request(
-            &labels,
-            StatusCode::BAD_GATEWAY.as_u16(),
-            request_timer.elapsed(),
-        );
-        if let Some(capture) = &mut debug_capture {
-            capture.record_outcome(CaptureOutcome::UpstreamBodyReadFailed {
-                client_status: StatusCode::BAD_GATEWAY.as_u16(),
-                error_kind,
-            });
-        }
-        ApiError::upstream(StatusCode::BAD_GATEWAY)
-    })?;
+    let bytes = read_buffered_upstream_body(upstream, &mut timeline)
+        .await
+        .map_err(|error| {
+            let error_kind = upstream_error_kind(&error);
+            warn!(error_kind = error_kind, "failed to read upstream body");
+            state.metrics.record_request(
+                &labels,
+                StatusCode::BAD_GATEWAY.as_u16(),
+                request_timer.elapsed(),
+            );
+            if let Some(capture) = &mut debug_capture {
+                capture.record_outcome(CaptureOutcome::UpstreamBodyReadFailed {
+                    client_status: StatusCode::BAD_GATEWAY.as_u16(),
+                    error_kind,
+                });
+            }
+            ApiError::upstream(StatusCode::BAD_GATEWAY)
+        })?;
 
     let (response_bytes, usage) = openai::rewrite_response_body(
         &bytes,
@@ -378,6 +454,7 @@ async fn buffered_response(
         route.backend_model.as_deref(),
         route.public_model.as_deref(),
     );
+    timeline.mark(TimelineEvent::ResponseRewritten);
 
     state.metrics.record_usage(&labels, usage);
     state
@@ -399,6 +476,9 @@ async fn buffered_response(
             upstream_status: upstream_status.as_u16(),
         });
     }
+    timeline.mark(TimelineEvent::ClientResponseReady);
+    let timeline_snapshot = timeline.snapshot();
+    debug_timeline_fields(timeline_snapshot, "buffered response timeline snapshot");
 
     response_builder(
         upstream_status,
@@ -422,6 +502,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         model_log_fields,
         request_body_bytes,
         request_timer,
+        mut timeline,
     } = context;
     let upstream_status = upstream.status();
     let upstream_headers = upstream.headers().clone();
@@ -431,6 +512,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
     state
         .metrics
         .record_request(&labels, upstream_status.as_u16(), request_timer.elapsed());
+    timeline.mark(TimelineEvent::ClientResponseReady);
     let stream_metrics = StreamMetrics::new(
         state.metrics.clone(),
         labels.clone(),
@@ -438,6 +520,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         model_log_fields.clone(),
         request_body_bytes,
         debug_capture,
+        timeline,
     );
     debug!(
         upstream_status = upstream_status.as_u16(),
@@ -464,6 +547,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
                         "upstream stream chunk failed"
                     );
                 })?;
+                stream_metrics.mark_body_chunk();
                 let normalized = normalizer.push(&chunk);
                 if !normalized.is_empty() {
                     stream_metrics.add_usage(normalizer.usage);
@@ -471,6 +555,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
                     yield Bytes::from(normalized);
                 }
             }
+            stream_metrics.mark_body_complete();
             let tail = normalizer.finish();
             if !tail.is_empty() {
                 stream_metrics.add_usage(normalizer.usage);
@@ -484,8 +569,10 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
                         "upstream stream chunk failed"
                     );
                 })?;
+                stream_metrics.mark_body_chunk();
                 yield chunk;
             }
+            stream_metrics.mark_body_complete();
         }
     }
     .map_err(|error: reqwest::Error| -> axum::BoxError { Box::new(error) });
@@ -499,6 +586,21 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
     )
     .body(Body::from_stream(stream))
     .expect("stream response builder is valid")
+}
+
+async fn read_buffered_upstream_body(
+    upstream: reqwest::Response,
+    timeline: &mut RequestTimeline,
+) -> std::result::Result<Bytes, reqwest::Error> {
+    let mut bytes = Vec::new();
+    let mut chunks = upstream.bytes_stream();
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk?;
+        timeline.mark(TimelineEvent::BackendBodyFirstChunk);
+        bytes.extend_from_slice(&chunk);
+    }
+    timeline.mark(TimelineEvent::BackendBodyComplete);
+    Ok(Bytes::from(bytes))
 }
 
 fn upstream_url(base_url: &str, path: &str, query: Option<&str>) -> String {
@@ -627,6 +729,87 @@ fn record_preflight_failure(
         .record_request(&labels, status.as_u16(), duration);
 }
 
+fn warn_preflight_failure(
+    timeline: &RequestTimeline,
+    route: &str,
+    identity: &str,
+    model: Option<&str>,
+    stream: bool,
+    status: StatusCode,
+    stage: &'static str,
+) {
+    let snapshot = timeline.snapshot();
+    warn!(
+        route,
+        identity,
+        model = model.unwrap_or("none"),
+        stream,
+        status = status.as_u16(),
+        stage,
+        timeline_started_unix_ms = snapshot.started_unix_ms,
+        timeline_total_us = snapshot.total_us,
+        timeline_proxy_entry_us = snapshot.proxy_entry_us,
+        timeline_auth_done_us = ?snapshot.auth_done_us,
+        timeline_request_inspected_us = ?snapshot.request_inspected_us,
+        timeline_route_selected_us = ?snapshot.route_selected_us,
+        "request failed before upstream attempt"
+    );
+}
+
+fn warn_proxy_failure(
+    context: &ProxyContext,
+    client_status: StatusCode,
+    error_kind: &'static str,
+    message: &'static str,
+) {
+    let snapshot = context.timeline.snapshot();
+    warn!(
+        client_status = client_status.as_u16(),
+        error_kind,
+        backend = %context.labels.backend,
+        route = %context.labels.route,
+        requested_model = %context.model_log_fields.requested,
+        public_model = %context.model_log_fields.public,
+        backend_model = %context.model_log_fields.backend,
+        stream = context.labels.stream,
+        request_body_bytes = context.request_body_bytes,
+        timeline_started_unix_ms = snapshot.started_unix_ms,
+        timeline_total_us = snapshot.total_us,
+        timeline_proxy_entry_us = snapshot.proxy_entry_us,
+        timeline_auth_done_us = ?snapshot.auth_done_us,
+        timeline_request_inspected_us = ?snapshot.request_inspected_us,
+        timeline_route_selected_us = ?snapshot.route_selected_us,
+        timeline_request_rewritten_us = ?snapshot.request_rewritten_us,
+        timeline_debug_capture_done_us = ?snapshot.debug_capture_done_us,
+        timeline_backend_forward_start_us = ?snapshot.backend_forward_start_us,
+        timeline_backend_headers_received_us = ?snapshot.backend_headers_received_us,
+        event = message,
+        "proxy failure timeline"
+    );
+}
+
+fn debug_timeline_fields(snapshot: TimelineSnapshot, message: &'static str) {
+    debug!(
+        timeline_started_unix_ms = snapshot.started_unix_ms,
+        timeline_total_us = snapshot.total_us,
+        timeline_proxy_entry_us = snapshot.proxy_entry_us,
+        timeline_auth_done_us = ?snapshot.auth_done_us,
+        timeline_request_inspected_us = ?snapshot.request_inspected_us,
+        timeline_route_selected_us = ?snapshot.route_selected_us,
+        timeline_request_rewritten_us = ?snapshot.request_rewritten_us,
+        timeline_debug_capture_done_us = ?snapshot.debug_capture_done_us,
+        timeline_backend_forward_start_us = ?snapshot.backend_forward_start_us,
+        timeline_backend_headers_received_us = ?snapshot.backend_headers_received_us,
+        timeline_backend_body_first_chunk_us = ?snapshot.backend_body_first_chunk_us,
+        timeline_backend_body_complete_us = ?snapshot.backend_body_complete_us,
+        timeline_response_rewritten_us = ?snapshot.response_rewritten_us,
+        timeline_client_response_ready_us = ?snapshot.client_response_ready_us,
+        timeline_stream_complete_us = ?snapshot.stream_complete_us,
+        event = message,
+        "request timeline snapshot"
+    );
+}
+
 #[derive(Debug, Clone)]
 struct ModelLogFields {
     requested: String,
@@ -651,6 +834,7 @@ struct StreamMetrics {
     model_log_fields: ModelLogFields,
     request_body_bytes: usize,
     debug_capture: Option<RequestCapture>,
+    timeline: RequestTimeline,
     started: Instant,
     usage: UsageTotals,
 }
@@ -663,6 +847,7 @@ impl StreamMetrics {
         model_log_fields: ModelLogFields,
         request_body_bytes: usize,
         debug_capture: Option<RequestCapture>,
+        timeline: RequestTimeline,
     ) -> Self {
         Self {
             metrics,
@@ -671,9 +856,18 @@ impl StreamMetrics {
             model_log_fields,
             request_body_bytes,
             debug_capture,
+            timeline,
             started: Instant::now(),
             usage: UsageTotals::default(),
         }
+    }
+
+    fn mark_body_chunk(&mut self) {
+        self.timeline.mark(TimelineEvent::BackendBodyFirstChunk);
+    }
+
+    fn mark_body_complete(&mut self) {
+        self.timeline.mark(TimelineEvent::BackendBodyComplete);
     }
 
     fn add_usage(&mut self, usage: UsageTotals) {
@@ -686,6 +880,7 @@ impl StreamMetrics {
 impl Drop for StreamMetrics {
     fn drop(&mut self) {
         let duration = self.started.elapsed();
+        self.timeline.mark(TimelineEvent::StreamComplete);
         if !self.usage.is_empty() {
             self.metrics.record_usage(&self.labels, self.usage);
         }
@@ -712,6 +907,10 @@ impl Drop for StreamMetrics {
                 output_tokens: self.usage.output,
             });
         }
+        debug_timeline_fields(
+            self.timeline.snapshot(),
+            "streaming response timeline snapshot",
+        );
         self.metrics
             .record_stream(&self.labels, self.status_code, duration);
     }

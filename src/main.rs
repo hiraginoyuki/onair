@@ -7,6 +7,7 @@ mod metrics;
 mod openai;
 mod proxy;
 mod routing;
+mod timeline;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
