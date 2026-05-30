@@ -294,6 +294,7 @@ Security guidance:
 - Inspector responses use `Cache-Control: no-store`; avoid putting them behind shared caches or public reverse proxies.
 - Backend health always reflects requests that onair has already routed. If `[health].active = true`, onair also probes each configured backend at `[health].path` using the backend API key when configured.
 - Active health probes are disabled by default because they send HTTP requests to every configured backend. Use a low-cost path such as `/v1/models`, and keep in mind that probes can be visible to upstream providers.
+- onair does not follow backend redirects for normal proxy requests or health probes; redirect responses are treated as non-success.
 - Backend health does not yet remove unhealthy backends from routing or perform retry/fallback; it is currently an operator signal.
 
 ## Logging

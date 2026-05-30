@@ -12,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router};
 use reqwest::Client;
+use reqwest::redirect::Policy;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, warn};
 use url::form_urlencoded;
@@ -47,6 +48,7 @@ impl AppState {
         let started_at_unix_ms = unix_millis();
         let config = ConfigStore::new(config);
         let http = Client::builder()
+            .redirect(Policy::none())
             .connect_timeout(std::time::Duration::from_secs(10))
             .pool_idle_timeout(std::time::Duration::from_secs(90))
             .build()?;
@@ -543,7 +545,7 @@ mod tests {
 
     use axum::body::{Body, to_bytes};
     use axum::extract::{ConnectInfo, State};
-    use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+    use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION};
     use axum::http::{Request, StatusCode};
     use axum::routing::{get, post};
     use axum::{Json, Router};
@@ -1042,6 +1044,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn backend_redirects_are_not_followed() {
+        let backend = RedirectBackend::spawn().await;
+        let state = test_state_with_inspector_and_health(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+            HealthConfig::default(),
+        );
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello redirect"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let _ = json_body(response).await;
+        assert_eq!(backend.leak_hits(), 0);
+
+        backend.abort();
+    }
+
+    #[tokio::test]
     async fn inspector_is_local_only_by_default() {
         let state = test_state_with_inspector(
             RoutingStrategy::Priority,
@@ -1380,6 +1415,45 @@ mod tests {
         }
     }
 
+    struct RedirectBackend {
+        address: SocketAddr,
+        leak_hits: Arc<AtomicUsize>,
+        handle: JoinHandle<()>,
+    }
+
+    impl RedirectBackend {
+        async fn spawn() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let leak_hits = Arc::new(AtomicUsize::new(0));
+            let app = Router::new()
+                .route("/v1/responses", post(redirect_responses))
+                .route("/leak", get(redirect_leak))
+                .with_state(leak_hits.clone());
+            let handle = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+
+            Self {
+                address,
+                leak_hits,
+                handle,
+            }
+        }
+
+        fn base_url(&self) -> String {
+            format!("http://{}", self.address)
+        }
+
+        fn leak_hits(&self) -> usize {
+            self.leak_hits.load(Ordering::SeqCst)
+        }
+
+        fn abort(self) {
+            self.handle.abort();
+        }
+    }
+
     async fn backend_responses(
         State(state): State<BackendState>,
         Json(payload): Json<Value>,
@@ -1399,6 +1473,22 @@ mod tests {
                 "output_tokens": 3
             }
         }))
+    }
+
+    async fn redirect_responses() -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::FOUND)
+            .header(LOCATION, "/leak")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    async fn redirect_leak(State(leak_hits): State<Arc<AtomicUsize>>) -> Response<Body> {
+        leak_hits.fetch_add(1, Ordering::SeqCst);
+        Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::empty())
+            .unwrap()
     }
 
     async fn backend_models() -> Json<Value> {
