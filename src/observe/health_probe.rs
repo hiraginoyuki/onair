@@ -7,6 +7,8 @@ use tracing::{debug, warn};
 use crate::config::{ConfigStore, HealthConfig, ResolvedBackend};
 use crate::observe::BackendHealthStore;
 
+const INACTIVE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
 pub(crate) struct HealthProbeTask {
     task: JoinHandle<()>,
 }
@@ -22,7 +24,7 @@ impl HealthProbeTask {
                         probe_backend(&http, &health, &health_config, backend).await;
                     }
                 }
-                tokio::time::sleep(Duration::from_millis(health_config.interval_ms)).await;
+                tokio::time::sleep(probe_sleep_interval(&health_config)).await;
             }
         });
         Self { task }
@@ -78,6 +80,14 @@ fn health_url(base_url: &str, path: &str) -> String {
     )
 }
 
+fn probe_sleep_interval(config: &HealthConfig) -> Duration {
+    if config.active {
+        Duration::from_millis(config.interval_ms)
+    } else {
+        INACTIVE_POLL_INTERVAL
+    }
+}
+
 fn probe_error_kind(error: &reqwest::Error) -> &'static str {
     if error.is_timeout() {
         "timeout"
@@ -110,5 +120,16 @@ mod tests {
             health_url("http://127.0.0.1:8000", "v1/models"),
             "http://127.0.0.1:8000/v1/models"
         );
+    }
+
+    #[test]
+    fn inactive_probe_loop_uses_short_poll_delay() {
+        let config = HealthConfig {
+            active: false,
+            interval_ms: 60_000,
+            timeout_ms: 2_000,
+            path: "/v1/models".to_owned(),
+        };
+        assert_eq!(probe_sleep_interval(&config), INACTIVE_POLL_INTERVAL);
     }
 }

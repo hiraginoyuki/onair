@@ -67,8 +67,12 @@ impl BackendHealthStore {
         let mut records = self.inner.lock().expect("backend health lock poisoned");
         let record = records.entry(backend.to_owned()).or_default();
         match source {
-            ObservationSource::Traffic => record.traffic_successes += 1,
-            ObservationSource::Probe => record.probe_successes += 1,
+            ObservationSource::Traffic => {
+                record.traffic_successes = record.traffic_successes.saturating_add(1)
+            }
+            ObservationSource::Probe => {
+                record.probe_successes = record.probe_successes.saturating_add(1)
+            }
         }
         record.consecutive_failures = 0;
         record.last_success_unix_ms = Some(observed_at_unix_ms);
@@ -91,10 +95,14 @@ impl BackendHealthStore {
         let mut records = self.inner.lock().expect("backend health lock poisoned");
         let record = records.entry(backend.to_owned()).or_default();
         match source {
-            ObservationSource::Traffic => record.traffic_failures += 1,
-            ObservationSource::Probe => record.probe_failures += 1,
+            ObservationSource::Traffic => {
+                record.traffic_failures = record.traffic_failures.saturating_add(1)
+            }
+            ObservationSource::Probe => {
+                record.probe_failures = record.probe_failures.saturating_add(1)
+            }
         }
-        record.consecutive_failures += 1;
+        record.consecutive_failures = record.consecutive_failures.saturating_add(1);
         record.last_failure_unix_ms = Some(observed_at_unix_ms);
         record.last_observed_unix_ms = Some(observed_at_unix_ms);
         record.last_status = Some(status);
