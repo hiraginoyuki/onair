@@ -342,6 +342,46 @@
       if (selectedId === record.record_id) renderDetail(record);
     }
 
+    function hashRecordId() {
+      const hash = window.location.hash.slice(1);
+      if (!hash) return null;
+      try {
+        return decodeURIComponent(hash);
+      } catch {
+        return hash;
+      }
+    }
+
+    function recordLink(record) {
+      return `${window.location.pathname}#${encodeURIComponent(record.record_id)}`;
+    }
+
+    function selectRecord(record, updateHash) {
+      selectedId = record.record_id;
+      if (updateHash) history.replaceState(null, "", `#${encodeURIComponent(record.record_id)}`);
+      renderRows();
+      renderDetail(record);
+    }
+
+    async function selectRecordId(recordId, updateHash) {
+      if (!recordId) return;
+      selectedId = recordId;
+      if (records.has(recordId)) {
+        selectRecord(records.get(recordId), updateHash);
+        return;
+      }
+
+      renderRows();
+      const response = await fetch(`${base}/requests/${encodeURIComponent(recordId)}`, { cache: "no-store" });
+      if (!response.ok) {
+        showDetailMessage(`Request ${recordId} is not retained.`);
+        return;
+      }
+      const record = await response.json();
+      records.set(record.record_id, record);
+      selectRecord(record, updateHash);
+    }
+
     function recordList() {
       const needle = filter.value.trim().toLowerCase();
       const list = Array.from(records.values()).sort((a, b) => {
@@ -361,9 +401,7 @@
         const tr = document.createElement("tr");
         if (record.record_id === selectedId) tr.classList.add("selected");
         tr.addEventListener("click", () => {
-          selectedId = record.record_id;
-          renderRows();
-          renderDetail(record);
+          selectRecord(record, true);
         });
         const cells = [
           timeOf(record.started_at_unix_ms),
@@ -387,6 +425,13 @@
         });
         rows.appendChild(tr);
       }
+    }
+
+    function showDetailMessage(message) {
+      const div = document.createElement("div");
+      div.className = "empty";
+      div.textContent = message;
+      detail.replaceChildren(div);
     }
 
     function kvCard(title, pairs) {
@@ -456,6 +501,7 @@
       detail.replaceChildren(
         kvCard("request", [
           ["record id", record.record_id],
+          ["deep link", recordLink(record)],
           ["client request id", record.client_request_id],
           ["started", new Date(record.started_at_unix_ms).toISOString()],
           ["completed", new Date(record.completed_at_unix_ms).toISOString()],
@@ -503,7 +549,8 @@
       records.clear();
       for (const record of list) records.set(record.record_id, record);
       renderRows();
-      if (selectedId && records.has(selectedId)) renderDetail(records.get(selectedId));
+      const target = selectedId || hashRecordId();
+      if (target) await selectRecordId(target, false);
     }
 
     function connect() {
@@ -522,6 +569,16 @@
       reload().then(() => setStatus("reloaded", "live")).catch(error => setStatus(error.message, "dead"));
     });
     filter.addEventListener("input", renderRows);
+    window.addEventListener("hashchange", () => {
+      const target = hashRecordId();
+      if (target) {
+        selectRecordId(target, false).catch(error => showDetailMessage(error.message));
+      } else {
+        selectedId = null;
+        renderRows();
+        showDetailMessage("Select a request to inspect timings and metadata.");
+      }
+    });
 
     reload().catch(() => {}).finally(connect);
   </script>
