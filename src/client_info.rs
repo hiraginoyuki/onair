@@ -170,22 +170,13 @@ fn ipv6_mask(prefix: u8) -> u128 {
 }
 
 fn forwarded_client(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(FORWARDED)
-        .and_then(|value| value.to_str().ok())
-        .and_then(forwarded_header_client)
+    combined_header_values(headers, &FORWARDED)
+        .and_then(|value| forwarded_header_client(&value))
         .or_else(|| {
-            headers
-                .get(X_FORWARDED_FOR)
-                .and_then(|value| value.to_str().ok())
-                .and_then(first_forwarded_for)
+            combined_header_values(headers, &X_FORWARDED_FOR)
+                .and_then(|value| first_forwarded_for(&value))
         })
-        .or_else(|| {
-            headers
-                .get(X_REAL_IP)
-                .and_then(|value| value.to_str().ok())
-                .and_then(clean_forwarded_value)
-        })
+        .or_else(|| last_header_value(headers, &X_REAL_IP))
 }
 
 fn forwarded_header_client(value: &str) -> Option<String> {
@@ -205,6 +196,30 @@ fn first_forwarded_for(value: &str) -> Option<String> {
         .rsplit(',')
         .map(str::trim)
         .find(|part| !part.is_empty())
+        .and_then(clean_forwarded_value)
+}
+
+fn combined_header_values(headers: &HeaderMap, name: &HeaderName) -> Option<String> {
+    let mut values = headers
+        .get_all(name)
+        .iter()
+        .map(|value| value.to_str().ok())
+        .collect::<Option<Vec<_>>>()?;
+    let first = (*values.first()?).to_owned();
+    let mut combined = first;
+    for value in values.drain(1..) {
+        combined.push(',');
+        combined.push_str(value);
+    }
+    Some(combined)
+}
+
+fn last_header_value(headers: &HeaderMap, name: &HeaderName) -> Option<String> {
+    headers
+        .get_all(name)
+        .iter()
+        .next_back()
+        .and_then(|value| value.to_str().ok())
         .and_then(clean_forwarded_value)
 }
 
@@ -355,6 +370,45 @@ mod tests {
     fn x_real_ip_must_be_valid_ip_or_socket() {
         let mut headers = HeaderMap::new();
         headers.insert(X_REAL_IP, HeaderValue::from_static("spoofed.example"));
+        let peer = "127.0.0.1:55432".parse().unwrap();
+        let info =
+            ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);
+
+        assert_eq!(info.effective_client_addr(), "127.0.0.1:55432");
+    }
+
+    #[test]
+    fn repeated_forwarded_headers_use_the_last_combined_hop() {
+        let mut headers = HeaderMap::new();
+        headers.append(FORWARDED, HeaderValue::from_static("for=203.0.113.10"));
+        headers.append(
+            FORWARDED,
+            HeaderValue::from_static("for=\"[2001:db8::1]:1234\";proto=https"),
+        );
+        let peer = "127.0.0.1:55432".parse().unwrap();
+        let info =
+            ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);
+
+        assert_eq!(info.effective_client_addr(), "[2001:db8::1]:1234");
+    }
+
+    #[test]
+    fn repeated_x_real_ip_headers_use_last_valid_value() {
+        let mut headers = HeaderMap::new();
+        headers.append(X_REAL_IP, HeaderValue::from_static("spoofed.example"));
+        headers.append(X_REAL_IP, HeaderValue::from_static("198.51.100.20"));
+        let peer = "127.0.0.1:55432".parse().unwrap();
+        let info =
+            ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);
+
+        assert_eq!(info.effective_client_addr(), "198.51.100.20");
+    }
+
+    #[test]
+    fn invalid_last_x_real_ip_does_not_fall_back_to_spoofed_values() {
+        let mut headers = HeaderMap::new();
+        headers.append(X_REAL_IP, HeaderValue::from_static("203.0.113.10"));
+        headers.append(X_REAL_IP, HeaderValue::from_static("spoofed.example"));
         let peer = "127.0.0.1:55432".parse().unwrap();
         let info =
             ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);

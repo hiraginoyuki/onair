@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -192,6 +192,7 @@ fn create_capture(
     request: CaptureRequest<'_>,
 ) -> std::io::Result<RequestCapture> {
     fs::create_dir_all(&config.directory)?;
+    ensure_private_directory(&config.directory)?;
     let captured_at_unix_ms = unix_millis();
     let id = capture_id(captured_at_unix_ms, request.request_id);
     let directory = config.directory.join(&id);
@@ -267,6 +268,20 @@ fn unix_millis() -> u128 {
         .as_millis()
 }
 
+fn ensure_private_directory(path: &Path) -> std::io::Result<()> {
+    if !path.is_dir() {
+        return Err(std::io::Error::other(format!(
+            "debug capture directory '{}' is not a directory",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
     fs::DirBuilder::new().mode(0o700).create(path)
@@ -312,4 +327,73 @@ fn write_private_file_replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> 
         .truncate(true)
         .open(path)?;
     file.write_all(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::Method;
+
+    use super::*;
+    use crate::metrics::MetricLabels;
+
+    #[cfg(unix)]
+    #[test]
+    fn capture_root_and_request_directories_are_private() {
+        let root = temp_capture_root("private-directories");
+        let labels = MetricLabels {
+            route: "responses".to_owned(),
+            identity: "dev".to_owned(),
+            public_model: "public".to_owned(),
+            backend: "backend-a".to_owned(),
+            stream: false,
+        };
+        let method = Method::POST;
+        let inbound = Bytes::from_static(br#"{"model":"public"}"#);
+        let upstream = br#"{"model":"backend"}"#;
+        let config = DebugCaptureConfig {
+            enabled: true,
+            directory: root.clone(),
+        };
+
+        let capture = capture_request(
+            &config,
+            CaptureRequest {
+                method: &method,
+                client_path: "/v1/responses",
+                client_query: None,
+                upstream_path: "/v1/responses",
+                upstream_query: None,
+                content_type: Some("application/json"),
+                request_id: Some("req_test"),
+                labels: &labels,
+                requested_model: "public",
+                public_model: "public",
+                backend_model: "backend",
+                inbound_body: &inbound,
+                upstream_body: upstream,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(file_mode(&root), 0o700);
+        assert_eq!(file_mode(&capture.directory), 0o700);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn file_mode(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    fn temp_capture_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "onair-debug-capture-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
 }
