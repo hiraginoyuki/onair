@@ -4,7 +4,7 @@ These items are ordered roughly by dependency and operator value, not by impleme
 
 ## Implemented
 
-- Local read-only operator API for sanitized active config, effective model visibility, runtime state, and telemetry exporter status.
+- Local read-only operator API and inspector overview cards for sanitized active config, effective model visibility, runtime state, and telemetry exporter status.
 - Local request inspector with live request table, detail view, bounded SSE replay, and per-request timing timelines.
 
 ## Priority 1
