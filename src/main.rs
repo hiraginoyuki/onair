@@ -1,14 +1,12 @@
 mod app;
 mod auth;
-mod client_info;
 mod config;
-mod debug_capture;
 mod error;
 mod metrics;
+mod observe;
 mod openai;
 mod proxy;
 mod routing;
-mod timeline;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

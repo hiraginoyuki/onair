@@ -13,9 +13,8 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use crate::client_info::IpCidr;
-use crate::debug_capture;
 use crate::error::{Error, Result};
+use crate::observe::{IpCidr, debug_capture};
 
 const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_RETRY_DELAY: Duration = Duration::from_millis(250);

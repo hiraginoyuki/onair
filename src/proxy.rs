@@ -14,14 +14,13 @@ use tracing::{Instrument, debug, info_span, warn};
 
 use crate::app::AppState;
 use crate::auth::authenticate;
-use crate::client_info::ClientInfo;
 use crate::config::DebugCaptureConfig;
-use crate::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
 use crate::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
+use crate::observe::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
+use crate::observe::{ClientInfo, RequestTimeline, TimelineEvent, TimelineSnapshot};
 use crate::openai::{self, SseNormalizer, UsageTotals};
 use crate::routing::{self, SelectedRoute};
-use crate::timeline::{RequestTimeline, TimelineEvent, TimelineSnapshot};
 
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
