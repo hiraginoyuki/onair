@@ -275,6 +275,8 @@
     let operatorRuntime = null;
     let operatorConfig = null;
     let operatorModels = null;
+    let operatorHealth = null;
+    let operatorReloadPending = false;
     let selectedId = null;
     let source = null;
 
@@ -339,6 +341,30 @@
       return filtered.length > limit ? `${shown}, +${filtered.length - limit} more` : shown;
     }
 
+    function healthSummary(backends) {
+      const counts = new Map();
+      for (const backend of backends) {
+        counts.set(backend.status, (counts.get(backend.status) || 0) + 1);
+      }
+      return ["healthy", "degraded", "unhealthy", "unknown"]
+        .filter(status => counts.has(status))
+        .map(status => `${status}:${counts.get(status)}`)
+        .join(", ") || "none";
+    }
+
+    function backendHealthText(backend) {
+      const parts = [
+        backend.status,
+        `ok ${backend.successes}`,
+        `fail ${backend.failures}`,
+      ];
+      if (backend.consecutive_failures > 0) parts.push(`consecutive ${backend.consecutive_failures}`);
+      if (backend.last_status) parts.push(`last ${backend.last_status}`);
+      if (backend.last_latency_ms !== null && backend.last_latency_ms !== undefined) parts.push(`${backend.last_latency_ms} ms`);
+      if (backend.last_error_kind) parts.push(backend.last_error_kind);
+      return parts.join(" · ");
+    }
+
     function searchable(record) {
       return [
         record.record_id,
@@ -367,6 +393,7 @@
       if (operatorRuntime) operatorRuntime.inspector_retained_requests = records.size;
       renderRows();
       renderOverview();
+      scheduleOperatorReload();
       if (selectedId === record.record_id) renderDetail(record);
     }
 
@@ -463,22 +490,28 @@
     }
 
     function renderOverview() {
-      if (!operatorRuntime || !operatorConfig || !operatorModels) {
+      if (!operatorRuntime || !operatorConfig || !operatorModels || !operatorHealth) {
         overview.replaceChildren(kvCard("operator overview", [["state", "loading"]]));
         return;
       }
 
       const modelRouteCount = operatorModels.public_models
         .reduce((sum, model) => sum + model.routes.length, 0);
+      const backendHealthRows = operatorHealth.backends.map(backend => [
+        backend.backend,
+        backendHealthText(backend),
+      ]);
       overview.replaceChildren(
         kvCard("operator overview", [
           ["uptime", durationText(operatorRuntime.uptime_ms)],
           ["retained requests", operatorRuntime.inspector_retained_requests],
           ["clients", operatorRuntime.clients],
           ["backends", operatorRuntime.backends],
+          ["backend health", healthSummary(operatorHealth.backends)],
           ["public models", operatorRuntime.public_models],
           ["telemetry", `${operatorRuntime.telemetry.exporter} (${operatorRuntime.telemetry.service_name})`],
         ]),
+        kvCard("backend health", backendHealthRows.length ? backendHealthRows : [["state", "none"]]),
         kvCard("active config", [
           ["bind", operatorConfig.server.bind],
           ["routing", operatorConfig.routing.strategy],
@@ -610,12 +643,22 @@
     }
 
     async function reloadOperator() {
-      [operatorRuntime, operatorConfig, operatorModels] = await Promise.all([
+      [operatorRuntime, operatorConfig, operatorModels, operatorHealth] = await Promise.all([
         fetchJson(`${operatorBase}/runtime`),
         fetchJson(`${operatorBase}/config`),
         fetchJson(`${operatorBase}/models`),
+        fetchJson(`${operatorBase}/health`),
       ]);
       renderOverview();
+    }
+
+    function scheduleOperatorReload() {
+      if (operatorReloadPending) return;
+      operatorReloadPending = true;
+      setTimeout(() => {
+        operatorReloadPending = false;
+        reloadOperator().catch(error => setStatus(error.message, "dead"));
+      }, 250);
     }
 
     async function reload() {

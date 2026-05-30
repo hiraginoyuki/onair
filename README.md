@@ -262,7 +262,7 @@ allow_remote = false
 
 Endpoints:
 
-- `GET /_onair/inspector`: information-dense browser UI with a live request table, operator overview cards, detail pane, and per-request timeline bars.
+- `GET /_onair/inspector`: information-dense browser UI with a live request table, operator overview cards, passive backend-health cards, detail pane, and per-request timeline bars.
 - `GET /_onair/inspector/requests`: JSON list of retained records, newest first. Use `?limit=<n>` to cap the response; onair clamps the limit to `1..=10000` and defaults to `1000`.
 - `GET /_onair/inspector/requests/{record_id}`: JSON detail for one retained record.
 - `GET /_onair/inspector/events`: server-sent events for low-latency live updates. Use `?snapshot_limit=<n>` to cap the initial replay; the UI defaults this to `1000`.
