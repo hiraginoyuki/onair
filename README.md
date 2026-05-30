@@ -59,6 +59,13 @@ enabled = false
 retention_requests = 10000
 allow_remote = false
 
+[health]
+# Disabled by default because probes send requests to configured backends.
+active = false
+interval_ms = 30000
+timeout_ms = 2000
+path = "/v1/models"
+
 [routing]
 # "priority" chooses the first matching backend. "sticky" hashes identity/path/model/prompt_cache_key
 # across all matching backends, improving prompt-cache locality when several backends serve a model.
@@ -89,7 +96,7 @@ endpoints = ["chat", "responses"]
 
 onair interprets the file as routing and visibility policy:
 
-- `[server]`, `[telemetry]`, `[debug_capture]`, and `[inspector]` configure process-level behavior.
+- `[server]`, `[telemetry]`, `[debug_capture]`, `[inspector]`, and `[health]` configure process-level behavior.
 - `[access].default_models` grants public models to every configured client.
 - Each `[[client]]` adds one authenticated identity and may extend that identity's model whitelist.
 - Each `[[backend]]` defines one upstream OpenAI-compatible service plus capability markers that decide which `/v1/*` request families it can receive.
@@ -102,7 +109,7 @@ onair watches the config file's parent directory and reloads the config when the
 
 Reloaded immediately:
 
-- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`, `[routing]`, `[debug_capture]`, `[inspector]`, `[server].trusted_proxy_cidrs`, backend auth, model mappings, capabilities, timeouts, context metadata, client-address trust policy, debug capture settings, and inspector settings.
+- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`, `[routing]`, `[debug_capture]`, `[inspector]`, `[health]`, `[server].trusted_proxy_cidrs`, backend auth, model mappings, capabilities, timeouts, context metadata, client-address trust policy, debug capture settings, inspector settings, and health probe settings.
 
 Restart required:
 
@@ -273,7 +280,7 @@ Read-only operator endpoints use the same `[inspector]` enablement and loopback/
 - `GET /_onair/operator/runtime`: process uptime, current time, retained inspector record count, route object counts, and telemetry exporter status.
 - `GET /_onair/operator/config`: sanitized active config. Client and backend API keys are never returned; backends expose only whether an API key is configured.
 - `GET /_onair/operator/models`: effective public model visibility per client plus configured backend routes for each public model.
-- `GET /_onair/operator/health`: passive backend health observed from proxied traffic, including success/failure counters, consecutive failures, last status, last error kind, and last observed latency.
+- `GET /_onair/operator/health`: backend health observed from proxied traffic and optional active probes, including split traffic/probe counters, consecutive failures, last status, last error kind, last source, and last observed latency.
 
 Each retained record includes route, identity, public/backend model IDs, backend ID/target, backend remote socket when available, immediate/effective client address, trusted proxy details, user agent, body sizes, response status, OpenAI-compatible usage counters when present, and a timeline snapshot. Timeline fields use a wall-clock `started_at_unix_ms` plus monotonic microsecond offsets for proxy/auth/routing/rewrite/backend/response milestones.
 
@@ -285,7 +292,9 @@ Security guidance:
 - Set `allow_remote = true` only if the onair bind address is protected by another access-control layer, such as SSH tunneling, a private VPN, or a trusted reverse proxy with its own authentication.
 - Inspector data is memory-only and disappears on process restart. Increase `retention_requests` only as much as needed; config loading rejects values above `100000` to avoid accidental unbounded memory growth.
 - Inspector responses use `Cache-Control: no-store`; avoid putting them behind shared caches or public reverse proxies.
-- Backend health is passive in the current implementation. It reflects requests that onair has already routed; it does not yet probe idle backends or remove unhealthy backends from routing.
+- Backend health always reflects requests that onair has already routed. If `[health].active = true`, onair also probes each configured backend at `[health].path` using the backend API key when configured.
+- Active health probes are disabled by default because they send HTTP requests to every configured backend. Use a low-cost path such as `/v1/models`, and keep in mind that probes can be visible to upstream providers.
+- Backend health does not yet remove unhealthy backends from routing or perform retry/fallback; it is currently an operator signal.
 
 ## Logging
 

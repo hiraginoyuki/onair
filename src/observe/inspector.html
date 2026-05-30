@@ -355,12 +355,13 @@
     function backendHealthText(backend) {
       const parts = [
         backend.status,
-        `ok ${backend.successes}`,
-        `fail ${backend.failures}`,
+        `traffic ${backend.traffic_successes}/${backend.traffic_failures}`,
+        `probe ${backend.probe_successes}/${backend.probe_failures}`,
       ];
       if (backend.consecutive_failures > 0) parts.push(`consecutive ${backend.consecutive_failures}`);
       if (backend.last_status) parts.push(`last ${backend.last_status}`);
       if (backend.last_latency_ms !== null && backend.last_latency_ms !== undefined) parts.push(`${backend.last_latency_ms} ms`);
+      if (backend.last_source) parts.push(backend.last_source);
       if (backend.last_error_kind) parts.push(backend.last_error_kind);
       return parts.join(" · ");
     }
@@ -519,6 +520,7 @@
           ["trusted proxies", compactList(operatorConfig.server.trusted_proxy_cidrs)],
           ["debug capture", operatorConfig.debug_capture.enabled ? `enabled: ${operatorConfig.debug_capture.directory}` : "disabled"],
           ["inspector remote", operatorConfig.inspector.allow_remote ? "allowed" : "loopback-only"],
+          ["health probes", operatorConfig.health.active ? `${operatorConfig.health.path} every ${operatorConfig.health.interval_ms} ms` : "disabled"],
         ]),
         kvCard("model visibility", [
           ["public models", compactList(operatorModels.public_models.map(model => model.public))],
