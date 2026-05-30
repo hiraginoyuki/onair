@@ -116,6 +116,8 @@ Restart required:
 
 onair logs the immediate socket peer address for proxied requests. If onair is behind a trusted reverse proxy, set `[server].trusted_proxy_cidrs` to the proxy source CIDRs to allow `Forwarded`, `X-Forwarded-For`, or `X-Real-IP` to populate `effective_client_addr` in logs. Forwarded headers are ignored by default and are also ignored when the immediate peer is not trusted.
 
+For appended `Forwarded` or `X-Forwarded-For` chains, onair uses the closest valid IP/socket hop instead of the leftmost value so client-supplied spoofed entries are not treated as authoritative. Configure the trusted proxy to overwrite forwarded headers if logs should show the original external client rather than the client seen by that proxy.
+
 ### Backend capabilities
 
 `[[backend]].capabilities` is a marker list; `capability` is accepted as a TOML alias. Capability markers are matched against `/v1/*` path families and common aliases:

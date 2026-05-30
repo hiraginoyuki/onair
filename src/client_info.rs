@@ -174,28 +174,38 @@ fn forwarded_client(headers: &HeaderMap) -> Option<String> {
         .get(FORWARDED)
         .and_then(|value| value.to_str().ok())
         .and_then(forwarded_header_client)
-        .or_else(|| sanitized_header(headers, &X_FORWARDED_FOR).and_then(first_forwarded_for))
-        .or_else(|| sanitized_header(headers, &X_REAL_IP))
+        .or_else(|| {
+            headers
+                .get(X_FORWARDED_FOR)
+                .and_then(|value| value.to_str().ok())
+                .and_then(first_forwarded_for)
+        })
+        .or_else(|| {
+            headers
+                .get(X_REAL_IP)
+                .and_then(|value| value.to_str().ok())
+                .and_then(clean_forwarded_value)
+        })
 }
 
 fn forwarded_header_client(value: &str) -> Option<String> {
-    value.split(',').find_map(|entry| {
-        entry.split(';').find_map(|part| {
+    for entry in value.rsplit(',') {
+        if let Some(raw_for) = entry.split(';').find_map(|part| {
             let (key, value) = part.trim().split_once('=')?;
-            key.trim()
-                .eq_ignore_ascii_case("for")
-                .then(|| clean_forwarded_value(value))
-                .flatten()
-        })
-    })
+            key.trim().eq_ignore_ascii_case("for").then_some(value)
+        }) {
+            return clean_forwarded_value(raw_for);
+        }
+    }
+    None
 }
 
-fn first_forwarded_for(value: String) -> Option<String> {
+fn first_forwarded_for(value: &str) -> Option<String> {
     value
-        .split(',')
+        .rsplit(',')
         .map(str::trim)
         .find(|part| !part.is_empty())
-        .and_then(sanitized_value)
+        .and_then(clean_forwarded_value)
 }
 
 fn sanitized_header(headers: &HeaderMap, name: &HeaderName) -> Option<String> {
@@ -207,14 +217,27 @@ fn sanitized_header(headers: &HeaderMap, name: &HeaderName) -> Option<String> {
 
 fn clean_forwarded_value(value: &str) -> Option<String> {
     let value = value.trim().trim_matches('"').trim();
-    let value = value
-        .strip_prefix('[')
-        .and_then(|rest| rest.split_once(']').map(|(address, _)| address))
-        .unwrap_or(value);
     if value.eq_ignore_ascii_case("unknown") || value.starts_with('_') {
         return None;
     }
-    sanitized_value(value)
+    normalized_ip_or_socket(value)
+}
+
+fn normalized_ip_or_socket(value: &str) -> Option<String> {
+    if let Ok(address) = value.parse::<SocketAddr>() {
+        return Some(address.to_string());
+    }
+    if let Ok(address) = value.parse::<IpAddr>() {
+        return Some(address.to_string());
+    }
+    if let Some(address) = value
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once(']').map(|(address, _)| address))
+        .and_then(|address| address.parse::<IpAddr>().ok())
+    {
+        return Some(address.to_string());
+    }
+    None
 }
 
 fn sanitized_value(value: &str) -> Option<String> {
@@ -255,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_proxy_headers_override_effective_client() {
+    fn trusted_proxy_uses_closest_forwarded_for_hop() {
         let mut headers = HeaderMap::new();
         headers.insert(
             X_FORWARDED_FOR,
@@ -267,7 +290,7 @@ mod tests {
             ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);
 
         assert_eq!(info.peer_addr(), "127.0.0.1:55432");
-        assert_eq!(info.effective_client_addr(), "203.0.113.10");
+        assert_eq!(info.effective_client_addr(), "10.0.0.2");
         assert_eq!(info.trusted_proxy_addr(), "127.0.0.1:55432");
         assert_eq!(info.user_agent(), "friend-client/1.0");
     }
@@ -285,17 +308,57 @@ mod tests {
     }
 
     #[test]
-    fn forwarded_header_takes_precedence_when_trusted() {
+    fn forwarded_header_uses_closest_valid_hop_when_trusted() {
         let mut headers = HeaderMap::new();
         headers.insert(
             FORWARDED,
-            HeaderValue::from_static("for=\"[2001:db8::1]:1234\";proto=https"),
+            HeaderValue::from_static(
+                "for=198.51.100.10;proto=https, for=\"[2001:db8::1]:1234\";proto=https",
+            ),
         );
         headers.insert(X_FORWARDED_FOR, HeaderValue::from_static("203.0.113.10"));
         let peer = "127.0.0.1:55432".parse().unwrap();
         let info =
             ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);
 
-        assert_eq!(info.effective_client_addr(), "2001:db8::1");
+        assert_eq!(info.effective_client_addr(), "[2001:db8::1]:1234");
+    }
+
+    #[test]
+    fn invalid_forwarded_values_are_ignored() {
+        let mut headers = HeaderMap::new();
+        headers.insert(X_FORWARDED_FOR, HeaderValue::from_static("spoofed.example"));
+        headers.insert(FORWARDED, HeaderValue::from_static("for=_hidden"));
+        let peer = "127.0.0.1:55432".parse().unwrap();
+        let info =
+            ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);
+
+        assert_eq!(info.effective_client_addr(), "127.0.0.1:55432");
+        assert_eq!(info.trusted_proxy_addr(), "none");
+    }
+
+    #[test]
+    fn invalid_closest_forwarded_header_does_not_fall_back_to_spoofed_entries() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            FORWARDED,
+            HeaderValue::from_static("for=203.0.113.10, for=_hidden"),
+        );
+        let peer = "127.0.0.1:55432".parse().unwrap();
+        let info =
+            ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);
+
+        assert_eq!(info.effective_client_addr(), "127.0.0.1:55432");
+    }
+
+    #[test]
+    fn x_real_ip_must_be_valid_ip_or_socket() {
+        let mut headers = HeaderMap::new();
+        headers.insert(X_REAL_IP, HeaderValue::from_static("spoofed.example"));
+        let peer = "127.0.0.1:55432".parse().unwrap();
+        let info =
+            ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);
+
+        assert_eq!(info.effective_client_addr(), "127.0.0.1:55432");
     }
 }
