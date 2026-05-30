@@ -4,8 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::config::{
-    Config, DebugCaptureConfig, InspectorConfig, ResolvedBackend, ResolvedClient, RoutingStrategy,
-    ServerConfig, TelemetryConfig, TelemetryExporter,
+    Config, DebugCaptureConfig, HealthConfig, InspectorConfig, ResolvedBackend, ResolvedClient,
+    RoutingStrategy, ServerConfig, TelemetryConfig, TelemetryExporter,
 };
 use crate::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 
@@ -27,6 +27,7 @@ pub(crate) struct OperatorConfigSnapshot {
     pub(crate) telemetry: TelemetrySnapshot,
     pub(crate) debug_capture: DebugCaptureSnapshot,
     pub(crate) inspector: InspectorSnapshot,
+    pub(crate) health: HealthConfigSnapshot,
     pub(crate) routing: RoutingSnapshot,
     pub(crate) clients: Vec<ClientSnapshot>,
     pub(crate) backends: Vec<BackendSnapshot>,
@@ -69,6 +70,14 @@ pub(crate) struct InspectorSnapshot {
     pub(crate) enabled: bool,
     pub(crate) retention_requests: usize,
     pub(crate) allow_remote: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct HealthConfigSnapshot {
+    pub(crate) active: bool,
+    pub(crate) interval_ms: u64,
+    pub(crate) timeout_ms: u64,
+    pub(crate) path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -121,6 +130,10 @@ pub(crate) struct BackendHealthSnapshot {
     pub(crate) status: &'static str,
     pub(crate) successes: u64,
     pub(crate) failures: u64,
+    pub(crate) traffic_successes: u64,
+    pub(crate) traffic_failures: u64,
+    pub(crate) probe_successes: u64,
+    pub(crate) probe_failures: u64,
     pub(crate) consecutive_failures: u64,
     pub(crate) last_success_unix_ms: Option<u64>,
     pub(crate) last_failure_unix_ms: Option<u64>,
@@ -128,6 +141,7 @@ pub(crate) struct BackendHealthSnapshot {
     pub(crate) last_status: Option<u16>,
     pub(crate) last_error_kind: Option<String>,
     pub(crate) last_latency_ms: Option<u64>,
+    pub(crate) last_source: Option<&'static str>,
 }
 
 pub(crate) fn runtime_snapshot(
@@ -154,6 +168,7 @@ pub(crate) fn config_snapshot(config: &Config) -> OperatorConfigSnapshot {
         telemetry: telemetry_snapshot(&config.telemetry),
         debug_capture: debug_capture_snapshot(&config.debug_capture),
         inspector: inspector_snapshot(&config.inspector),
+        health: health_config_snapshot(&config.health),
         routing: routing_snapshot(config.routing.strategy),
         clients: clients_snapshot(&config.clients),
         backends: config.backends.iter().map(backend_snapshot).collect(),
@@ -254,6 +269,15 @@ fn inspector_snapshot(config: &InspectorConfig) -> InspectorSnapshot {
     }
 }
 
+fn health_config_snapshot(config: &HealthConfig) -> HealthConfigSnapshot {
+    HealthConfigSnapshot {
+        active: config.active,
+        interval_ms: config.interval_ms,
+        timeout_ms: config.timeout_ms,
+        path: config.path.clone(),
+    }
+}
+
 fn routing_snapshot(strategy: RoutingStrategy) -> RoutingSnapshot {
     RoutingSnapshot {
         strategy: match strategy {
@@ -299,6 +323,10 @@ fn backend_health_snapshot(observed: ObservedBackendHealth) -> BackendHealthSnap
         status: observed.status,
         successes: observed.successes,
         failures: observed.failures,
+        traffic_successes: observed.traffic_successes,
+        traffic_failures: observed.traffic_failures,
+        probe_successes: observed.probe_successes,
+        probe_failures: observed.probe_failures,
         consecutive_failures: observed.consecutive_failures,
         last_success_unix_ms: observed.last_success_unix_ms,
         last_failure_unix_ms: observed.last_failure_unix_ms,
@@ -306,6 +334,7 @@ fn backend_health_snapshot(observed: ObservedBackendHealth) -> BackendHealthSnap
         last_status: observed.last_status,
         last_error_kind: observed.last_error_kind,
         last_latency_ms: observed.last_latency_ms,
+        last_source: observed.last_source,
     }
 }
 

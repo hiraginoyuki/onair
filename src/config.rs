@@ -32,6 +32,8 @@ pub struct ConfigFile {
     #[serde(default)]
     pub inspector: InspectorConfig,
     #[serde(default)]
+    pub health: HealthConfig,
+    #[serde(default)]
     pub routing: RoutingConfig,
     #[serde(default)]
     pub access: AccessConfig,
@@ -47,6 +49,7 @@ pub struct Config {
     pub telemetry: TelemetryConfig,
     pub debug_capture: DebugCaptureConfig,
     pub inspector: InspectorConfig,
+    pub health: HealthConfig,
     pub routing: RoutingConfig,
     pub clients: Vec<ResolvedClient>,
     pub backends: Vec<ResolvedBackend>,
@@ -256,6 +259,26 @@ pub struct InspectorConfig {
     pub allow_remote: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HealthConfig {
+    pub active: bool,
+    pub interval_ms: u64,
+    pub timeout_ms: u64,
+    pub path: String,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            active: false,
+            interval_ms: 30_000,
+            timeout_ms: 2_000,
+            path: "/v1/models".to_owned(),
+        }
+    }
+}
+
 impl Default for InspectorConfig {
     fn default() -> Self {
         Self {
@@ -408,6 +431,7 @@ impl Config {
     fn resolve(file: ConfigFile) -> Result<Self> {
         debug_capture::validate_config(&file.debug_capture)?;
         inspector::validate_config(&file.inspector)?;
+        validate_health_config(&file.health)?;
 
         let mut client_ids = BTreeSet::new();
         let mut clients = Vec::with_capacity(file.clients.len());
@@ -505,6 +529,7 @@ impl Config {
             telemetry: file.telemetry,
             debug_capture: file.debug_capture,
             inspector: file.inspector,
+            health: file.health,
             routing: file.routing,
             clients,
             backends,
@@ -570,6 +595,35 @@ fn validate_allowed_models(
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_health_config(config: &HealthConfig) -> Result<()> {
+    if config.interval_ms == 0 {
+        return Err(Error::Config(
+            "health.interval_ms must be greater than zero".to_owned(),
+        ));
+    }
+    if config.timeout_ms == 0 {
+        return Err(Error::Config(
+            "health.timeout_ms must be greater than zero".to_owned(),
+        ));
+    }
+    if !config.path.starts_with('/') {
+        return Err(Error::Config(
+            "health.path must start with '/' and be relative to backend base_url".to_owned(),
+        ));
+    }
+    if config.path.starts_with("//") || config.path.contains("://") {
+        return Err(Error::Config(
+            "health.path must be a relative path, not an absolute URL".to_owned(),
+        ));
+    }
+    if config.path.chars().any(char::is_control) {
+        return Err(Error::Config(
+            "health.path must not contain control characters".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -841,6 +895,40 @@ mod tests {
     }
 
     #[test]
+    fn health_config_resolves_when_enabled() {
+        let config = parse_config(
+            r#"
+            [health]
+            active = true
+            interval_ms = 5000
+            timeout_ms = 750
+            path = "/v1/models"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+
+        assert!(config.health.active);
+        assert_eq!(config.health.interval_ms, 5000);
+        assert_eq!(config.health.timeout_ms, 750);
+        assert_eq!(config.health.path, "/v1/models");
+    }
+
+    #[test]
     fn inspector_config_resolves_when_enabled() {
         let config = parse_config(
             r#"
@@ -901,6 +989,37 @@ mod tests {
 
         let error = resolve_error(file);
         assert!(error.contains("inspector.retention_requests must be greater than zero"));
+    }
+
+    #[test]
+    fn health_config_rejects_invalid_path() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [health]
+            active = true
+            path = "v1/models"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        )
+        .unwrap();
+
+        let error = resolve_error(file);
+        assert!(error.contains("health.path must start with '/'"));
     }
 
     #[test]

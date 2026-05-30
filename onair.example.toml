@@ -23,6 +23,13 @@ retention_requests = 10000
 # Keep false unless the onair bind address is protected by another access-control layer.
 allow_remote = false
 
+[health]
+# Disabled by default because probes send requests to each configured backend.
+active = false
+interval_ms = 30000
+timeout_ms = 2000
+path = "/v1/models"
+
 [routing]
 # Use "sticky" when multiple matching backends should share load while preserving prompt-cache affinity.
 strategy = "priority"

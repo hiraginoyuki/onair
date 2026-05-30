@@ -20,7 +20,9 @@ use crate::auth::authenticate;
 use crate::config::{Config, ConfigStore};
 use crate::error::{ApiError, Result};
 use crate::metrics::{MetricLabels, Metrics, RequestTimer};
-use crate::observe::{BackendHealthStore, InspectorRequestRecord, InspectorStore, inspector};
+use crate::observe::{
+    BackendHealthStore, HealthProbeTask, InspectorRequestRecord, InspectorStore, inspector,
+};
 use crate::openai;
 use crate::operator;
 use crate::proxy;
@@ -34,6 +36,7 @@ pub struct AppState {
     pub health: BackendHealthStore,
     pub inspector: InspectorStore,
     pub metrics: Metrics,
+    _health_probe: HealthProbeTask,
     started: Instant,
     started_at_unix_ms: u64,
 }
@@ -42,16 +45,20 @@ impl AppState {
     pub fn new(config: Config, metrics: Metrics) -> Result<Self> {
         let started = Instant::now();
         let started_at_unix_ms = unix_millis();
+        let config = ConfigStore::new(config);
         let http = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .pool_idle_timeout(std::time::Duration::from_secs(90))
             .build()?;
+        let health = BackendHealthStore::new();
+        let health_probe = HealthProbeTask::start(config.clone(), http.clone(), health.clone());
         Ok(Self {
-            config: ConfigStore::new(config),
+            config,
             http,
-            health: BackendHealthStore::new(),
+            health,
             inspector: InspectorStore::new(),
             metrics,
+            _health_probe: health_probe,
             started,
             started_at_unix_ms,
         })
@@ -538,7 +545,7 @@ mod tests {
     use axum::extract::{ConnectInfo, State};
     use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
     use axum::http::{Request, StatusCode};
-    use axum::routing::post;
+    use axum::routing::{get, post};
     use axum::{Json, Router};
     use serde_json::{Value, json};
     use tokio::net::TcpListener;
@@ -547,8 +554,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        Config, DebugCaptureConfig, InspectorConfig, ModelRoute, ResolvedBackend, ResolvedClient,
-        RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig,
+        Config, DebugCaptureConfig, HealthConfig, InspectorConfig, ModelRoute, ResolvedBackend,
+        ResolvedClient, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig,
     };
 
     const CLIENT_KEY: &str = "sk-test";
@@ -946,6 +953,8 @@ mod tests {
         assert_eq!(health["backends"][0]["status"], "healthy");
         assert_eq!(health["backends"][0]["successes"], 1);
         assert_eq!(health["backends"][0]["failures"], 0);
+        assert_eq!(health["backends"][0]["traffic_successes"], 1);
+        assert_eq!(health["backends"][0]["probe_successes"], 0);
         assert_eq!(health["backends"][0]["last_status"], 200);
         assert!(health["backends"][0]["last_latency_ms"].is_number());
 
@@ -991,9 +1000,45 @@ mod tests {
         assert_eq!(health["backends"][0]["status"], "degraded");
         assert_eq!(health["backends"][0]["successes"], 0);
         assert_eq!(health["backends"][0]["failures"], 1);
+        assert_eq!(health["backends"][0]["traffic_failures"], 1);
+        assert_eq!(health["backends"][0]["probe_failures"], 0);
         assert_eq!(health["backends"][0]["consecutive_failures"], 1);
         assert_eq!(health["backends"][0]["last_status"], 502);
         assert!(health["backends"][0]["last_error_kind"].is_string());
+    }
+
+    #[tokio::test]
+    async fn active_health_probe_marks_backend_healthy() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let state = test_state_with_inspector_and_health(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+            HealthConfig {
+                active: true,
+                interval_ms: 25,
+                timeout_ms: 500,
+                path: "/v1/models".to_owned(),
+            },
+        );
+        let app = router(state);
+
+        wait_for_backend_health(&app, "healthy").await;
+        let health = json_body(
+            app.oneshot(inspector_get("/_onair/operator/health"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(health["backends"][0]["probe_successes"].as_u64().unwrap() >= 1);
+        assert_eq!(health["backends"][0]["traffic_successes"], 0);
+        assert_eq!(health["backends"][0]["last_source"], "probe");
+
+        backend.abort();
     }
 
     #[tokio::test]
@@ -1119,12 +1164,22 @@ mod tests {
         backends: Vec<ResolvedBackend>,
         inspector: InspectorConfig,
     ) -> Arc<AppState> {
+        test_state_with_inspector_and_health(strategy, backends, inspector, HealthConfig::default())
+    }
+
+    fn test_state_with_inspector_and_health(
+        strategy: RoutingStrategy,
+        backends: Vec<ResolvedBackend>,
+        inspector: InspectorConfig,
+        health: HealthConfig,
+    ) -> Arc<AppState> {
         test_state_with_config_and_inspector(
             strategy,
             backends,
             btree_set([PUBLIC_MODEL]),
             DebugCaptureConfig::default(),
             inspector,
+            health,
         )
     }
 
@@ -1153,6 +1208,7 @@ mod tests {
             client_models,
             debug_capture,
             InspectorConfig::default(),
+            HealthConfig::default(),
         )
     }
 
@@ -1162,6 +1218,7 @@ mod tests {
         client_models: BTreeSet<String>,
         debug_capture: DebugCaptureConfig,
         inspector: InspectorConfig,
+        health: HealthConfig,
     ) -> Arc<AppState> {
         Arc::new(
             AppState::new(
@@ -1170,6 +1227,7 @@ mod tests {
                     telemetry: TelemetryConfig::default(),
                     debug_capture,
                     inspector,
+                    health,
                     routing: RoutingConfig { strategy },
                     clients: vec![ResolvedClient {
                         id: "dev".to_owned(),
@@ -1291,6 +1349,7 @@ mod tests {
                 hits: Arc::new(AtomicUsize::new(0)),
             };
             let app = Router::new()
+                .route("/v1/models", get(backend_models))
                 .route("/v1/responses", post(backend_responses))
                 .with_state(state.clone());
             let handle = tokio::spawn(async move {
@@ -1340,5 +1399,31 @@ mod tests {
                 "output_tokens": 3
             }
         }))
+    }
+
+    async fn backend_models() -> Json<Value> {
+        Json(json!({
+            "object": "list",
+            "data": []
+        }))
+    }
+
+    async fn wait_for_backend_health(app: &Router, status: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let response = app
+                    .clone()
+                    .oneshot(inspector_get("/_onair/operator/health"))
+                    .await
+                    .unwrap();
+                let health = json_body(response).await;
+                if health["backends"][0]["status"] == status {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for backend health '{status}'"));
     }
 }

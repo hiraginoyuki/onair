@@ -17,16 +17,7 @@ impl BackendHealthStore {
     }
 
     pub(crate) fn record_success(&self, backend: &str, latency: Duration, status: u16) {
-        let observed_at_unix_ms = unix_millis();
-        let mut records = self.inner.lock().expect("backend health lock poisoned");
-        let record = records.entry(backend.to_owned()).or_default();
-        record.successes += 1;
-        record.consecutive_failures = 0;
-        record.last_success_unix_ms = Some(observed_at_unix_ms);
-        record.last_observed_unix_ms = Some(observed_at_unix_ms);
-        record.last_status = Some(status);
-        record.last_error_kind = None;
-        record.last_latency_ms = Some(duration_millis(latency));
+        self.record_success_with_source(backend, latency, status, ObservationSource::Traffic);
     }
 
     pub(crate) fn record_failure(
@@ -36,16 +27,80 @@ impl BackendHealthStore {
         status: u16,
         error_kind: &'static str,
     ) {
+        self.record_failure_with_source(
+            backend,
+            latency,
+            status,
+            error_kind,
+            ObservationSource::Traffic,
+        );
+    }
+
+    pub(crate) fn record_probe_success(&self, backend: &str, latency: Duration, status: u16) {
+        self.record_success_with_source(backend, latency, status, ObservationSource::Probe);
+    }
+
+    pub(crate) fn record_probe_failure(
+        &self,
+        backend: &str,
+        latency: Duration,
+        status: u16,
+        error_kind: &'static str,
+    ) {
+        self.record_failure_with_source(
+            backend,
+            latency,
+            status,
+            error_kind,
+            ObservationSource::Probe,
+        );
+    }
+
+    fn record_success_with_source(
+        &self,
+        backend: &str,
+        latency: Duration,
+        status: u16,
+        source: ObservationSource,
+    ) {
         let observed_at_unix_ms = unix_millis();
         let mut records = self.inner.lock().expect("backend health lock poisoned");
         let record = records.entry(backend.to_owned()).or_default();
-        record.failures += 1;
+        match source {
+            ObservationSource::Traffic => record.traffic_successes += 1,
+            ObservationSource::Probe => record.probe_successes += 1,
+        }
+        record.consecutive_failures = 0;
+        record.last_success_unix_ms = Some(observed_at_unix_ms);
+        record.last_observed_unix_ms = Some(observed_at_unix_ms);
+        record.last_status = Some(status);
+        record.last_error_kind = None;
+        record.last_latency_ms = Some(duration_millis(latency));
+        record.last_source = Some(source);
+    }
+
+    fn record_failure_with_source(
+        &self,
+        backend: &str,
+        latency: Duration,
+        status: u16,
+        error_kind: &'static str,
+        source: ObservationSource,
+    ) {
+        let observed_at_unix_ms = unix_millis();
+        let mut records = self.inner.lock().expect("backend health lock poisoned");
+        let record = records.entry(backend.to_owned()).or_default();
+        match source {
+            ObservationSource::Traffic => record.traffic_failures += 1,
+            ObservationSource::Probe => record.probe_failures += 1,
+        }
         record.consecutive_failures += 1;
         record.last_failure_unix_ms = Some(observed_at_unix_ms);
         record.last_observed_unix_ms = Some(observed_at_unix_ms);
         record.last_status = Some(status);
         record.last_error_kind = Some(error_kind.to_owned());
         record.last_latency_ms = Some(duration_millis(latency));
+        record.last_source = Some(source);
     }
 
     pub(crate) fn snapshot(&self, configured_backends: &[String]) -> Vec<BackendHealthSnapshot> {
@@ -57,8 +112,12 @@ impl BackendHealthStore {
                 BackendHealthSnapshot {
                     backend: backend.clone(),
                     status: record.status(),
-                    successes: record.successes,
-                    failures: record.failures,
+                    successes: record.successes(),
+                    failures: record.failures(),
+                    traffic_successes: record.traffic_successes,
+                    traffic_failures: record.traffic_failures,
+                    probe_successes: record.probe_successes,
+                    probe_failures: record.probe_failures,
                     consecutive_failures: record.consecutive_failures,
                     last_success_unix_ms: record.last_success_unix_ms,
                     last_failure_unix_ms: record.last_failure_unix_ms,
@@ -66,6 +125,7 @@ impl BackendHealthStore {
                     last_status: record.last_status,
                     last_error_kind: record.last_error_kind,
                     last_latency_ms: record.last_latency_ms,
+                    last_source: record.last_source.map(ObservationSource::as_str),
                 }
             })
             .collect()
@@ -74,8 +134,10 @@ impl BackendHealthStore {
 
 #[derive(Debug, Clone, Default)]
 struct BackendHealthRecord {
-    successes: u64,
-    failures: u64,
+    traffic_successes: u64,
+    traffic_failures: u64,
+    probe_successes: u64,
+    probe_failures: u64,
     consecutive_failures: u64,
     last_success_unix_ms: Option<u64>,
     last_failure_unix_ms: Option<u64>,
@@ -83,9 +145,18 @@ struct BackendHealthRecord {
     last_status: Option<u16>,
     last_error_kind: Option<String>,
     last_latency_ms: Option<u64>,
+    last_source: Option<ObservationSource>,
 }
 
 impl BackendHealthRecord {
+    fn successes(&self) -> u64 {
+        self.traffic_successes + self.probe_successes
+    }
+
+    fn failures(&self) -> u64 {
+        self.traffic_failures + self.probe_failures
+    }
+
     fn status(&self) -> &'static str {
         if self.last_observed_unix_ms.is_none() {
             "unknown"
@@ -99,12 +170,31 @@ impl BackendHealthRecord {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ObservationSource {
+    Traffic,
+    Probe,
+}
+
+impl ObservationSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Traffic => "traffic",
+            Self::Probe => "probe",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct BackendHealthSnapshot {
     pub(crate) backend: String,
     pub(crate) status: &'static str,
     pub(crate) successes: u64,
     pub(crate) failures: u64,
+    pub(crate) traffic_successes: u64,
+    pub(crate) traffic_failures: u64,
+    pub(crate) probe_successes: u64,
+    pub(crate) probe_failures: u64,
     pub(crate) consecutive_failures: u64,
     pub(crate) last_success_unix_ms: Option<u64>,
     pub(crate) last_failure_unix_ms: Option<u64>,
@@ -112,6 +202,7 @@ pub(crate) struct BackendHealthSnapshot {
     pub(crate) last_status: Option<u16>,
     pub(crate) last_error_kind: Option<String>,
     pub(crate) last_latency_ms: Option<u64>,
+    pub(crate) last_source: Option<&'static str>,
 }
 
 fn unix_millis() -> u64 {
