@@ -258,6 +258,7 @@
     "use strict";
 
     const base = "/_onair/inspector";
+    const snapshotLimit = 1000;
     const rows = document.getElementById("rows");
     const empty = document.getElementById("empty");
     const detail = document.getElementById("detail");
@@ -496,7 +497,7 @@
     }
 
     async function reload() {
-      const response = await fetch(`${base}/requests`, { cache: "no-store" });
+      const response = await fetch(`${base}/requests?limit=${snapshotLimit}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`reload failed: HTTP ${response.status}`);
       const list = await response.json();
       records.clear();
@@ -507,7 +508,7 @@
 
     function connect() {
       if (source) source.close();
-      source = new EventSource(`${base}/events`);
+      source = new EventSource(`${base}/events?snapshot_limit=${snapshotLimit}`);
       source.addEventListener("open", () => setStatus("live", "live"));
       source.addEventListener("snapshot", event => upsert(JSON.parse(event.data)));
       source.addEventListener("request", event => upsert(JSON.parse(event.data)));

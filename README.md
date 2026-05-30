@@ -263,9 +263,9 @@ allow_remote = false
 Endpoints:
 
 - `GET /_onair/inspector`: information-dense browser UI with a live request table, detail pane, and per-request timeline bars.
-- `GET /_onair/inspector/requests`: JSON list of retained records, newest first.
+- `GET /_onair/inspector/requests`: JSON list of retained records, newest first. Use `?limit=<n>` to cap the response; onair clamps the limit to `1..=10000` and defaults to `1000`.
 - `GET /_onair/inspector/requests/{record_id}`: JSON detail for one retained record.
-- `GET /_onair/inspector/events`: server-sent events for low-latency live updates. The UI uses this endpoint and normally reflects completed request records as soon as onair records them.
+- `GET /_onair/inspector/events`: server-sent events for low-latency live updates. Use `?snapshot_limit=<n>` to cap the initial replay; the UI defaults this to `1000`.
 
 Each retained record includes route, identity, public/backend model IDs, backend ID/target, backend remote socket when available, immediate/effective client address, trusted proxy details, user agent, body sizes, response status, OpenAI-compatible usage counters when present, and a timeline snapshot. Timeline fields use a wall-clock `started_at_unix_ms` plus monotonic microsecond offsets for proxy/auth/routing/rewrite/backend/response milestones.
 

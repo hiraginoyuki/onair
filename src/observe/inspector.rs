@@ -64,14 +64,14 @@ impl InspectorStore {
         let _ = self.inner.events.send(record);
     }
 
-    pub(crate) fn records(&self) -> Vec<InspectorRequestRecord> {
-        self.inner
+    pub(crate) fn records_limited(&self, limit: usize) -> Vec<InspectorRequestRecord> {
+        let records = self
+            .inner
             .records
             .lock()
-            .expect("inspector store lock poisoned")
-            .iter()
-            .cloned()
-            .collect()
+            .expect("inspector store lock poisoned");
+        let skip = records.len().saturating_sub(limit.max(1));
+        records.iter().skip(skip).cloned().collect()
     }
 
     pub(crate) fn get(&self, record_id: &str) -> Option<InspectorRequestRecord> {
@@ -282,7 +282,7 @@ mod tests {
     fn disabled_store_does_not_record() {
         let store = InspectorStore::new();
         store.record(false, 10, test_record("one"));
-        assert!(store.records().is_empty());
+        assert!(store.records_limited(usize::MAX).is_empty());
     }
 
     #[test]
@@ -292,7 +292,7 @@ mod tests {
         store.record(true, 2, test_record("two"));
         store.record(true, 2, test_record("three"));
 
-        let records = store.records();
+        let records = store.records_limited(usize::MAX);
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].base.record_id, "two");
         assert_eq!(records[1].base.record_id, "three");

@@ -14,6 +14,7 @@ use axum::{Json, Router};
 use reqwest::Client;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, warn};
+use url::form_urlencoded;
 
 use crate::auth::authenticate;
 use crate::config::{Config, ConfigStore};
@@ -22,6 +23,9 @@ use crate::metrics::{MetricLabels, Metrics, RequestTimer};
 use crate::observe::{InspectorRequestRecord, InspectorStore, inspector};
 use crate::openai;
 use crate::proxy;
+
+const DEFAULT_INSPECTOR_SNAPSHOT_LIMIT: usize = 1_000;
+const MAX_INSPECTOR_SNAPSHOT_LIMIT: usize = 10_000;
 
 pub struct AppState {
     pub config: ConfigStore,
@@ -286,7 +290,8 @@ async fn inspector_requests(
         return response;
     }
 
-    let mut records = state.inspector.records();
+    let limit = inspector_limit(&request, &["limit"]);
+    let mut records = state.inspector.records_limited(limit);
     records.reverse();
     let mut response = Json(records).into_response();
     add_inspector_headers(&mut response);
@@ -322,8 +327,9 @@ async fn inspector_events(
         return response;
     }
 
+    let snapshot_limit = inspector_limit(&request, &["snapshot_limit", "limit"]);
     let mut receiver = state.inspector.subscribe();
-    let snapshot = state.inspector.records();
+    let snapshot = state.inspector.records_limited(snapshot_limit);
     let stream = async_stream::stream! {
         for record in snapshot {
             yield Ok::<_, Infallible>(inspector_sse_event("snapshot", record));
@@ -357,6 +363,21 @@ async fn inspector_events(
 fn inspector_sse_event(event_name: &'static str, record: InspectorRequestRecord) -> Event {
     let data = serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_owned());
     Event::default().event(event_name).data(data)
+}
+
+fn inspector_limit(request: &Request<Body>, names: &[&str]) -> usize {
+    let requested = request.uri().query().and_then(|query| {
+        form_urlencoded::parse(query.as_bytes()).find_map(|(key, value)| {
+            names
+                .contains(&key.as_ref())
+                .then(|| value.parse::<usize>().ok())
+                .flatten()
+        })
+    });
+
+    requested
+        .unwrap_or(DEFAULT_INSPECTOR_SNAPSHOT_LIMIT)
+        .clamp(1, MAX_INSPECTOR_SNAPSHOT_LIMIT)
 }
 
 fn inspector_gate(state: &AppState, request: &Request<Body>) -> Option<Response<Body>> {
@@ -686,6 +707,49 @@ mod tests {
         let detail = json_body(response).await;
         assert_eq!(detail["record_id"], record_id);
         assert_eq!(detail["debug_capture_id"], serde_json::Value::Null);
+
+        backend.abort();
+    }
+
+    #[tokio::test]
+    async fn inspector_request_list_limits_to_latest_records() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let state = test_state_with_inspector(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+        );
+        let app = router(state);
+
+        for marker in ["first", "second"] {
+            let response = app
+                .clone()
+                .oneshot(json_request(
+                    &format!("/v1/responses?marker={marker}"),
+                    json!({
+                        "model": PUBLIC_MODEL,
+                        "input": marker
+                    }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let _ = json_body(response).await;
+        }
+
+        let response = app
+            .oneshot(inspector_get("/_onair/inspector/requests?limit=1"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        let requests = body.as_array().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["query"], "marker=second");
 
         backend.abort();
     }
