@@ -1,0 +1,279 @@
+use std::collections::BTreeMap;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
+
+use crate::config::{
+    Config, DebugCaptureConfig, InspectorConfig, ResolvedBackend, ResolvedClient, RoutingStrategy,
+    ServerConfig, TelemetryConfig, TelemetryExporter,
+};
+
+#[derive(Debug, Serialize)]
+pub(crate) struct OperatorRuntimeSnapshot {
+    pub(crate) now_unix_ms: u64,
+    pub(crate) started_at_unix_ms: u64,
+    pub(crate) uptime_ms: u64,
+    pub(crate) clients: usize,
+    pub(crate) backends: usize,
+    pub(crate) public_models: usize,
+    pub(crate) inspector_retained_requests: usize,
+    pub(crate) telemetry: TelemetrySnapshot,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct OperatorConfigSnapshot {
+    pub(crate) server: ServerSnapshot,
+    pub(crate) telemetry: TelemetrySnapshot,
+    pub(crate) debug_capture: DebugCaptureSnapshot,
+    pub(crate) inspector: InspectorSnapshot,
+    pub(crate) routing: RoutingSnapshot,
+    pub(crate) clients: Vec<ClientSnapshot>,
+    pub(crate) backends: Vec<BackendSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct OperatorModelsSnapshot {
+    pub(crate) public_models: Vec<PublicModelSnapshot>,
+    pub(crate) clients: Vec<ClientSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ServerSnapshot {
+    pub(crate) bind: String,
+    pub(crate) request_body_limit_bytes: usize,
+    pub(crate) trusted_proxy_cidrs: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct TelemetrySnapshot {
+    pub(crate) service_name: String,
+    pub(crate) exporter: &'static str,
+    pub(crate) otlp_endpoint_configured: bool,
+    pub(crate) export_interval_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DebugCaptureSnapshot {
+    pub(crate) enabled: bool,
+    pub(crate) directory: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct InspectorSnapshot {
+    pub(crate) enabled: bool,
+    pub(crate) retention_requests: usize,
+    pub(crate) allow_remote: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RoutingSnapshot {
+    pub(crate) strategy: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ClientSnapshot {
+    pub(crate) id: String,
+    pub(crate) models: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct BackendSnapshot {
+    pub(crate) id: String,
+    pub(crate) base_url: String,
+    pub(crate) api_key_configured: bool,
+    pub(crate) timeout_ms: u64,
+    pub(crate) capabilities: Vec<String>,
+    pub(crate) models: Vec<BackendModelSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct BackendModelSnapshot {
+    pub(crate) public: String,
+    pub(crate) backend: String,
+    pub(crate) context_length: Option<u64>,
+    pub(crate) endpoints: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PublicModelSnapshot {
+    pub(crate) public: String,
+    pub(crate) context_length: Option<u64>,
+    pub(crate) clients: Vec<String>,
+    pub(crate) routes: Vec<ModelRouteSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ModelRouteSnapshot {
+    pub(crate) backend: String,
+    pub(crate) backend_model: String,
+    pub(crate) endpoints: Vec<String>,
+}
+
+pub(crate) fn runtime_snapshot(
+    config: &Config,
+    started_at_unix_ms: u64,
+    uptime: Duration,
+    inspector_retained_requests: usize,
+) -> OperatorRuntimeSnapshot {
+    OperatorRuntimeSnapshot {
+        now_unix_ms: unix_millis(),
+        started_at_unix_ms,
+        uptime_ms: duration_millis(uptime),
+        clients: config.clients.len(),
+        backends: config.backends.len(),
+        public_models: config.public_model_context_lengths().len(),
+        inspector_retained_requests,
+        telemetry: telemetry_snapshot(&config.telemetry),
+    }
+}
+
+pub(crate) fn config_snapshot(config: &Config) -> OperatorConfigSnapshot {
+    OperatorConfigSnapshot {
+        server: server_snapshot(&config.server),
+        telemetry: telemetry_snapshot(&config.telemetry),
+        debug_capture: debug_capture_snapshot(&config.debug_capture),
+        inspector: inspector_snapshot(&config.inspector),
+        routing: routing_snapshot(config.routing.strategy),
+        clients: clients_snapshot(&config.clients),
+        backends: config.backends.iter().map(backend_snapshot).collect(),
+    }
+}
+
+pub(crate) fn models_snapshot(config: &Config) -> OperatorModelsSnapshot {
+    let mut models = BTreeMap::<String, PublicModelSnapshot>::new();
+    for (public, context_length) in config.public_model_context_lengths() {
+        models.insert(
+            public.clone(),
+            PublicModelSnapshot {
+                public,
+                context_length,
+                clients: Vec::new(),
+                routes: Vec::new(),
+            },
+        );
+    }
+
+    for client in &config.clients {
+        for model in &client.models {
+            if let Some(public_model) = models.get_mut(model) {
+                public_model.clients.push(client.id.clone());
+            }
+        }
+    }
+
+    for backend in &config.backends {
+        for model in &backend.models {
+            if let Some(public_model) = models.get_mut(&model.public) {
+                public_model.routes.push(ModelRouteSnapshot {
+                    backend: backend.id.clone(),
+                    backend_model: model.backend.clone(),
+                    endpoints: sorted_strings(&model.endpoints),
+                });
+            }
+        }
+    }
+
+    OperatorModelsSnapshot {
+        public_models: models.into_values().collect(),
+        clients: clients_snapshot(&config.clients),
+    }
+}
+
+fn server_snapshot(config: &ServerConfig) -> ServerSnapshot {
+    ServerSnapshot {
+        bind: config.bind.to_string(),
+        request_body_limit_bytes: config.request_body_limit_bytes,
+        trusted_proxy_cidrs: config
+            .trusted_proxy_cidrs
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+    }
+}
+
+fn telemetry_snapshot(config: &TelemetryConfig) -> TelemetrySnapshot {
+    TelemetrySnapshot {
+        service_name: config.service_name.clone(),
+        exporter: telemetry_exporter(config.exporter),
+        otlp_endpoint_configured: config.otlp_endpoint.is_some(),
+        export_interval_ms: config.export_interval_ms,
+    }
+}
+
+fn debug_capture_snapshot(config: &DebugCaptureConfig) -> DebugCaptureSnapshot {
+    DebugCaptureSnapshot {
+        enabled: config.enabled,
+        directory: config.directory.display().to_string(),
+    }
+}
+
+fn inspector_snapshot(config: &InspectorConfig) -> InspectorSnapshot {
+    InspectorSnapshot {
+        enabled: config.enabled,
+        retention_requests: config.retention_requests,
+        allow_remote: config.allow_remote,
+    }
+}
+
+fn routing_snapshot(strategy: RoutingStrategy) -> RoutingSnapshot {
+    RoutingSnapshot {
+        strategy: match strategy {
+            RoutingStrategy::Priority => "priority",
+            RoutingStrategy::Sticky => "sticky",
+        },
+    }
+}
+
+fn clients_snapshot(clients: &[ResolvedClient]) -> Vec<ClientSnapshot> {
+    clients
+        .iter()
+        .map(|client| ClientSnapshot {
+            id: client.id.clone(),
+            models: sorted_strings(&client.models),
+        })
+        .collect()
+}
+
+fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
+    BackendSnapshot {
+        id: backend.id.clone(),
+        base_url: backend.base_url.clone(),
+        api_key_configured: backend.api_key.is_some(),
+        timeout_ms: duration_millis(backend.timeout),
+        capabilities: sorted_strings(&backend.capabilities),
+        models: backend
+            .models
+            .iter()
+            .map(|model| BackendModelSnapshot {
+                public: model.public.clone(),
+                backend: model.backend.clone(),
+                context_length: model.context_length,
+                endpoints: sorted_strings(&model.endpoints),
+            })
+            .collect(),
+    }
+}
+
+fn telemetry_exporter(exporter: TelemetryExporter) -> &'static str {
+    match exporter {
+        TelemetryExporter::None => "none",
+        TelemetryExporter::Otlp => "otlp",
+    }
+}
+
+fn sorted_strings(values: &std::collections::BTreeSet<String>) -> Vec<String> {
+    values.iter().cloned().collect()
+}
+
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}

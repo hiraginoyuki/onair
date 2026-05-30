@@ -74,6 +74,14 @@ impl InspectorStore {
         records.iter().skip(skip).cloned().collect()
     }
 
+    pub(crate) fn retained_len(&self) -> usize {
+        self.inner
+            .records
+            .lock()
+            .expect("inspector store lock poisoned")
+            .len()
+    }
+
     pub(crate) fn get(&self, record_id: &str) -> Option<InspectorRequestRecord> {
         self.inner
             .records

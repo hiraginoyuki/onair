@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, OriginalUri, Path, State};
@@ -22,6 +22,7 @@ use crate::error::{ApiError, Result};
 use crate::metrics::{MetricLabels, Metrics, RequestTimer};
 use crate::observe::{InspectorRequestRecord, InspectorStore, inspector};
 use crate::openai;
+use crate::operator;
 use crate::proxy;
 
 const DEFAULT_INSPECTOR_SNAPSHOT_LIMIT: usize = 1_000;
@@ -32,10 +33,14 @@ pub struct AppState {
     pub http: Client,
     pub inspector: InspectorStore,
     pub metrics: Metrics,
+    started: Instant,
+    started_at_unix_ms: u64,
 }
 
 impl AppState {
     pub fn new(config: Config, metrics: Metrics) -> Result<Self> {
+        let started = Instant::now();
+        let started_at_unix_ms = unix_millis();
         let http = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .pool_idle_timeout(std::time::Duration::from_secs(90))
@@ -45,7 +50,13 @@ impl AppState {
             http,
             inspector: InspectorStore::new(),
             metrics,
+            started,
+            started_at_unix_ms,
         })
+    }
+
+    fn uptime(&self) -> Duration {
+        self.started.elapsed()
     }
 }
 
@@ -62,6 +73,9 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/_onair/inspector/requests/{*request_id}",
             get(inspector_request),
         )
+        .route("/_onair/operator/config", get(operator_config))
+        .route("/_onair/operator/models", get(operator_models))
+        .route("/_onair/operator/runtime", get(operator_runtime))
         .route("/v1/models", get(models))
         .route("/v1/models/{*model}", get(model))
         .route("/v1/{*path}", any(v1_proxy))
@@ -263,7 +277,7 @@ async fn inspector_ui(
     State(state): State<Arc<AppState>>,
     request: Request<Body>,
 ) -> Response<Body> {
-    if let Some(response) = inspector_gate(&state, &request) {
+    if let Some(response) = local_operator_gate(&state, &request) {
         return response;
     }
 
@@ -286,7 +300,7 @@ async fn inspector_requests(
     State(state): State<Arc<AppState>>,
     request: Request<Body>,
 ) -> Response<Body> {
-    if let Some(response) = inspector_gate(&state, &request) {
+    if let Some(response) = local_operator_gate(&state, &request) {
         return response;
     }
 
@@ -303,7 +317,7 @@ async fn inspector_request(
     Path(request_id): Path<String>,
     request: Request<Body>,
 ) -> Response<Body> {
-    if let Some(response) = inspector_gate(&state, &request) {
+    if let Some(response) = local_operator_gate(&state, &request) {
         return response;
     }
 
@@ -323,7 +337,7 @@ async fn inspector_events(
     State(state): State<Arc<AppState>>,
     request: Request<Body>,
 ) -> Response<Body> {
-    if let Some(response) = inspector_gate(&state, &request) {
+    if let Some(response) = local_operator_gate(&state, &request) {
         return response;
     }
 
@@ -380,7 +394,55 @@ fn inspector_limit(request: &Request<Body>, names: &[&str]) -> usize {
         .clamp(1, MAX_INSPECTOR_SNAPSHOT_LIMIT)
 }
 
-fn inspector_gate(state: &AppState, request: &Request<Body>) -> Option<Response<Body>> {
+async fn operator_runtime(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = local_operator_gate(&state, &request) {
+        return response;
+    }
+
+    let config = state.config.snapshot();
+    let mut response = Json(operator::runtime_snapshot(
+        &config,
+        state.started_at_unix_ms,
+        state.uptime(),
+        state.inspector.retained_len(),
+    ))
+    .into_response();
+    add_inspector_headers(&mut response);
+    response
+}
+
+async fn operator_config(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = local_operator_gate(&state, &request) {
+        return response;
+    }
+
+    let config = state.config.snapshot();
+    let mut response = Json(operator::config_snapshot(&config)).into_response();
+    add_inspector_headers(&mut response);
+    response
+}
+
+async fn operator_models(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = local_operator_gate(&state, &request) {
+        return response;
+    }
+
+    let config = state.config.snapshot();
+    let mut response = Json(operator::models_snapshot(&config)).into_response();
+    add_inspector_headers(&mut response);
+    response
+}
+
+fn local_operator_gate(state: &AppState, request: &Request<Body>) -> Option<Response<Body>> {
     let config = state.config.snapshot();
     if !config.inspector.enabled {
         return Some(inspector_not_found());
@@ -416,6 +478,15 @@ fn add_inspector_headers(response: &mut Response<Body>) {
         "x-content-type-options",
         "nosniff".parse().expect("static header is valid"),
     );
+}
+
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 async fn fallback(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response<Body> {
@@ -750,6 +821,63 @@ mod tests {
         let requests = body.as_array().unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["query"], "marker=second");
+
+        backend.abort();
+    }
+
+    #[tokio::test]
+    async fn operator_endpoints_return_sanitized_snapshots() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let mut backend_config = test_backend("backend-a", backend.base_url());
+        backend_config.api_key = Some("backend-secret".to_owned());
+        let state = test_state_with_inspector(
+            RoutingStrategy::Sticky,
+            vec![backend_config],
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+        );
+        let app = router(state);
+
+        let config_response = app
+            .clone()
+            .oneshot(inspector_get("/_onair/operator/config"))
+            .await
+            .unwrap();
+        assert_eq!(config_response.status(), StatusCode::OK);
+        let config_body = json_body(config_response).await;
+        let config_text = config_body.to_string();
+        assert!(!config_text.contains(CLIENT_KEY));
+        assert!(!config_text.contains("backend-secret"));
+        assert_eq!(config_body["routing"]["strategy"], "sticky");
+        assert_eq!(config_body["clients"][0]["id"], "dev");
+        assert_eq!(config_body["backends"][0]["api_key_configured"], true);
+
+        let models_response = app
+            .clone()
+            .oneshot(inspector_get("/_onair/operator/models"))
+            .await
+            .unwrap();
+        assert_eq!(models_response.status(), StatusCode::OK);
+        let models_body = json_body(models_response).await;
+        assert_eq!(models_body["public_models"][0]["public"], PUBLIC_MODEL);
+        assert_eq!(
+            models_body["public_models"][0]["routes"][0]["backend_model"],
+            BACKEND_MODEL
+        );
+
+        let runtime_response = app
+            .oneshot(inspector_get("/_onair/operator/runtime"))
+            .await
+            .unwrap();
+        assert_eq!(runtime_response.status(), StatusCode::OK);
+        let runtime_body = json_body(runtime_response).await;
+        assert_eq!(runtime_body["clients"], 1);
+        assert_eq!(runtime_body["backends"], 1);
+        assert_eq!(runtime_body["public_models"], 1);
+        assert!(runtime_body["uptime_ms"].is_number());
 
         backend.abort();
     }

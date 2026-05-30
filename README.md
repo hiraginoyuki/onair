@@ -268,11 +268,18 @@ Endpoints:
 - `GET /_onair/inspector/events`: server-sent events for low-latency live updates. Use `?snapshot_limit=<n>` to cap the initial replay; the UI defaults this to `1000`.
 - The UI updates the URL hash to the selected `record_id`, so a request detail view can be bookmarked or shared locally.
 
+Read-only operator endpoints use the same `[inspector]` enablement and loopback/`allow_remote` gate:
+
+- `GET /_onair/operator/runtime`: process uptime, current time, retained inspector record count, route object counts, and telemetry exporter status.
+- `GET /_onair/operator/config`: sanitized active config. Client and backend API keys are never returned; backends expose only whether an API key is configured.
+- `GET /_onair/operator/models`: effective public model visibility per client plus configured backend routes for each public model.
+
 Each retained record includes route, identity, public/backend model IDs, backend ID/target, backend remote socket when available, immediate/effective client address, trusted proxy details, user agent, body sizes, response status, OpenAI-compatible usage counters when present, and a timeline snapshot. Timeline fields use a wall-clock `started_at_unix_ms` plus monotonic microsecond offsets for proxy/auth/routing/rewrite/backend/response milestones.
 
 Security guidance:
 
 - The inspector does not store prompt or completion bodies. It can still expose sensitive metadata such as model names, client IDs, source addresses, user agents, query strings, request sizes, token counts, and debug capture IDs.
+- Operator endpoints can expose backend IDs, backend URLs, backend model IDs, model visibility policy, and local filesystem paths such as `debug_capture.directory`.
 - With `allow_remote = false`, inspector endpoints are only served to loopback peers. This is the default and is appropriate for `bind = "127.0.0.1:8080"` plus a browser on the same host.
 - Set `allow_remote = true` only if the onair bind address is protected by another access-control layer, such as SSH tunneling, a private VPN, or a trusted reverse proxy with its own authentication.
 - Inspector data is memory-only and disappears on process restart. Increase `retention_requests` only as much as needed; config loading rejects values above `100000` to avoid accidental unbounded memory growth.
