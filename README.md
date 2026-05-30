@@ -45,6 +45,11 @@ exporter = "none" # or "otlp"
 otlp_endpoint = "http://127.0.0.1:4317"
 export_interval_ms = 30000
 
+[debug_capture]
+# Dangerous: captures exact prompt/request bodies to local files. Enable only while reproducing.
+enabled = false
+directory = "onair-debug-captures"
+
 [routing]
 # "priority" chooses the first matching backend. "sticky" hashes identity/path/model/prompt_cache_key
 # across all matching backends, improving prompt-cache locality when several backends serve a model.
@@ -75,7 +80,7 @@ endpoints = ["chat", "responses"]
 
 onair interprets the file as routing and visibility policy:
 
-- `[server]` and `[telemetry]` configure process-level behavior.
+- `[server]`, `[telemetry]`, and `[debug_capture]` configure process-level behavior.
 - `[access].default_models` grants public models to every configured client.
 - Each `[[client]]` adds one authenticated identity and may extend that identity's model whitelist.
 - Each `[[backend]]` defines one upstream OpenAI-compatible service plus capability markers that decide which `/v1/*` request families it can receive.
@@ -88,7 +93,7 @@ onair watches the config file's parent directory and reloads the config when the
 
 Reloaded immediately:
 
-- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`, `[routing]`, backend auth, model mappings, capabilities, timeouts, and context metadata.
+- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`, `[routing]`, `[debug_capture]`, backend auth, model mappings, capabilities, timeouts, context metadata, and debug capture settings.
 
 Restart required:
 
@@ -203,6 +208,30 @@ Metric instruments:
 - `onair.tokens`: counter labeled by `direction=input|cached_input|output` when backend responses include OpenAI-compatible usage data such as `prompt_tokens`, `completion_tokens`, `input_tokens`, `output_tokens`, or `cached_tokens`.
 
 Prompt and response bodies are not logged by onair.
+
+## Debug Capture
+
+`[debug_capture]` is a default-off troubleshooting path for cases where exact request bytes are needed. It is not controlled by `RUST_LOG`, and enabling it writes prompt and request bodies to disk.
+
+```toml
+[debug_capture]
+enabled = true
+directory = "onair-debug-captures"
+```
+
+For each successfully routed upstream attempt, onair creates one private capture directory containing:
+
+- `inbound.body`: the exact body received from the client before model rewriting.
+- `upstream.body`: the exact body sent to the backend after model rewriting.
+- `metadata.json`: route, identity, public/backend model IDs, path/query metadata, body sizes, status/outcome, and capture file names.
+
+Security guidance:
+
+- Enable debug capture only while reproducing a trusted local issue, then disable it and delete the directory.
+- Captures can include prompts, tool inputs, uploaded file bytes, personal data, credentials sent in bodies, and sensitive query parameters.
+- The default `onair-debug-captures` directory is ignored by this repository, but custom directories are not automatically protected from commits, backups, or sharing.
+- `debug_capture.directory` may be relative to the current working directory or absolute, but it must not contain `..` path components.
+- onair logs a `warn` event for every captured request so accidental enablement is visible.
 
 ## Logging
 

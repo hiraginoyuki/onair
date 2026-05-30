@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
+use crate::debug_capture;
 use crate::error::{Error, Result};
 
 const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -27,6 +28,8 @@ pub struct ConfigFile {
     #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
+    pub debug_capture: DebugCaptureConfig,
+    #[serde(default)]
     pub routing: RoutingConfig,
     #[serde(default)]
     pub access: AccessConfig,
@@ -40,6 +43,7 @@ pub struct ConfigFile {
 pub struct Config {
     pub server: ServerConfig,
     pub telemetry: TelemetryConfig,
+    pub debug_capture: DebugCaptureConfig,
     pub routing: RoutingConfig,
     pub clients: Vec<ResolvedClient>,
     pub backends: Vec<ResolvedBackend>,
@@ -225,6 +229,22 @@ pub enum TelemetryExporter {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct DebugCaptureConfig {
+    pub enabled: bool,
+    pub directory: PathBuf,
+}
+
+impl Default for DebugCaptureConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: PathBuf::from("onair-debug-captures"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct RoutingConfig {
     pub strategy: RoutingStrategy,
 }
@@ -363,6 +383,8 @@ impl Config {
     }
 
     fn resolve(file: ConfigFile) -> Result<Self> {
+        debug_capture::validate_config(&file.debug_capture)?;
+
         let mut client_ids = BTreeSet::new();
         let mut clients = Vec::with_capacity(file.clients.len());
         for client in file.clients {
@@ -457,6 +479,7 @@ impl Config {
         Ok(Self {
             server: file.server,
             telemetry: file.telemetry,
+            debug_capture: file.debug_capture,
             routing: file.routing,
             clients,
             backends,
@@ -759,6 +782,70 @@ mod tests {
         assert!(query_error.contains("must not contain a query string or fragment"));
     }
 
+    #[test]
+    fn debug_capture_config_resolves_when_enabled() {
+        let config = parse_config(
+            r#"
+            [debug_capture]
+            enabled = true
+            directory = "onair-debug-captures"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+
+        assert!(config.debug_capture.enabled);
+        assert_eq!(
+            config.debug_capture.directory,
+            PathBuf::from("onair-debug-captures")
+        );
+    }
+
+    #[test]
+    fn debug_capture_rejects_parent_directory_components() {
+        let file = toml::from_str(
+            r#"
+            [debug_capture]
+            enabled = true
+            directory = "../captures"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        )
+        .unwrap();
+        let error = resolve_error(file);
+
+        assert!(error.contains("must not contain '..' components"));
+    }
+
     #[tokio::test]
     async fn watcher_reloads_config_after_file_changes() {
         let path = temp_config_path("watch");
@@ -793,7 +880,6 @@ mod tests {
         drop(watcher);
         let _ = std::fs::remove_file(path);
     }
-
     #[test]
     fn reload_keeps_previous_config_when_new_config_is_invalid() {
         let path = temp_config_path("reload");

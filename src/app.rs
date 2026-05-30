@@ -280,8 +280,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        Config, ModelRoute, ResolvedBackend, ResolvedClient, RoutingConfig, RoutingStrategy,
-        ServerConfig, TelemetryConfig,
+        Config, DebugCaptureConfig, ModelRoute, ResolvedBackend, ResolvedClient, RoutingConfig,
+        RoutingStrategy, ServerConfig, TelemetryConfig,
     };
 
     const CLIENT_KEY: &str = "sk-test";
@@ -421,6 +421,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn debug_capture_writes_inbound_and_upstream_request_bodies() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let capture_dir = temp_capture_dir("request-bodies");
+        let state = test_state_with_debug_capture(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+            DebugCaptureConfig {
+                enabled: true,
+                directory: capture_dir.clone(),
+            },
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/responses?metadata=keep",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "long context goes here"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = json_body(response).await;
+
+        let capture_path = only_capture_path(&capture_dir);
+        let inbound_body: Value =
+            serde_json::from_slice(&std::fs::read(capture_path.join("inbound.body")).unwrap())
+                .unwrap();
+        let upstream_body: Value =
+            serde_json::from_slice(&std::fs::read(capture_path.join("upstream.body")).unwrap())
+                .unwrap();
+        let metadata: Value =
+            serde_json::from_slice(&std::fs::read(capture_path.join("metadata.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(inbound_body["model"], PUBLIC_MODEL);
+        assert_eq!(upstream_body["model"], BACKEND_MODEL);
+        assert_eq!(metadata["identity"], "dev");
+        assert_eq!(metadata["route"], "responses");
+        assert_eq!(metadata["backend"], "backend-a");
+        assert_eq!(metadata["client_query"], "metadata=keep");
+        assert_eq!(metadata["outcome"]["kind"], "success");
+        assert_eq!(metadata["outcome"]["upstream_status"], 200);
+
+        backend.abort();
+        std::fs::remove_dir_all(capture_dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn models_respect_context_length_output_policy() {
         let state = test_state_with_client_models(
             RoutingStrategy::Priority,
@@ -507,16 +559,39 @@ mod tests {
         test_state_with_client_models(strategy, backends, btree_set([PUBLIC_MODEL]))
     }
 
+    fn test_state_with_debug_capture(
+        strategy: RoutingStrategy,
+        backends: Vec<ResolvedBackend>,
+        debug_capture: DebugCaptureConfig,
+    ) -> Arc<AppState> {
+        test_state_with_config(strategy, backends, btree_set([PUBLIC_MODEL]), debug_capture)
+    }
+
     fn test_state_with_client_models(
         strategy: RoutingStrategy,
         backends: Vec<ResolvedBackend>,
         client_models: BTreeSet<String>,
+    ) -> Arc<AppState> {
+        test_state_with_config(
+            strategy,
+            backends,
+            client_models,
+            DebugCaptureConfig::default(),
+        )
+    }
+
+    fn test_state_with_config(
+        strategy: RoutingStrategy,
+        backends: Vec<ResolvedBackend>,
+        client_models: BTreeSet<String>,
+        debug_capture: DebugCaptureConfig,
     ) -> Arc<AppState> {
         Arc::new(
             AppState::new(
                 Config {
                     server: ServerConfig::default(),
                     telemetry: TelemetryConfig::default(),
+                    debug_capture,
                     routing: RoutingConfig { strategy },
                     clients: vec![ResolvedClient {
                         id: "dev".to_owned(),
@@ -573,6 +648,26 @@ mod tests {
 
     fn btree_set<const N: usize>(values: [&str; N]) -> BTreeSet<String> {
         values.into_iter().map(str::to_owned).collect()
+    }
+
+    fn temp_capture_dir(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "onair-debug-capture-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    fn only_capture_path(capture_dir: &std::path::Path) -> std::path::PathBuf {
+        let entries = std::fs::read_dir(capture_dir)
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        entries[0].path()
     }
 
     #[derive(Clone)]

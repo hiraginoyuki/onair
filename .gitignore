@@ -1,5 +1,6 @@
 /target
 onair.toml
+/onair-debug-captures
 
 # Local environment files
 .env

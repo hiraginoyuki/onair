@@ -9,6 +9,11 @@ exporter = "none"
 # otlp_endpoint = "http://127.0.0.1:4317"
 export_interval_ms = 30000
 
+[debug_capture]
+# Dangerous: captures exact prompt/request bodies to local files. Enable only while reproducing.
+enabled = false
+directory = "onair-debug-captures"
+
 [routing]
 # Use "sticky" when multiple matching backends should share load while preserving prompt-cache affinity.
 strategy = "priority"

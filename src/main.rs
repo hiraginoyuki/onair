@@ -1,6 +1,7 @@
 mod app;
 mod auth;
 mod config;
+mod debug_capture;
 mod error;
 mod metrics;
 mod openai;

@@ -13,6 +13,8 @@ use tracing::{Instrument, debug, info_span, warn};
 
 use crate::app::AppState;
 use crate::auth::authenticate;
+use crate::config::DebugCaptureConfig;
+use crate::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
 use crate::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
 use crate::openai::{self, SseNormalizer, UsageTotals};
@@ -147,6 +149,8 @@ pub async fn proxy_v1(
     let context = ProxyContext {
         state,
         client_headers: headers,
+        debug_capture_config: config.debug_capture.clone(),
+        debug_capture: None,
         route,
         labels,
         model_log_fields,
@@ -168,6 +172,8 @@ struct ProxyRequest {
 struct ProxyContext {
     state: Arc<AppState>,
     client_headers: HeaderMap,
+    debug_capture_config: DebugCaptureConfig,
+    debug_capture: Option<RequestCapture>,
     route: SelectedRoute,
     labels: MetricLabels,
     model_log_fields: ModelLogFields,
@@ -176,7 +182,7 @@ struct ProxyContext {
 }
 
 async fn do_proxy(
-    context: ProxyContext,
+    mut context: ProxyContext,
     request: ProxyRequest,
 ) -> Result<Response<Body>, ApiError> {
     let ProxyRequest {
@@ -193,11 +199,40 @@ async fn do_proxy(
         content_type.as_deref(),
         context.route.backend_model.as_deref(),
     );
-    let upstream_url = upstream_url(
-        &context.route.base_url,
-        &request_path,
+    let upstream_path = upstream_path(&request_path).to_owned();
+    let upstream_query = openai::rewrite_query_model(
         request_query.as_deref(),
         context.route.backend_model.as_deref(),
+    )
+    .filter(|query| !query.is_empty());
+    let upstream_url = upstream_url(
+        &context.route.base_url,
+        &upstream_path,
+        upstream_query.as_deref(),
+    );
+
+    let request_id = context
+        .client_headers
+        .get(X_REQUEST_ID)
+        .and_then(header_str_value)
+        .map(str::to_owned);
+    context.debug_capture = debug_capture::capture_request(
+        &context.debug_capture_config,
+        CaptureRequest {
+            method: &method,
+            client_path: &request_path,
+            client_query: request_query.as_deref(),
+            upstream_path: &upstream_path,
+            upstream_query: upstream_query.as_deref(),
+            content_type: content_type.as_deref(),
+            request_id: request_id.as_deref(),
+            labels: &context.labels,
+            requested_model: &context.model_log_fields.requested,
+            public_model: &context.model_log_fields.public,
+            backend_model: &context.model_log_fields.backend,
+            inbound_body: &body,
+            upstream_body: &outbound_body,
+        },
     );
 
     let mut request = context
@@ -240,18 +275,27 @@ async fn do_proxy(
                 StatusCode::GATEWAY_TIMEOUT.as_u16(),
                 context.request_timer.elapsed(),
             );
+            if let Some(capture) = &mut context.debug_capture {
+                capture.record_outcome(CaptureOutcome::UpstreamTimeout {
+                    client_status: StatusCode::GATEWAY_TIMEOUT.as_u16(),
+                });
+            }
             return Err(ApiError::timeout());
         }
         Err(error) => {
-            warn!(
-                error_kind = upstream_error_kind(&error),
-                "upstream request failed"
-            );
+            let error_kind = upstream_error_kind(&error);
+            warn!(error_kind = error_kind, "upstream request failed");
             context.state.metrics.record_request(
                 &context.labels,
                 StatusCode::BAD_GATEWAY.as_u16(),
                 context.request_timer.elapsed(),
             );
+            if let Some(capture) = &mut context.debug_capture {
+                capture.record_outcome(CaptureOutcome::UpstreamRequestFailed {
+                    client_status: StatusCode::BAD_GATEWAY.as_u16(),
+                    error_kind,
+                });
+            }
             return Err(ApiError::upstream(StatusCode::BAD_GATEWAY));
         }
     };
@@ -276,6 +320,12 @@ async fn do_proxy(
             api_error.status.as_u16(),
             context.request_timer.elapsed(),
         );
+        if let Some(capture) = &mut context.debug_capture {
+            capture.record_outcome(CaptureOutcome::UpstreamNonSuccess {
+                upstream_status: upstream_status.as_u16(),
+                client_status: api_error.status.as_u16(),
+            });
+        }
         return Err(api_error);
     }
 
@@ -294,6 +344,8 @@ async fn buffered_response(
     let ProxyContext {
         state,
         client_headers,
+        debug_capture_config: _,
+        mut debug_capture,
         route,
         labels,
         model_log_fields,
@@ -304,15 +356,19 @@ async fn buffered_response(
     let upstream_headers = upstream.headers().clone();
     let content_type = header_str(&upstream_headers, &CONTENT_TYPE).map(str::to_owned);
     let bytes = upstream.bytes().await.map_err(|error| {
-        warn!(
-            error_kind = upstream_error_kind(&error),
-            "failed to read upstream body"
-        );
+        let error_kind = upstream_error_kind(&error);
+        warn!(error_kind = error_kind, "failed to read upstream body");
         state.metrics.record_request(
             &labels,
             StatusCode::BAD_GATEWAY.as_u16(),
             request_timer.elapsed(),
         );
+        if let Some(capture) = &mut debug_capture {
+            capture.record_outcome(CaptureOutcome::UpstreamBodyReadFailed {
+                client_status: StatusCode::BAD_GATEWAY.as_u16(),
+                error_kind,
+            });
+        }
         ApiError::upstream(StatusCode::BAD_GATEWAY)
     })?;
 
@@ -338,6 +394,11 @@ async fn buffered_response(
         request_body_bytes,
         "buffered response completed"
     );
+    if let Some(capture) = &mut debug_capture {
+        capture.record_outcome(CaptureOutcome::Success {
+            upstream_status: upstream_status.as_u16(),
+        });
+    }
 
     response_builder(
         upstream_status,
@@ -354,6 +415,8 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
     let ProxyContext {
         state,
         client_headers,
+        debug_capture_config: _,
+        debug_capture,
         route,
         labels,
         model_log_fields,
@@ -374,6 +437,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         upstream_status.as_u16(),
         model_log_fields.clone(),
         request_body_bytes,
+        debug_capture,
     );
     debug!(
         upstream_status = upstream_status.as_u16(),
@@ -437,18 +501,11 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
     .expect("stream response builder is valid")
 }
 
-fn upstream_url(
-    base_url: &str,
-    path: &str,
-    query: Option<&str>,
-    backend_model: Option<&str>,
-) -> String {
-    let mut upstream_url = format!("{}{}", base_url, upstream_path(path));
-    if let Some(query) = openai::rewrite_query_model(query, backend_model)
-        && !query.is_empty()
-    {
+fn upstream_url(base_url: &str, path: &str, query: Option<&str>) -> String {
+    let mut upstream_url = format!("{base_url}{path}");
+    if let Some(query) = query {
         upstream_url.push('?');
-        upstream_url.push_str(&query);
+        upstream_url.push_str(query);
     }
     upstream_url
 }
@@ -522,6 +579,10 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &HeaderName) -> Option<&'a str> 
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
+fn header_str_value(value: &HeaderValue) -> Option<&str> {
+    value.to_str().ok()
+}
+
 fn valid_header_value(value: &HeaderValue) -> Option<&HeaderValue> {
     value.to_str().ok()?;
     Some(value)
@@ -589,6 +650,7 @@ struct StreamMetrics {
     status_code: u16,
     model_log_fields: ModelLogFields,
     request_body_bytes: usize,
+    debug_capture: Option<RequestCapture>,
     started: Instant,
     usage: UsageTotals,
 }
@@ -600,6 +662,7 @@ impl StreamMetrics {
         status_code: u16,
         model_log_fields: ModelLogFields,
         request_body_bytes: usize,
+        debug_capture: Option<RequestCapture>,
     ) -> Self {
         Self {
             metrics,
@@ -607,6 +670,7 @@ impl StreamMetrics {
             status_code,
             model_log_fields,
             request_body_bytes,
+            debug_capture,
             started: Instant::now(),
             usage: UsageTotals::default(),
         }
@@ -639,6 +703,15 @@ impl Drop for StreamMetrics {
             output_tokens = self.usage.output,
             "streaming response completed"
         );
+        if let Some(capture) = &mut self.debug_capture {
+            capture.record_outcome(CaptureOutcome::StreamCompleted {
+                upstream_status: self.status_code,
+                stream_duration_ms: duration.as_millis(),
+                input_tokens: self.usage.input,
+                cached_input_tokens: self.usage.cached_input,
+                output_tokens: self.usage.output,
+            });
+        }
         self.metrics
             .record_stream(&self.labels, self.status_code, duration);
     }
