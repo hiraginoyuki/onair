@@ -44,7 +44,7 @@ default_models = ["gpt-4o-mini"]
 [[client]]
 id = "dev"
 # API keys are exact-match bearer tokens. See README.md for the recommended key shape.
-api_key = "sk-ona-AAAAC3NzaC1lZDI1NTE5AAAAIaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+api_key = "replace-with-generated-onair-client-key"
 models = ["gpt-4o"]
 
 [[backend]]

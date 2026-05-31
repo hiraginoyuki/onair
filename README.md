@@ -207,13 +207,13 @@ capabilities = ["all", "streaming"]
 Clients authenticate with OpenAI-style bearer tokens:
 
 ```http
-Authorization: Bearer sk-ona-AAAAC3NzaC1lZDI1NTE5AAAAI...
+Authorization: Bearer <generated-onair-client-key>
 ```
 
 The recommended onair key shape is:
 
 ```text
-sk-ona-AAAAC3NzaC1lZDI1NTE5AAAAI<43 base64url characters>
+sk-ona-<fixed-ed25519-style-prefix><43 base64url characters>
 ```
 
 The fixed `AAAAC3NzaC1lZDI1NTE5AAAAI` prefix mimics the start of the SSH `ssh-ed25519` public-key wire blob: length-prefixed algorithm name plus the length prefix for a 32-byte public key. The 43-character suffix should encode 32 random bytes using unpadded base64url, matching the random portion length of an Ed25519 public key blob. That gives `2^256` possible suffix values, approximately `1.16e77`, before accounting for any generator mistakes or operational leakage.
@@ -223,7 +223,7 @@ Example generator:
 ```sh
 python3 - <<'PY'
 import base64, secrets
-prefix = "sk-ona-AAAAC3NzaC1lZDI1NTE5AAAAI"
+prefix = "sk-ona-" + "AAAAC3NzaC1lZDI1NTE5AAAAI"
 suffix = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
 print(prefix + suffix)
 PY
