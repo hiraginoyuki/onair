@@ -89,6 +89,16 @@
     button {
       cursor: pointer;
     }
+    button.active {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .quick-filters {
+      justify-content: flex-end;
+    }
+    .quick-label {
+      color: var(--muted);
+    }
     .columns {
       position: relative;
     }
@@ -164,6 +174,18 @@
       text-align: left;
       font-weight: 600;
     }
+    thead th.sorted {
+      color: var(--text);
+    }
+    .sort-button {
+      all: unset;
+      display: block;
+      width: 100%;
+      cursor: pointer;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     th, td {
       padding: 6px 8px;
       border-bottom: 1px solid rgba(39, 52, 73, 0.72);
@@ -183,6 +205,7 @@
     .c-status { width: 62px; }
     .c-ms { width: 70px; text-align: right; }
     .c-route { width: 110px; }
+    .c-identity { width: 92px; }
     .c-stream { width: 54px; }
     .status-code.ok { color: var(--good); }
     .status-code.warn { color: var(--warn); }
@@ -372,6 +395,7 @@
         </details>
         <button id="reload" type="button">reload</button>
       </div>
+      <div id="quickFilters" class="toolbar-row quick-filters" aria-label="quick filters"></div>
       <div id="filter-help" class="toolbar-help">Filter uses space-separated terms; every term must match route, identity, models, backend, client, user-agent, outcome, or attempt metadata.</div>
     </div>
   </header>
@@ -402,11 +426,14 @@
     const overview = document.getElementById("overview");
     const detail = document.getElementById("detail");
     const filter = document.getElementById("filter");
+    const quickFiltersElement = document.getElementById("quickFilters");
     const columnOptions = document.getElementById("columnOptions");
     const statusText = document.getElementById("status");
     const statusDot = document.getElementById("dot");
     const countText = document.getElementById("count");
-    const columnStorageKey = "onair.inspector.tableColumns.v1";
+    const columnStorageKey = "onair.inspector.tableColumns.v2";
+    const sortStorageKey = "onair.inspector.tableSort.v1";
+    const slowRequestThresholdUs = 5_000_000;
     const records = new Map();
     let operatorRuntime = null;
     let operatorConfig = null;
@@ -449,6 +476,7 @@
         headerClass: "c-time",
         defaultVisible: true,
         value: record => timeOf(record.started_at_unix_ms),
+        sortValue: record => Number(record.started_at_unix_ms || 0),
         title: record => new Date(record.started_at_unix_ms).toISOString(),
         help: "Request start time.",
       },
@@ -467,6 +495,7 @@
         headerClass: "c-ms",
         defaultVisible: true,
         value: record => ms(record.timeline && record.timeline.total_us),
+        sortValue: record => Number((record.timeline || {}).total_us || 0),
         className: "c-ms",
         title: record => `${ms(record.timeline && record.timeline.total_us)} ms`,
         help: "Total request time measured by onair.",
@@ -478,6 +507,14 @@
         defaultVisible: true,
         value: record => record.route,
         help: "OpenAI-compatible route family.",
+      },
+      {
+        key: "identity",
+        label: "identity",
+        headerClass: "c-identity",
+        defaultVisible: true,
+        value: record => record.identity,
+        help: "Authenticated onair client identity.",
       },
       {
         key: "model",
@@ -534,12 +571,6 @@
         label: "x-request-id",
         value: record => record.client_request_id,
         help: "Client-supplied X-Request-ID when present.",
-      },
-      {
-        key: "identity",
-        label: "identity",
-        value: record => record.identity,
-        help: "Authenticated onair client identity.",
       },
       {
         key: "path",
@@ -599,6 +630,7 @@
         key: "attempts",
         label: "attempts",
         value: record => attemptRecords(record).length || "",
+        sortValue: record => attemptRecords(record).length,
         help: "Number of backend attempts recorded for the request.",
       },
     ];
@@ -607,6 +639,29 @@
       .map(column => column.key);
     const validColumnKeys = new Set(tableColumns.map(column => column.key));
     const visibleColumns = new Set(loadVisibleColumns());
+    let sortState = loadSortState();
+    const quickFilters = new Set();
+
+    const quickFilterDefinitions = [
+      {
+        key: "error",
+        label: "errors",
+        title: "Show requests with status >= 400 or a non-completed outcome.",
+        matches: record => Number(record.status) >= 400 || outcomeText(record) !== "completed",
+      },
+      {
+        key: "fallback",
+        label: "fallback",
+        title: "Show requests with abandoned pre-response attempts or multiple backend attempts.",
+        matches: record => (record.retried_attempts || []).length > 0 || attemptRecords(record).length > 1,
+      },
+      {
+        key: "slow",
+        label: "slow ≥5s",
+        title: "Show requests whose total onair-observed time is at least 5 seconds.",
+        matches: record => Number((record.timeline || {}).total_us || 0) >= slowRequestThresholdUs,
+      },
+    ];
 
     function setStatus(text, className) {
       statusText.textContent = text;
@@ -709,6 +764,118 @@
       return tableColumns.filter(column => visibleColumns.has(column.key));
     }
 
+    function loadSortState() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(sortStorageKey));
+        if (
+          parsed
+          && validColumnKeys.has(parsed.key)
+          && (parsed.direction === "asc" || parsed.direction === "desc")
+        ) {
+          return parsed;
+        }
+      } catch {
+        // Sorting preferences are optional.
+      }
+      return { key: "time", direction: "desc" };
+    }
+
+    function saveSortState() {
+      try {
+        localStorage.setItem(sortStorageKey, JSON.stringify(sortState));
+      } catch {
+        // Sorting preferences are optional.
+      }
+    }
+
+    function sortColumn() {
+      return tableColumns.find(column => column.key === sortState.key) || tableColumns[0];
+    }
+
+    function sortValue(column, record) {
+      const value = column.sortValue ? column.sortValue(record) : column.value(record);
+      return value === null || value === undefined ? "" : value;
+    }
+
+    function compareValues(left, right) {
+      if (typeof left === "number" && typeof right === "number") {
+        return left - right;
+      }
+      return String(left).localeCompare(String(right), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    }
+
+    function sortRecords(list) {
+      const column = sortColumn();
+      const direction = sortState.direction === "desc" ? -1 : 1;
+      return list.sort((left, right) => {
+        const leftValue = sortValue(column, left);
+        const rightValue = sortValue(column, right);
+        const leftEmpty = leftValue === "";
+        const rightEmpty = rightValue === "";
+        if (leftEmpty || rightEmpty) {
+          if (leftEmpty !== rightEmpty) return leftEmpty ? 1 : -1;
+        }
+        const compared = compareValues(leftValue, rightValue);
+        if (compared !== 0) return compared * direction;
+        if (left.started_at_unix_ms !== right.started_at_unix_ms) {
+          return right.started_at_unix_ms - left.started_at_unix_ms;
+        }
+        return String(right.record_id).localeCompare(String(left.record_id));
+      });
+    }
+
+    function toggleSort(columnKey) {
+      if (sortState.key === columnKey) {
+        sortState = {
+          key: columnKey,
+          direction: sortState.direction === "asc" ? "desc" : "asc",
+        };
+      } else {
+        sortState = { key: columnKey, direction: "asc" };
+      }
+      saveSortState();
+      renderTableHeader();
+      renderRows();
+    }
+
+    function renderQuickFilters() {
+      quickFiltersElement.replaceChildren();
+      const label = document.createElement("span");
+      label.className = "quick-label";
+      label.textContent = "quick";
+      quickFiltersElement.appendChild(label);
+
+      for (const quickFilter of quickFilterDefinitions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = quickFilter.label;
+        button.title = quickFilter.title;
+        button.className = quickFilters.has(quickFilter.key) ? "active" : "";
+        button.addEventListener("click", () => {
+          if (quickFilters.has(quickFilter.key)) {
+            quickFilters.delete(quickFilter.key);
+          } else {
+            quickFilters.add(quickFilter.key);
+          }
+          renderQuickFilters();
+          renderRows();
+        });
+        quickFiltersElement.appendChild(button);
+      }
+    }
+
+    function matchesQuickFilters(record) {
+      for (const quickFilter of quickFilterDefinitions) {
+        if (quickFilters.has(quickFilter.key) && !quickFilter.matches(record)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     function renderColumnOptions() {
       columnOptions.replaceChildren();
       for (const column of tableColumns) {
@@ -741,9 +908,17 @@
       const tr = document.createElement("tr");
       for (const column of activeColumns()) {
         const th = document.createElement("th");
-        th.textContent = column.label;
-        th.title = column.help || column.label;
-        if (column.headerClass) th.className = column.headerClass;
+        const classes = [column.headerClass, sortState.key === column.key ? "sorted" : null]
+          .filter(Boolean)
+          .join(" ");
+        if (classes) th.className = classes;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "sort-button";
+        button.textContent = `${column.label}${sortState.key === column.key ? (sortState.direction === "asc" ? " ↑" : " ↓") : ""}`;
+        button.title = `${column.help || column.label} Click to sort.`;
+        button.addEventListener("click", () => toggleSort(column.key));
+        th.appendChild(button);
         tr.appendChild(th);
       }
       tableHead.replaceChildren(tr);
@@ -832,23 +1007,23 @@
 
     function recordList() {
       const tokens = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      const list = Array.from(records.values()).sort((a, b) => {
-        if (a.started_at_unix_ms !== b.started_at_unix_ms) return b.started_at_unix_ms - a.started_at_unix_ms;
-        return String(b.record_id).localeCompare(String(a.record_id));
-      });
-      return tokens.length
+      const list = Array.from(records.values());
+      const filtered = tokens.length
         ? list.filter(record => {
           const haystack = searchable(record);
           return tokens.every(token => haystack.includes(token));
         })
         : list;
+      return sortRecords(filtered.filter(matchesQuickFilters));
     }
 
     function renderRows() {
       const list = recordList();
       const columns = activeColumns();
       rows.replaceChildren();
-      countText.textContent = `${records.size} request${records.size === 1 ? "" : "s"}`;
+      countText.textContent = list.length === records.size
+        ? `${records.size} request${records.size === 1 ? "" : "s"}`
+        : `${list.length}/${records.size} requests`;
       empty.style.display = list.length ? "none" : "block";
 
       for (const record of list.slice(0, 1000)) {
@@ -1205,6 +1380,7 @@
       }
     });
 
+    renderQuickFilters();
     renderColumnOptions();
     renderTableHeader();
     renderOverview();

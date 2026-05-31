@@ -370,5 +370,8 @@ mod tests {
         assert!(UI_HTML.contains("waterfall-row"));
         assert!(UI_HTML.contains("Filter uses space-separated terms"));
         assert!(UI_HTML.contains("columnOptions"));
+        assert!(UI_HTML.contains("quickFilters"));
+        assert!(UI_HTML.contains("sortStorageKey"));
+        assert!(UI_HTML.contains("Authenticated onair client identity."));
     }
 }
