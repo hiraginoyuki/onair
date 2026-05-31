@@ -232,7 +232,7 @@ fn rewrite_responses_request_as_chat(
     {
         chat.insert("response_format".to_owned(), format.clone());
     }
-    if let Some(tools) = object.get("tools") {
+    if let Some(tools) = object.get("tools").filter(|value| !value.is_null()) {
         let tools = responses_tools_to_chat_tools(tools)?;
         if !tools.is_empty() {
             chat.insert("tools".to_owned(), Value::Array(tools));
@@ -259,10 +259,19 @@ fn responses_input_to_chat_messages(input: &Value) -> Result<Vec<Value>, Request
             "role": "user",
             "content": text,
         })]),
-        Value::Array(items) => items
-            .iter()
-            .map(responses_input_item_to_chat_message)
-            .collect::<Result<Vec<_>, _>>(),
+        Value::Array(items) => {
+            let mut messages = Vec::with_capacity(items.len());
+            for item in items {
+                if let Some(object) = item.as_object()
+                    && object.get("type").and_then(Value::as_str) == Some("function_call")
+                {
+                    append_responses_function_call_to_chat_messages(object, &mut messages)?;
+                    continue;
+                }
+                messages.push(responses_input_item_to_chat_message(item)?);
+            }
+            Ok(messages)
+        }
         _ => Err(RequestRewriteError::new(
             "input must be a string or an array.",
             Some("input"),
@@ -351,20 +360,9 @@ fn responses_content_to_chat(content: &Value) -> Result<Value, RequestRewriteErr
                             "text": text,
                         }));
                     }
-                    "input_image" => {
-                        let image_url = object.get("image_url").cloned().ok_or_else(|| {
-                            RequestRewriteError::new(
-                                "Responses image content parts require image_url.",
-                                Some("input"),
-                            )
-                        })?;
+                    "image_url" | "input_image" => {
                         text_only = false;
-                        chat_parts.push(json!({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": image_url,
-                            },
-                        }));
+                        chat_parts.push(responses_image_part_to_chat(object)?);
                     }
                     "refusal" => {
                         let refusal = object
@@ -390,7 +388,7 @@ fn responses_content_to_chat(content: &Value) -> Result<Value, RequestRewriteErr
                     .iter()
                     .filter_map(|part| part.get("text").and_then(Value::as_str))
                     .collect::<Vec<_>>()
-                    .join("\n");
+                    .join("");
                 Ok(Value::String(text))
             } else {
                 Ok(Value::Array(chat_parts))
@@ -400,7 +398,93 @@ fn responses_content_to_chat(content: &Value) -> Result<Value, RequestRewriteErr
     }
 }
 
+fn responses_image_part_to_chat(object: &Map<String, Value>) -> Result<Value, RequestRewriteError> {
+    let image_url = object
+        .get("image_url")
+        .or_else(|| object.get("url"))
+        .ok_or_else(|| {
+            RequestRewriteError::new(
+                "Responses image content parts require image_url or url.",
+                Some("input"),
+            )
+        })?;
+    let mut image_url = match image_url {
+        Value::String(url) => {
+            let mut image_url = Map::new();
+            image_url.insert("url".to_owned(), Value::String(url.to_owned()));
+            image_url
+        }
+        Value::Object(image_url) => image_url.clone(),
+        _ => {
+            return Err(RequestRewriteError::new(
+                "Responses image content image_url must be a string or object.",
+                Some("input"),
+            ));
+        }
+    };
+    if !image_url.contains_key("url")
+        && let Some(url) = object.get("url").and_then(Value::as_str)
+    {
+        image_url.insert("url".to_owned(), Value::String(url.to_owned()));
+    }
+    if let Some(detail) = object.get("detail")
+        && !image_url.contains_key("detail")
+    {
+        image_url.insert("detail".to_owned(), detail.clone());
+    }
+    if !image_url.contains_key("url") {
+        return Err(RequestRewriteError::new(
+            "Responses image content parts require an image URL.",
+            Some("input"),
+        ));
+    }
+    Ok(json!({
+        "type": "image_url",
+        "image_url": Value::Object(image_url),
+    }))
+}
+
 fn responses_function_call_to_chat_message(
+    object: &Map<String, Value>,
+) -> Result<Value, RequestRewriteError> {
+    let tool_call = responses_function_call_to_chat_tool_call(object)?;
+    Ok(json!({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [tool_call],
+    }))
+}
+
+fn append_responses_function_call_to_chat_messages(
+    object: &Map<String, Value>,
+    messages: &mut Vec<Value>,
+) -> Result<(), RequestRewriteError> {
+    let tool_call = responses_function_call_to_chat_tool_call(object)?;
+    if let Some(last_message) = messages.last_mut().and_then(Value::as_object_mut)
+        && last_message.get("role").and_then(Value::as_str) == Some("assistant")
+        && let Some(tool_calls) = last_message
+            .get_mut("tool_calls")
+            .and_then(Value::as_array_mut)
+    {
+        tool_calls.push(tool_call);
+        if last_message
+            .get("content")
+            .is_none_or(|content| content.is_null())
+        {
+            last_message.insert("content".to_owned(), Value::String(String::new()));
+        }
+        return Ok(());
+    }
+
+    messages.push(json!({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [tool_call],
+    }));
+    Ok(())
+}
+
+fn responses_function_call_to_chat_tool_call(
     object: &Map<String, Value>,
 ) -> Result<Value, RequestRewriteError> {
     let call_id = string_field(object, "call_id").ok_or_else(|| {
@@ -411,16 +495,12 @@ fn responses_function_call_to_chat_message(
     })?;
     let arguments = string_field(object, "arguments").unwrap_or_else(|| "{}".to_owned());
     Ok(json!({
-        "role": "assistant",
-        "content": Value::Null,
-        "tool_calls": [{
-            "id": call_id,
-            "type": "function",
-            "function": {
-                "name": name,
-                "arguments": arguments,
-            }
-        }],
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": arguments,
+        }
     }))
 }
 
@@ -1152,11 +1232,14 @@ impl ResponsesSseNormalizer {
                 .unwrap_or(self.tool_calls.len());
             let state = self.tool_calls.entry(index).or_default();
             if let Some(id) = tool_call.get("id").and_then(Value::as_str) {
-                state.call_id = Some(id.to_owned());
+                state.call_id.get_or_insert_with(|| id.to_owned());
             }
             if let Some(function) = tool_call.get("function").and_then(Value::as_object) {
                 if let Some(name) = function.get("name").and_then(Value::as_str) {
                     state.name = Some(name.to_owned());
+                }
+                if state.call_id.is_none() && state.name.is_some() {
+                    state.call_id = Some(format!("call_{index}"));
                 }
                 if !state.added
                     && let (Some(call_id), Some(name)) = (&state.call_id, &state.name)
@@ -1168,6 +1251,7 @@ impl ResponsesSseNormalizer {
                             "type": "response.output_item.added",
                             "output_index": index,
                             "item": {
+                                "id": call_id,
                                 "type": "function_call",
                                 "status": "in_progress",
                                 "call_id": call_id,
@@ -1180,12 +1264,20 @@ impl ResponsesSseNormalizer {
                 if let Some(arguments) = function.get("arguments").and_then(Value::as_str)
                     && !arguments.is_empty()
                 {
+                    if state.call_id.is_none() {
+                        state.call_id = Some(format!("call_{index}"));
+                    }
                     state.arguments.push_str(arguments);
+                    let call_id = state
+                        .call_id
+                        .clone()
+                        .unwrap_or_else(|| format!("call_{index}"));
                     output.extend(sse_event(
                         "response.function_call_arguments.delta",
                         json!({
                             "type": "response.function_call_arguments.delta",
-                            "item_id": state.call_id.clone().unwrap_or_else(|| format!("call_{index}")),
+                            "item_id": call_id,
+                            "call_id": call_id,
                             "output_index": index,
                             "delta": arguments,
                         }),
@@ -1249,10 +1341,25 @@ impl ResponsesSseNormalizer {
         }
 
         for (index, tool_call) in &self.tool_calls {
+            let call_id = tool_call
+                .call_id
+                .clone()
+                .unwrap_or_else(|| format!("call_{index}"));
+            output.extend(sse_event(
+                "response.function_call_arguments.done",
+                json!({
+                    "type": "response.function_call_arguments.done",
+                    "item_id": call_id,
+                    "call_id": call_id,
+                    "output_index": index,
+                    "arguments": tool_call.arguments,
+                }),
+            ));
             let item = json!({
+                "id": call_id,
                 "type": "function_call",
                 "status": "completed",
-                "call_id": tool_call.call_id.clone().unwrap_or_else(|| format!("call_{index}")),
+                "call_id": call_id,
                 "name": tool_call.name.clone().unwrap_or_else(|| "unknown".to_owned()),
                 "arguments": tool_call.arguments,
             });
@@ -1797,6 +1904,145 @@ mod tests {
     }
 
     #[test]
+    fn responses_request_ignores_null_tools_and_collapses_text_parts() {
+        let body = json!({
+            "model": "public-model",
+            "input": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Hi"},
+                    {"type": "text", "text": "!"}
+                ]
+            }],
+            "tools": null
+        });
+
+        let rewritten = rewrite_request_body_for_mode(
+            body.to_string().as_bytes(),
+            Some("application/json"),
+            Some("backend-model"),
+            RequestMode::ResponsesViaChatCompletions,
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+        assert_eq!(rewritten["messages"][0]["role"], "user");
+        assert_eq!(rewritten["messages"][0]["content"], "Hi!");
+        assert!(rewritten.get("tools").is_none());
+    }
+
+    #[test]
+    fn responses_request_converts_image_parts_to_chat_content() {
+        let body = json!({
+            "model": "public-model",
+            "input": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "look"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,AAAA",
+                        "detail": "low"
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,BBBB",
+                            "detail": "high"
+                        }
+                    }
+                ]
+            }]
+        });
+
+        let rewritten = rewrite_request_body_for_mode(
+            body.to_string().as_bytes(),
+            Some("application/json"),
+            Some("backend-model"),
+            RequestMode::ResponsesViaChatCompletions,
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+        let content = rewritten["messages"][0]["content"].as_array().unwrap();
+
+        assert_eq!(content[0], json!({"type": "text", "text": "look"}));
+        assert_eq!(
+            content[1],
+            json!({
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,AAAA",
+                    "detail": "low"
+                }
+            })
+        );
+        assert_eq!(
+            content[2],
+            json!({
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,BBBB",
+                    "detail": "high"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn responses_request_converts_function_call_items_to_tool_messages() {
+        let body = json!({
+            "model": "public-model",
+            "input": [
+                {"role": "user", "content": "What time is it?"},
+                {
+                    "type": "function_call",
+                    "call_id": "call_time",
+                    "name": "get_time",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_weather",
+                    "name": "get_weather",
+                    "arguments": "{\"city\":\"Tokyo\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_time",
+                    "output": "10:00 AM"
+                },
+                {"role": "user", "content": "Thanks!"}
+            ]
+        });
+
+        let rewritten = rewrite_request_body_for_mode(
+            body.to_string().as_bytes(),
+            Some("application/json"),
+            Some("backend-model"),
+            RequestMode::ResponsesViaChatCompletions,
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+        let messages = rewritten["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"], "");
+        assert_eq!(messages[1]["tool_calls"].as_array().unwrap().len(), 2);
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "call_time");
+        assert_eq!(
+            messages[1]["tool_calls"][1]["function"]["arguments"],
+            "{\"city\":\"Tokyo\"}"
+        );
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[2]["tool_call_id"], "call_time");
+        assert_eq!(messages[2]["content"], "10:00 AM");
+        assert_eq!(messages[3]["role"], "user");
+        assert_eq!(messages[3]["content"], "Thanks!");
+    }
+
+    #[test]
     fn chat_completion_response_converts_to_responses_shape() {
         let body = json!({
             "id": "chatcmpl-1",
@@ -1948,5 +2194,53 @@ mod tests {
         assert!(output.contains("event: response.completed"));
         assert!(output.contains("\"model\":\"public-model\""));
         assert!(output.contains("data: [DONE]"));
+    }
+
+    #[test]
+    fn chat_completion_stream_converts_tool_call_events_to_responses_events() {
+        let mut normalizer = ResponsesSseNormalizer::new(None, None);
+        let name_chunk = json!({
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 123,
+            "model": "public-model",
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": {"name": "get_time"}
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+        let arguments_chunk = json!({
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 123,
+            "model": "public-model",
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": {"arguments": "{\"timezone\":\"Asia/Tokyo\"}"}
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+
+        let mut output = normalizer.push(format!("data: {name_chunk}\n\n").as_bytes());
+        output.extend(normalizer.push(format!("data: {arguments_chunk}\n\n").as_bytes()));
+        output.extend(normalizer.push(b"data: [DONE]\n\n"));
+        let output = String::from_utf8(output).unwrap();
+
+        assert!(output.contains("event: response.output_item.added"));
+        assert!(output.contains("\"call_id\":\"call_0\""));
+        assert!(output.contains("\"name\":\"get_time\""));
+        assert!(output.contains("event: response.function_call_arguments.delta"));
+        assert!(output.contains("event: response.function_call_arguments.done"));
+        assert!(output.contains("\"arguments\":\"{\\\"timezone\\\":\\\"Asia/Tokyo\\\"}\""));
+        assert!(output.contains("event: response.completed"));
     }
 }
