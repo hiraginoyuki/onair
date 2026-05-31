@@ -839,7 +839,7 @@ mod tests {
             payload["tools"][0]["function"]["parameters"]["properties"]["timezone"]["type"],
             "string"
         );
-        assert_eq!(payload["tools"][0]["function"]["strict"], true);
+        assert!(payload["tools"][0]["function"].get("strict").is_none());
 
         backend.abort();
     }

@@ -583,9 +583,6 @@ fn responses_tools_to_chat_tools(tools: &Value) -> Result<Vec<Value>, RequestRew
         }
         let mut function = object.clone();
         function.remove("type");
-        function
-            .entry("strict".to_owned())
-            .or_insert(Value::Bool(true));
         chat_tools.push(json!({
             "type": "function",
             "function": Value::Object(function),
@@ -1893,7 +1890,7 @@ mod tests {
         assert_eq!(rewritten["stream"], true);
         assert_eq!(rewritten["tools"][0]["type"], "function");
         assert_eq!(rewritten["tools"][0]["function"]["name"], "lookup");
-        assert_eq!(rewritten["tools"][0]["function"]["strict"], true);
+        assert!(rewritten["tools"][0]["function"].get("strict").is_none());
         assert_eq!(
             rewritten["tool_choice"],
             json!({"type": "function", "function": {"name": "lookup"}})
@@ -1901,6 +1898,49 @@ mod tests {
         assert!(rewritten.get("input").is_none());
         assert!(rewritten.get("instructions").is_none());
         assert!(rewritten.get("max_output_tokens").is_none());
+    }
+
+    #[test]
+    fn responses_request_preserves_tool_strictness() {
+        let body = json!({
+            "model": "public-model",
+            "input": "hello",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "strict_lookup",
+                    "description": "strict tool",
+                    "strict": true,
+                    "parameters": {"type": "object"}
+                },
+                {
+                    "type": "function",
+                    "name": "loose_lookup",
+                    "description": "loose tool",
+                    "strict": false,
+                    "parameters": {"type": "object"}
+                },
+                {
+                    "type": "function",
+                    "name": "unspecified_lookup",
+                    "description": "unspecified strictness",
+                    "parameters": {"type": "object"}
+                }
+            ]
+        });
+
+        let rewritten = rewrite_request_body_for_mode(
+            body.to_string().as_bytes(),
+            Some("application/json"),
+            Some("backend-model"),
+            RequestMode::ResponsesViaChatCompletions,
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+        assert_eq!(rewritten["tools"][0]["function"]["strict"], true);
+        assert_eq!(rewritten["tools"][1]["function"]["strict"], false);
+        assert!(rewritten["tools"][2]["function"].get("strict").is_none());
     }
 
     #[test]
