@@ -378,6 +378,8 @@ mod tests {
         assert!(UI_HTML.contains("Save and restore local table views"));
         assert!(UI_HTML.contains("save view"));
         assert!(UI_HTML.contains("data-full"));
+        assert!(UI_HTML.contains("expand all"));
+        assert!(UI_HTML.contains("waterfall-row-body"));
         assert!(UI_HTML.contains("pause"));
     }
 }

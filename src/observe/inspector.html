@@ -384,10 +384,28 @@
       gap: 8px;
       padding: 10px;
     }
+    .waterfall-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 10px 10px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .waterfall-controls-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .waterfall-controls button,
+    .waterfall-toggle {
+      padding: 4px 8px;
+    }
     .waterfall-scale,
     .waterfall-row {
       display: grid;
-      grid-template-columns: 150px minmax(120px, 1fr);
+      grid-template-columns: 150px minmax(120px, 1fr) auto;
       gap: 8px;
       align-items: start;
     }
@@ -415,6 +433,9 @@
       color: var(--muted);
       font-size: 11px;
     }
+    .waterfall-toggle {
+      align-self: start;
+    }
     .waterfall-track {
       position: relative;
       height: 18px;
@@ -441,9 +462,23 @@
       background: var(--text);
       opacity: 0.72;
     }
-    .waterfall-events {
+    .waterfall-row-body {
       grid-column: 1 / -1;
-      padding-left: calc(150px + 8px);
+      display: none;
+      gap: 8px;
+      padding: 0 0 4px calc(150px + 8px);
+    }
+    .waterfall-row.expanded .waterfall-row-body {
+      display: grid;
+    }
+    .waterfall-row.expanded .waterfall-toggle {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .waterfall-kv {
+      grid-template-columns: 150px minmax(0, 1fr);
+    }
+    .waterfall-phase-list {
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
@@ -472,6 +507,9 @@
       input { width: 100%; }
       .toolbar-menu { position: static; }
       .menu-panel { left: 0; right: 0; min-width: auto; max-width: none; }
+      .waterfall-scale,
+      .waterfall-row { grid-template-columns: 1fr; }
+      .waterfall-row-body { padding-left: 0; }
       main { grid-template-columns: 1fr; }
       .detail { max-height: none; }
     }
@@ -541,6 +579,7 @@
     const slowRequestThresholdUs = 5_000_000;
     const records = new Map();
     const pendingRecords = new Map();
+    const expandedAttemptDetails = new Map();
     let operatorRuntime = null;
     let operatorConfig = null;
     let operatorModels = null;
@@ -1550,6 +1589,108 @@
       return Math.max(0, Math.min(100, value / total * 100));
     }
 
+    function phaseMs(value) {
+      if (value === null || value === undefined) return "";
+      return `${ms(value)} ms`;
+    }
+
+    function attemptDetailSet(record) {
+      let set = expandedAttemptDetails.get(record.record_id);
+      if (!set) {
+        set = new Set();
+        expandedAttemptDetails.set(record.record_id, set);
+      }
+      return set;
+    }
+
+    function attemptKey(attempt, index) {
+      return String(attempt.attempt || index + 1);
+    }
+
+    function attemptExpanded(record, attempt, index) {
+      const set = expandedAttemptDetails.get(record.record_id);
+      return set ? set.has(attemptKey(attempt, index)) : false;
+    }
+
+    function setAttemptExpanded(record, attempt, index, expanded) {
+      const key = attemptKey(attempt, index);
+      if (expanded) {
+        const set = attemptDetailSet(record);
+        set.add(key);
+      } else {
+        const set = expandedAttemptDetails.get(record.record_id);
+        if (!set) return;
+        set.delete(key);
+        if (!set.size) expandedAttemptDetails.delete(record.record_id);
+      }
+    }
+
+    function setAllAttemptsExpanded(record, attempts, expanded) {
+      if (expanded) {
+        const set = attemptDetailSet(record);
+        attempts.forEach((attempt, index) => set.add(attemptKey(attempt, index)));
+      } else {
+        expandedAttemptDetails.delete(record.record_id);
+      }
+      renderDetail(record);
+    }
+
+    function expandedAttemptCount(record, attempts) {
+      return attempts.reduce(
+        (count, attempt, index) => count + (attemptExpanded(record, attempt, index) ? 1 : 0),
+        0,
+      );
+    }
+
+    function attemptDetailPairs(attempt) {
+      return [
+        ["backend target", attempt.backend_target],
+        ["backend remote", attempt.backend_remote_addr],
+        ["status", attempt.status],
+        ["upstream status", attempt.upstream_status],
+        ["outcome", attempt.outcome],
+        ["error kind", attempt.error_kind],
+        ["elapsed", phaseMs(attempt.elapsed_us)],
+        ["debug capture id", attempt.debug_capture_id],
+        ["request rewrite", phaseMs(attempt.request_rewritten_us)],
+        ["debug capture", phaseMs(attempt.debug_capture_done_us)],
+        ["backend send start", phaseMs(attempt.backend_forward_start_us)],
+        ["upstream headers", phaseMs(attempt.backend_headers_received_us)],
+        ["first body chunk", phaseMs(attempt.backend_body_first_chunk_us)],
+        ["body complete", phaseMs(attempt.backend_body_complete_us)],
+        ["stream complete", phaseMs(attempt.stream_complete_us)],
+      ];
+    }
+
+    function attemptDetailGrid(attempt) {
+      const grid = document.createElement("div");
+      grid.className = "kv waterfall-kv";
+      for (const [key, value] of attemptDetailPairs(attempt)) {
+        const k = document.createElement("div");
+        k.className = "key";
+        k.textContent = key;
+        const v = document.createElement("div");
+        v.textContent = value === null || value === undefined || value === "" ? "none" : String(value);
+        grid.append(k, v);
+      }
+      return grid;
+    }
+
+    function attemptPhaseList(attempt) {
+      const phases = document.createElement("div");
+      phases.className = "waterfall-phase-list";
+      for (const [name, field] of attemptPhaseFields) {
+        const value = attempt[field];
+        if (value === null || value === undefined) continue;
+        const event = document.createElement("span");
+        event.className = "waterfall-event";
+        event.textContent = `${name} ${ms(value)} ms`;
+        event.title = `${name}: ${ms(value)} ms`;
+        phases.appendChild(event);
+      }
+      return phases;
+    }
+
     function attemptWaterfallCard(record) {
       const attempts = attemptRecords(record);
       if (!attempts.length) return null;
@@ -1562,6 +1703,25 @@
       card.className = "card";
       const heading = document.createElement("h2");
       heading.textContent = "attempt waterfall";
+      const controls = document.createElement("div");
+      controls.className = "waterfall-controls";
+      const expandedCount = expandedAttemptCount(record, attempts);
+      const controlsLabel = document.createElement("div");
+      controlsLabel.textContent = `${expandedCount}/${attempts.length} attempt detail${attempts.length === 1 ? "" : "s"} expanded`;
+      const controlActions = document.createElement("div");
+      controlActions.className = "waterfall-controls-actions";
+      const expandAll = document.createElement("button");
+      expandAll.type = "button";
+      expandAll.textContent = "expand all";
+      expandAll.title = "Show dense metadata and phase timings for every backend attempt.";
+      expandAll.addEventListener("click", () => setAllAttemptsExpanded(record, attempts, true));
+      const collapseAll = document.createElement("button");
+      collapseAll.type = "button";
+      collapseAll.textContent = "collapse all";
+      collapseAll.title = "Hide per-attempt detail panes and keep the waterfall compact.";
+      collapseAll.addEventListener("click", () => setAllAttemptsExpanded(record, attempts, false));
+      controlActions.append(expandAll, collapseAll);
+      controls.append(controlsLabel, controlActions);
       const list = document.createElement("div");
       list.className = "waterfall";
 
@@ -1579,11 +1739,13 @@
       scale.append(scaleLabel, axis);
       list.appendChild(scale);
 
-      for (const attempt of attempts) {
+      for (const [index, attempt] of attempts.entries()) {
         const started = Number(attempt.started_us || 0);
         const ended = Number(attempt.ended_us || started);
+        const isExpanded = attemptExpanded(record, attempt, index);
         const row = document.createElement("div");
         row.className = "waterfall-row";
+        if (isExpanded) row.classList.add("expanded");
 
         const label = document.createElement("div");
         label.className = "waterfall-label";
@@ -1612,8 +1774,6 @@
         ].filter(Boolean).join(" · ");
         track.appendChild(span);
 
-        const events = document.createElement("div");
-        events.className = "waterfall-events";
         for (const [name, field] of attemptPhaseFields) {
           const value = attempt[field];
           if (value === null || value === undefined) continue;
@@ -1622,18 +1782,31 @@
           marker.style.left = `${percent(Number(value), total)}%`;
           marker.title = `${name}: ${ms(value)} ms`;
           track.appendChild(marker);
-
-          const event = document.createElement("span");
-          event.className = "waterfall-event";
-          event.textContent = `${name} ${ms(value)} ms`;
-          events.appendChild(event);
         }
 
-        row.append(label, track, events);
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "waterfall-toggle";
+        toggle.textContent = isExpanded ? "hide details" : "details";
+        toggle.title = isExpanded
+          ? "Hide dense metadata and phase timings for this attempt."
+          : "Show dense metadata and phase timings for this attempt.";
+        toggle.addEventListener("click", () => {
+          setAttemptExpanded(record, attempt, index, !isExpanded);
+          renderDetail(record);
+        });
+
+        const body = document.createElement("div");
+        body.className = "waterfall-row-body";
+        const phaseList = attemptPhaseList(attempt);
+        body.appendChild(attemptDetailGrid(attempt));
+        if (phaseList.childElementCount) body.appendChild(phaseList);
+
+        row.append(label, track, toggle, body);
         list.appendChild(row);
       }
 
-      card.append(heading, list);
+      card.append(heading, controls, list);
       return card;
     }
 

@@ -275,7 +275,7 @@ allow_remote = false
 
 Endpoints:
 
-- `GET /_onair/inspector`: information-dense browser UI with a live request table, operator overview cards, backend-health cards, detail pane, per-request timeline bars, and backend-attempt waterfalls.
+- `GET /_onair/inspector`: information-dense browser UI with a live request table, operator overview cards, backend-health cards, detail pane, per-request timeline bars, and backend-attempt waterfalls with expandable per-attempt detail panes.
 - `GET /_onair/inspector/requests`: JSON list of retained records, newest first. Use `?limit=<n>` to cap the response; onair clamps the limit to `1..=10000` and defaults to `1000`.
 - `GET /_onair/inspector/requests/{record_id}`: JSON detail for one retained record.
 - `GET /_onair/inspector/events`: server-sent events for low-latency live updates. Use `?snapshot_limit=<n>` to cap the initial replay; the UI defaults this to `1000`.
@@ -291,7 +291,7 @@ Read-only operator endpoints use the same `[inspector]` enablement and effective
 
 Each retained record includes route, identity, public/backend model IDs, final backend ID/target, backend remote socket when available, immediate/effective client address, trusted proxy details, user agent, body sizes, response status, OpenAI-compatible usage counters when present, backend attempt records, retried pre-response attempts when fallback occurred, and a timeline snapshot. Timeline fields use a wall-clock `started_at_unix_ms` plus monotonic microsecond offsets for proxy/auth/routing/rewrite/backend/response milestones.
 
-`backend_attempts` is the structured source for the UI waterfall. It includes every upstream attempt, including the final successful or failed attempt. Each attempt records the selected backend, configured backend target, backend remote socket when available, client-facing status, upstream status when headers were received, outcome/error kind, elapsed timing, debug capture ID when applicable, and monotonic offsets for request rewrite, debug capture, backend send start, upstream headers, first body chunk, body completion, and stream completion when those phases occurred. `retried_attempts` is retained as a compatibility/summary field and only contains attempts that were abandoned before trying a fallback backend.
+`backend_attempts` is the structured source for the UI waterfall. It includes every upstream attempt, including the final successful or failed attempt. Each attempt records the selected backend, configured backend target, backend remote socket when available, client-facing status, upstream status when headers were received, outcome/error kind, elapsed timing, debug capture ID when applicable, and monotonic offsets for request rewrite, debug capture, backend send start, upstream headers, first body chunk, body completion, and stream completion when those phases occurred. The waterfall keeps attempt rows compact by default and provides expand/collapse controls for dense per-attempt metadata and phase timings. `retried_attempts` is retained as a compatibility/summary field and only contains attempts that were abandoned before trying a fallback backend.
 
 Security guidance:
 
