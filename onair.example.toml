@@ -21,6 +21,7 @@ directory = "onair-debug-captures"
 enabled = false
 retention_requests = 10000
 # Keep false unless the onair bind address is protected by another access-control layer.
+# When false, trusted forwarded headers must still resolve to a loopback effective client.
 allow_remote = false
 
 [health]

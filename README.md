@@ -275,14 +275,14 @@ allow_remote = false
 
 Endpoints:
 
-- `GET /_onair/inspector`: information-dense browser UI with a live request table, operator overview cards, passive backend-health cards, detail pane, per-request timeline bars, and backend-attempt waterfalls.
+- `GET /_onair/inspector`: information-dense browser UI with a live request table, operator overview cards, backend-health cards, detail pane, per-request timeline bars, and backend-attempt waterfalls.
 - `GET /_onair/inspector/requests`: JSON list of retained records, newest first. Use `?limit=<n>` to cap the response; onair clamps the limit to `1..=10000` and defaults to `1000`.
 - `GET /_onair/inspector/requests/{record_id}`: JSON detail for one retained record.
 - `GET /_onair/inspector/events`: server-sent events for low-latency live updates. Use `?snapshot_limit=<n>` to cap the initial replay; the UI defaults this to `1000`.
 - The UI updates the URL hash to the selected `record_id`, so a request detail view can be bookmarked or shared locally.
 - The request table includes a column chooser, and the filter input uses space-separated terms so every term must match the retained request metadata it searches.
 
-Read-only operator endpoints use the same `[inspector]` enablement and loopback/`allow_remote` gate:
+Read-only operator endpoints use the same `[inspector]` enablement and effective-client loopback/`allow_remote` gate:
 
 - `GET /_onair/operator/runtime`: process uptime, current time, retained inspector record count, route object counts, and telemetry exporter status.
 - `GET /_onair/operator/config`: sanitized active config. Client and backend API keys are never returned; backends expose only whether an API key is configured.
