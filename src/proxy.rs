@@ -10,6 +10,7 @@ use axum::http::header::{
 };
 use axum::http::{HeaderMap, Method, Response, StatusCode, Uri};
 use futures_util::{StreamExt, TryStreamExt};
+use tokio::sync::watch;
 use tracing::{Instrument, debug, info_span, warn};
 
 use crate::app::AppState;
@@ -279,6 +280,7 @@ pub async fn proxy_v1(
         content_type,
         stream: request_shape.stream,
     };
+    let shutdown = state.shutdown_receiver();
     let context = ProxyContext {
         state,
         client_headers: headers,
@@ -288,6 +290,7 @@ pub async fn proxy_v1(
         inspector_enabled: observation.inspector_enabled,
         inspector_retention_requests: observation.inspector_retention_requests,
         client_info,
+        shutdown,
         backend_target,
         backend_remote_addr: None,
         route,
@@ -326,6 +329,7 @@ struct ProxyContext {
     inspector_enabled: bool,
     inspector_retention_requests: usize,
     client_info: ClientInfo,
+    shutdown: watch::Receiver<bool>,
     backend_target: String,
     backend_remote_addr: Option<SocketAddr>,
     route: SelectedRoute,
@@ -826,6 +830,7 @@ async fn buffered_response(
         inspector_enabled,
         inspector_retention_requests,
         client_info,
+        shutdown: _,
         backend_target,
         backend_remote_addr,
         route,
@@ -1005,6 +1010,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         inspector_enabled,
         inspector_retention_requests,
         client_info,
+        mut shutdown,
         backend_target,
         backend_remote_addr,
         route,
@@ -1083,7 +1089,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
             } else {
                 EitherNormalizer::Native(SseNormalizer::new(backend_model, public_model))
             };
-            while let Some(chunk) = chunks.next().await {
+            while let Some(chunk) = next_stream_chunk(&mut chunks, &mut shutdown).await {
                 let chunk = match chunk {
                     Ok(chunk) => chunk,
                     Err(error) => {
@@ -1108,7 +1114,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
                 yield Bytes::from(tail);
             }
         } else {
-            while let Some(chunk) = chunks.next().await {
+            while let Some(chunk) = next_stream_chunk(&mut chunks, &mut shutdown).await {
                 let chunk = match chunk {
                     Ok(chunk) => chunk,
                     Err(error) => {
@@ -1169,6 +1175,30 @@ impl EitherNormalizer {
             Self::Native(normalizer) => normalizer.usage = UsageTotals::default(),
             Self::Responses(normalizer) => normalizer.usage = UsageTotals::default(),
         }
+    }
+}
+
+async fn next_stream_chunk<S>(
+    chunks: &mut S,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Option<std::result::Result<Bytes, reqwest::Error>>
+where
+    S: futures_util::Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin,
+{
+    if *shutdown.borrow() {
+        return None;
+    }
+
+    tokio::select! {
+        biased;
+        changed = shutdown.changed() => {
+            if changed.is_err() || *shutdown.borrow() {
+                None
+            } else {
+                chunks.next().await
+            }
+        }
+        chunk = chunks.next() => chunk,
     }
 }
 

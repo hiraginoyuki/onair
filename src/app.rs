@@ -13,6 +13,7 @@ use axum::routing::{any, get};
 use axum::{Json, Router};
 use reqwest::Client;
 use reqwest::redirect::Policy;
+use tokio::sync::watch;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, warn};
 use url::form_urlencoded;
@@ -38,13 +39,14 @@ pub struct AppState {
     pub health: BackendHealthStore,
     pub inspector: InspectorStore,
     pub metrics: Metrics,
+    shutdown: watch::Sender<bool>,
     _health_probe: HealthProbeTask,
     started: Instant,
     started_at_unix_ms: u64,
 }
 
 impl AppState {
-    pub fn new(config: Config, metrics: Metrics) -> Result<Self> {
+    pub fn new(config: Config, metrics: Metrics, shutdown: watch::Sender<bool>) -> Result<Self> {
         let started = Instant::now();
         let started_at_unix_ms = unix_millis();
         let config = ConfigStore::new(config);
@@ -61,6 +63,7 @@ impl AppState {
             health,
             inspector: InspectorStore::new(),
             metrics,
+            shutdown,
             _health_probe: health_probe,
             started,
             started_at_unix_ms,
@@ -69,6 +72,10 @@ impl AppState {
 
     fn uptime(&self) -> Duration {
         self.started.elapsed()
+    }
+
+    pub fn shutdown_receiver(&self) -> watch::Receiver<bool> {
+        self.shutdown.subscribe()
     }
 }
 
@@ -356,6 +363,7 @@ async fn inspector_events(
 
     let snapshot_limit = inspector_limit(&request, &["snapshot_limit", "limit"]);
     let mut receiver = state.inspector.subscribe();
+    let mut shutdown = state.shutdown_receiver();
     let snapshot = state.inspector.records_limited(snapshot_limit);
     let stream = async_stream::stream! {
         for record in snapshot {
@@ -363,15 +371,25 @@ async fn inspector_events(
         }
 
         loop {
-            match receiver.recv().await {
-                Ok(record) => yield Ok::<_, Infallible>(inspector_sse_event("request", record)),
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    let event = Event::default()
-                        .event("lagged")
-                        .data(skipped.to_string());
-                    yield Ok::<_, Infallible>(event);
+            tokio::select! {
+                biased;
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                message = receiver.recv() => {
+                    match message {
+                        Ok(record) => yield Ok::<_, Infallible>(inspector_sse_event("request", record)),
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            let event = Event::default()
+                                .event("lagged")
+                                .data(skipped.to_string());
+                            yield Ok::<_, Infallible>(event);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
             }
         }
     };
@@ -1545,6 +1563,7 @@ mod tests {
                     backends,
                 },
                 Metrics::new(),
+                watch::channel(false).0,
             )
             .unwrap(),
         )

@@ -15,6 +15,7 @@ use std::sync::Arc;
 use axum::Router;
 use clap::Parser;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -43,13 +44,14 @@ async fn main() -> Result<()> {
     let config = Config::load(&args.config)?;
     let telemetry_guard = TelemetryGuard::install(&config.telemetry)?;
     let metrics = Metrics::new();
+    let (shutdown_tx, _shutdown_rx) = watch::channel(false);
     let bind = config.server.bind;
-    let state = Arc::new(AppState::new(config, metrics)?);
+    let state = Arc::new(AppState::new(config, metrics, shutdown_tx.clone())?);
     let _config_watcher = ConfigWatcher::start(&args.config, state.config.clone())?;
     let app = build_router(state);
 
     info!(%bind, "starting onair router");
-    serve(bind, app).await?;
+    serve(bind, app, shutdown_tx).await?;
     telemetry_guard.shutdown();
     Ok(())
 }
@@ -58,18 +60,18 @@ fn build_router(state: Arc<AppState>) -> Router {
     app::router(state)
 }
 
-async fn serve(bind: SocketAddr, app: Router) -> Result<()> {
+async fn serve(bind: SocketAddr, app: Router, shutdown: watch::Sender<bool>) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(shutdown_signal(shutdown))
     .await?;
     Ok(())
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(shutdown: watch::Sender<bool>) {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
@@ -91,4 +93,5 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
+    let _ = shutdown.send(true);
 }
