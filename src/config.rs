@@ -367,6 +367,7 @@ pub struct BackendConfig {
     pub context_length: Option<u64>,
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
+    pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     #[serde(alias = "capability")]
     pub capabilities: BTreeSet<String>,
     #[serde(rename = "model")]
@@ -384,6 +385,7 @@ impl Default for BackendConfig {
             context_length: None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             capabilities: BTreeSet::new(),
             models: Vec::new(),
         }
@@ -406,6 +408,16 @@ pub enum ResponsesStorePolicy {
     ForceFalse,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesMaxOutputTokensPolicy {
+    #[default]
+    Preserve,
+    Drop,
+    RenameToMaxTokens,
+    RenameToMaxCompletionTokens,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelRouteConfig {
@@ -417,6 +429,8 @@ pub struct ModelRouteConfig {
     pub tool_schema_mode: Option<ToolSchemaMode>,
     #[serde(default)]
     pub responses_store: Option<ResponsesStorePolicy>,
+    #[serde(default)]
+    pub responses_max_output_tokens: Option<ResponsesMaxOutputTokensPolicy>,
     #[serde(default)]
     pub endpoints: BTreeSet<String>,
 }
@@ -450,6 +464,7 @@ pub struct ResolvedBackend {
     pub capabilities: BTreeSet<String>,
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
+    pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub models: Vec<ModelRoute>,
 }
 
@@ -460,6 +475,7 @@ pub struct ModelRoute {
     pub context_length: Option<u64>,
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
+    pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub endpoints: BTreeSet<String>,
 }
 
@@ -557,6 +573,9 @@ impl Config {
                             .tool_schema_mode
                             .unwrap_or(backend.tool_schema_mode),
                         responses_store: model.responses_store.unwrap_or(backend.responses_store),
+                        responses_max_output_tokens: model
+                            .responses_max_output_tokens
+                            .unwrap_or(backend.responses_max_output_tokens),
                         endpoints: model.endpoints,
                     })
                 })
@@ -569,6 +588,7 @@ impl Config {
                 capabilities: backend.capabilities,
                 tool_schema_mode: backend.tool_schema_mode,
                 responses_store: backend.responses_store,
+                responses_max_output_tokens: backend.responses_max_output_tokens,
                 models,
             });
         }
@@ -996,6 +1016,51 @@ mod tests {
         assert_eq!(
             backend.models[1].responses_store,
             ResponsesStorePolicy::Preserve
+        );
+    }
+
+    #[test]
+    fn responses_max_output_tokens_policy_can_be_set_per_backend_and_model() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-inherit", "public-override"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+            responses_max_output_tokens = "rename_to_max_tokens"
+
+            [[backend.model]]
+            public = "public-inherit"
+            backend = "private-inherit"
+            endpoints = ["responses"]
+
+            [[backend.model]]
+            public = "public-override"
+            backend = "private-override"
+            responses_max_output_tokens = "drop"
+            endpoints = ["responses"]
+            "#,
+        );
+
+        let backend = &config.backends[0];
+        assert_eq!(
+            backend.responses_max_output_tokens,
+            ResponsesMaxOutputTokensPolicy::RenameToMaxTokens
+        );
+        assert_eq!(
+            backend.models[0].responses_max_output_tokens,
+            ResponsesMaxOutputTokensPolicy::RenameToMaxTokens
+        );
+        assert_eq!(
+            backend.models[1].responses_max_output_tokens,
+            ResponsesMaxOutputTokensPolicy::Drop
         );
     }
 

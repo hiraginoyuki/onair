@@ -1,5 +1,28 @@
 use super::*;
 
+fn rewrite_request_body_for_mode_with_tool_schema_mode(
+    body: &[u8],
+    content_type: Option<&str>,
+    backend_model: Option<&str>,
+    path: &str,
+    request_mode: RequestMode,
+    tool_schema_mode: ToolSchemaMode,
+    responses_store: ResponsesStorePolicy,
+) -> Result<Vec<u8>, RequestRewriteError> {
+    rewrite_request_body_for_mode_with_policies(
+        body,
+        content_type,
+        backend_model,
+        path,
+        request_mode,
+        RequestRewritePolicies {
+            tool_schema_mode,
+            responses_store,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+        },
+    )
+}
+
 #[test]
 fn responses_request_converts_to_chat_completions() {
     let body = json!({
@@ -116,6 +139,97 @@ fn native_responses_store_policy_preserves_explicit_store_and_chat_requests() {
     .unwrap();
     let rewritten_chat: Value = serde_json::from_slice(&rewritten_chat).unwrap();
     assert!(rewritten_chat.get("store").is_none());
+}
+
+#[test]
+fn native_responses_can_rewrite_max_output_tokens_for_wrapper_quirks() {
+    let body = json!({
+        "model": "public-model",
+        "input": "hello",
+        "max_output_tokens": 32
+    });
+
+    let dropped = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/responses",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
+        },
+    )
+    .unwrap();
+    let dropped: Value = serde_json::from_slice(&dropped).unwrap();
+    assert!(dropped.get("max_output_tokens").is_none());
+    assert!(dropped.get("max_tokens").is_none());
+
+    let renamed = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/responses",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::RenameToMaxTokens,
+        },
+    )
+    .unwrap();
+    let renamed: Value = serde_json::from_slice(&renamed).unwrap();
+    assert!(renamed.get("max_output_tokens").is_none());
+    assert_eq!(renamed["max_tokens"], 32);
+}
+
+#[test]
+fn native_responses_max_output_tokens_policy_preserves_other_paths_and_existing_fields() {
+    let responses_body = json!({
+        "model": "public-model",
+        "input": "hello",
+        "max_output_tokens": 32,
+        "max_completion_tokens": 16
+    });
+    let rewritten_responses = rewrite_request_body_for_mode_with_policies(
+        responses_body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/responses",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens:
+                ResponsesMaxOutputTokensPolicy::RenameToMaxCompletionTokens,
+        },
+    )
+    .unwrap();
+    let rewritten_responses: Value = serde_json::from_slice(&rewritten_responses).unwrap();
+    assert!(rewritten_responses.get("max_output_tokens").is_none());
+    assert_eq!(rewritten_responses["max_completion_tokens"], 16);
+
+    let chat_body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_output_tokens": 32
+    });
+    let rewritten_chat = rewrite_request_body_for_mode_with_policies(
+        chat_body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
+        },
+    )
+    .unwrap();
+    let rewritten_chat: Value = serde_json::from_slice(&rewritten_chat).unwrap();
+    assert_eq!(rewritten_chat["max_output_tokens"], 32);
 }
 
 #[test]

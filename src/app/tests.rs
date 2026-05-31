@@ -17,8 +17,8 @@ use tower::ServiceExt;
 use super::*;
 use crate::config::{
     Config, DebugCaptureConfig, DebugCaptureMode, HealthConfig, InspectorConfig, ModelRoute,
-    ResolvedBackend, ResolvedClient, ResponsesStorePolicy, RoutingConfig, RoutingStrategy,
-    ServerConfig, TelemetryConfig, ToolSchemaMode,
+    ResolvedBackend, ResolvedClient, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy,
+    RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
 
 const CLIENT_KEY: &str = "sk-test";
@@ -243,6 +243,37 @@ async fn native_responses_route_can_force_store_false() {
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0]["model"], BACKEND_MODEL);
     assert_eq!(captured[0]["store"], false);
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn native_responses_route_can_drop_max_output_tokens() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let mut backend_config = test_backend("backend-a", backend.base_url());
+    backend_config.responses_max_output_tokens = ResponsesMaxOutputTokensPolicy::Drop;
+    backend_config.models[0].responses_max_output_tokens = ResponsesMaxOutputTokensPolicy::Drop;
+    let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({
+                "model": PUBLIC_MODEL,
+                "input": "hello",
+                "max_output_tokens": 16
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+    assert!(captured[0].get("max_output_tokens").is_none());
+    assert!(captured[0].get("max_tokens").is_none());
 
     backend.abort();
 }
@@ -1253,6 +1284,7 @@ async fn models_respect_context_length_output_policy() {
             capabilities: btree_set(["responses"]),
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             models: vec![
                 ModelRoute {
                     public: PUBLIC_MODEL.to_owned(),
@@ -1260,6 +1292,7 @@ async fn models_respect_context_length_output_policy() {
                     context_length: Some(131_072),
                     tool_schema_mode: ToolSchemaMode::Preserve,
                     responses_store: ResponsesStorePolicy::Preserve,
+                    responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
                     endpoints: btree_set(["responses"]),
                 },
                 ModelRoute {
@@ -1268,6 +1301,7 @@ async fn models_respect_context_length_output_policy() {
                     context_length: None,
                     tool_schema_mode: ToolSchemaMode::Preserve,
                     responses_store: ResponsesStorePolicy::Preserve,
+                    responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
                     endpoints: btree_set(["responses"]),
                 },
             ],
@@ -1458,12 +1492,14 @@ fn test_backend(id: &str, base_url: String) -> ResolvedBackend {
         capabilities: btree_set(["responses", "streaming"]),
         tool_schema_mode: ToolSchemaMode::Preserve,
         responses_store: ResponsesStorePolicy::Preserve,
+        responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
         models: vec![ModelRoute {
             public: PUBLIC_MODEL.to_owned(),
             backend: BACKEND_MODEL.to_owned(),
             context_length: None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             endpoints: btree_set(["responses"]),
         }],
     }
@@ -1478,12 +1514,14 @@ fn test_chat_backend(id: &str, base_url: String) -> ResolvedBackend {
         capabilities: btree_set(["chat", "streaming", "tools"]),
         tool_schema_mode: ToolSchemaMode::Preserve,
         responses_store: ResponsesStorePolicy::Preserve,
+        responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
         models: vec![ModelRoute {
             public: PUBLIC_MODEL.to_owned(),
             backend: BACKEND_MODEL.to_owned(),
             context_length: None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             endpoints: btree_set(["chat", "tools"]),
         }],
     }

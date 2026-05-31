@@ -581,14 +581,17 @@ async fn do_proxy(
             .state
             .metrics
             .record_backend_attempt(&context.labels);
-        let outbound_body = openai::rewrite_request_body_for_mode_with_tool_schema_mode(
+        let outbound_body = openai::rewrite_request_body_for_mode_with_policies(
             &body,
             content_type.as_deref(),
             context.route.backend_model.as_deref(),
             &upstream_path,
             context.route.request_mode,
-            context.route.tool_schema_mode,
-            context.route.responses_store,
+            openai::RequestRewritePolicies {
+                tool_schema_mode: context.route.tool_schema_mode,
+                responses_store: context.route.responses_store,
+                responses_max_output_tokens: context.route.responses_max_output_tokens,
+            },
         )
         .map_err(|error| ApiError::bad_request(error.message(), error.param()))?;
         attempt_record.request_rewritten_us =

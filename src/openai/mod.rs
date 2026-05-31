@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value, json};
 use url::form_urlencoded;
 
-use crate::config::{ResponsesStorePolicy, ToolSchemaMode};
+use crate::config::{ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode};
 
 mod models;
 
@@ -17,6 +17,13 @@ pub use models::{
 pub enum RequestMode {
     Native,
     ResponsesViaChatCompletions,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RequestRewritePolicies {
+    pub tool_schema_mode: ToolSchemaMode,
+    pub responses_store: ResponsesStorePolicy,
+    pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,21 +77,20 @@ pub fn inspect_request(
     shape
 }
 
-pub fn rewrite_request_body_for_mode_with_tool_schema_mode(
+pub fn rewrite_request_body_for_mode_with_policies(
     body: &[u8],
     content_type: Option<&str>,
     backend_model: Option<&str>,
     path: &str,
     request_mode: RequestMode,
-    tool_schema_mode: ToolSchemaMode,
-    responses_store: ResponsesStorePolicy,
+    policies: RequestRewritePolicies,
 ) -> Result<Vec<u8>, RequestRewriteError> {
     if request_mode == RequestMode::ResponsesViaChatCompletions {
         return rewrite_responses_request_as_chat(
             body,
             content_type,
             backend_model,
-            tool_schema_mode,
+            policies.tool_schema_mode,
         );
     }
 
@@ -97,8 +103,13 @@ pub fn rewrite_request_body_for_mode_with_tool_schema_mode(
 
     let native_responses = path.trim_end_matches('/') == "/v1/responses";
     if should_parse_json(content_type, body)
-        && let Some(rewritten) =
-            rewrite_json_request_body(body, backend_model, native_responses, responses_store)
+        && let Some(rewritten) = rewrite_json_request_body(
+            body,
+            backend_model,
+            native_responses,
+            policies.responses_store,
+            policies.responses_max_output_tokens,
+        )
     {
         return Ok(rewritten);
     }
@@ -1648,6 +1659,7 @@ fn rewrite_json_request_body(
     backend_model: &str,
     native_responses: bool,
     responses_store: ResponsesStorePolicy,
+    responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
 ) -> Option<Vec<u8>> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
     let object = value.as_object_mut()?;
@@ -1661,7 +1673,34 @@ fn rewrite_json_request_body(
     {
         object.insert("store".to_owned(), Value::Bool(false));
     }
+    if native_responses {
+        rewrite_native_responses_max_output_tokens(object, responses_max_output_tokens);
+    }
     serde_json::to_vec(&value).ok()
+}
+
+fn rewrite_native_responses_max_output_tokens(
+    object: &mut Map<String, Value>,
+    policy: ResponsesMaxOutputTokensPolicy,
+) {
+    match policy {
+        ResponsesMaxOutputTokensPolicy::Preserve => {}
+        ResponsesMaxOutputTokensPolicy::Drop => {
+            object.remove("max_output_tokens");
+        }
+        ResponsesMaxOutputTokensPolicy::RenameToMaxTokens => {
+            if let Some(value) = object.remove("max_output_tokens") {
+                object.entry("max_tokens".to_owned()).or_insert(value);
+            }
+        }
+        ResponsesMaxOutputTokensPolicy::RenameToMaxCompletionTokens => {
+            if let Some(value) = object.remove("max_output_tokens") {
+                object
+                    .entry("max_completion_tokens".to_owned())
+                    .or_insert(value);
+            }
+        }
+    }
 }
 
 fn rewrite_urlencoded_request_body(body: &[u8], backend_model: &str) -> Option<Vec<u8>> {
