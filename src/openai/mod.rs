@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value, json};
 use url::form_urlencoded;
 
-use crate::config::ToolSchemaMode;
+use crate::config::{ResponsesStorePolicy, ToolSchemaMode};
 
 mod models;
 
@@ -74,8 +74,10 @@ pub fn rewrite_request_body_for_mode_with_tool_schema_mode(
     body: &[u8],
     content_type: Option<&str>,
     backend_model: Option<&str>,
+    path: &str,
     request_mode: RequestMode,
     tool_schema_mode: ToolSchemaMode,
+    responses_store: ResponsesStorePolicy,
 ) -> Result<Vec<u8>, RequestRewriteError> {
     if request_mode == RequestMode::ResponsesViaChatCompletions {
         return rewrite_responses_request_as_chat(
@@ -93,8 +95,10 @@ pub fn rewrite_request_body_for_mode_with_tool_schema_mode(
         return Ok(Vec::new());
     }
 
+    let native_responses = path.trim_end_matches('/') == "/v1/responses";
     if should_parse_json(content_type, body)
-        && let Some(rewritten) = rewrite_json_request_body(body, backend_model)
+        && let Some(rewritten) =
+            rewrite_json_request_body(body, backend_model, native_responses, responses_store)
     {
         return Ok(rewritten);
     }
@@ -1639,13 +1643,24 @@ fn inspect_multipart_body(body: &[u8], boundary: &str) -> RequestShape {
     shape
 }
 
-fn rewrite_json_request_body(body: &[u8], backend_model: &str) -> Option<Vec<u8>> {
+fn rewrite_json_request_body(
+    body: &[u8],
+    backend_model: &str,
+    native_responses: bool,
+    responses_store: ResponsesStorePolicy,
+) -> Option<Vec<u8>> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
     let object = value.as_object_mut()?;
     if !object.contains_key("model") {
         return None;
     }
     object.insert("model".to_owned(), Value::String(backend_model.to_owned()));
+    if native_responses
+        && responses_store == ResponsesStorePolicy::ForceFalse
+        && !object.contains_key("store")
+    {
+        object.insert("store".to_owned(), Value::Bool(false));
+    }
     serde_json::to_vec(&value).ok()
 }
 

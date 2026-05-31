@@ -366,6 +366,7 @@ pub struct BackendConfig {
     pub timeout_ms: u64,
     pub context_length: Option<u64>,
     pub tool_schema_mode: ToolSchemaMode,
+    pub responses_store: ResponsesStorePolicy,
     #[serde(alias = "capability")]
     pub capabilities: BTreeSet<String>,
     #[serde(rename = "model")]
@@ -382,6 +383,7 @@ impl Default for BackendConfig {
             timeout_ms: 120_000,
             context_length: None,
             tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
             capabilities: BTreeSet::new(),
             models: Vec::new(),
         }
@@ -396,6 +398,14 @@ pub enum ToolSchemaMode {
     LlamacppCompat,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesStorePolicy {
+    #[default]
+    Preserve,
+    ForceFalse,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelRouteConfig {
@@ -405,6 +415,8 @@ pub struct ModelRouteConfig {
     pub context_length: ContextLengthConfig,
     #[serde(default)]
     pub tool_schema_mode: Option<ToolSchemaMode>,
+    #[serde(default)]
+    pub responses_store: Option<ResponsesStorePolicy>,
     #[serde(default)]
     pub endpoints: BTreeSet<String>,
 }
@@ -437,6 +449,7 @@ pub struct ResolvedBackend {
     pub timeout: Duration,
     pub capabilities: BTreeSet<String>,
     pub tool_schema_mode: ToolSchemaMode,
+    pub responses_store: ResponsesStorePolicy,
     pub models: Vec<ModelRoute>,
 }
 
@@ -446,6 +459,7 @@ pub struct ModelRoute {
     pub backend: String,
     pub context_length: Option<u64>,
     pub tool_schema_mode: ToolSchemaMode,
+    pub responses_store: ResponsesStorePolicy,
     pub endpoints: BTreeSet<String>,
 }
 
@@ -542,6 +556,7 @@ impl Config {
                         tool_schema_mode: model
                             .tool_schema_mode
                             .unwrap_or(backend.tool_schema_mode),
+                        responses_store: model.responses_store.unwrap_or(backend.responses_store),
                         endpoints: model.endpoints,
                     })
                 })
@@ -553,6 +568,7 @@ impl Config {
                 timeout: Duration::from_millis(backend.timeout_ms),
                 capabilities: backend.capabilities,
                 tool_schema_mode: backend.tool_schema_mode,
+                responses_store: backend.responses_store,
                 models,
             });
         }
@@ -939,6 +955,48 @@ mod tests {
             ToolSchemaMode::LlamacppCompat
         );
         assert_eq!(backend.models[1].tool_schema_mode, ToolSchemaMode::Preserve);
+    }
+
+    #[test]
+    fn responses_store_policy_can_be_set_per_backend_and_model() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-inherit", "public-override"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+            responses_store = "force_false"
+
+            [[backend.model]]
+            public = "public-inherit"
+            backend = "private-inherit"
+            endpoints = ["responses"]
+
+            [[backend.model]]
+            public = "public-override"
+            backend = "private-override"
+            responses_store = "preserve"
+            endpoints = ["responses"]
+            "#,
+        );
+
+        let backend = &config.backends[0];
+        assert_eq!(backend.responses_store, ResponsesStorePolicy::ForceFalse);
+        assert_eq!(
+            backend.models[0].responses_store,
+            ResponsesStorePolicy::ForceFalse
+        );
+        assert_eq!(
+            backend.models[1].responses_store,
+            ResponsesStorePolicy::Preserve
+        );
     }
 
     #[test]

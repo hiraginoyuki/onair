@@ -17,8 +17,8 @@ use tower::ServiceExt;
 use super::*;
 use crate::config::{
     Config, DebugCaptureConfig, DebugCaptureMode, HealthConfig, InspectorConfig, ModelRoute,
-    ResolvedBackend, ResolvedClient, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig,
-    ToolSchemaMode,
+    ResolvedBackend, ResolvedClient, ResponsesStorePolicy, RoutingConfig, RoutingStrategy,
+    ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
 
 const CLIENT_KEY: &str = "sk-test";
@@ -214,6 +214,35 @@ async fn responses_native_capability_uses_native_backend_path() {
     assert_eq!(captured[0]["tools"][0]["type"], "function");
     assert!(captured[0].get("messages").is_none());
     assert!(captured[0].get("max_tokens").is_none());
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn native_responses_route_can_force_store_false() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let mut backend_config = test_backend("backend-a", backend.base_url());
+    backend_config.responses_store = ResponsesStorePolicy::ForceFalse;
+    backend_config.models[0].responses_store = ResponsesStorePolicy::ForceFalse;
+    let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({
+                "model": PUBLIC_MODEL,
+                "input": "hello"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+    assert_eq!(captured[0]["store"], false);
 
     backend.abort();
 }
@@ -1223,12 +1252,14 @@ async fn models_respect_context_length_output_policy() {
             timeout: std::time::Duration::from_secs(5),
             capabilities: btree_set(["responses"]),
             tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
             models: vec![
                 ModelRoute {
                     public: PUBLIC_MODEL.to_owned(),
                     backend: BACKEND_MODEL.to_owned(),
                     context_length: Some(131_072),
                     tool_schema_mode: ToolSchemaMode::Preserve,
+                    responses_store: ResponsesStorePolicy::Preserve,
                     endpoints: btree_set(["responses"]),
                 },
                 ModelRoute {
@@ -1236,6 +1267,7 @@ async fn models_respect_context_length_output_policy() {
                     backend: "backend-no-context".to_owned(),
                     context_length: None,
                     tool_schema_mode: ToolSchemaMode::Preserve,
+                    responses_store: ResponsesStorePolicy::Preserve,
                     endpoints: btree_set(["responses"]),
                 },
             ],
@@ -1425,11 +1457,13 @@ fn test_backend(id: &str, base_url: String) -> ResolvedBackend {
         timeout: std::time::Duration::from_secs(5),
         capabilities: btree_set(["responses", "streaming"]),
         tool_schema_mode: ToolSchemaMode::Preserve,
+        responses_store: ResponsesStorePolicy::Preserve,
         models: vec![ModelRoute {
             public: PUBLIC_MODEL.to_owned(),
             backend: BACKEND_MODEL.to_owned(),
             context_length: None,
             tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
             endpoints: btree_set(["responses"]),
         }],
     }
@@ -1443,11 +1477,13 @@ fn test_chat_backend(id: &str, base_url: String) -> ResolvedBackend {
         timeout: std::time::Duration::from_secs(5),
         capabilities: btree_set(["chat", "streaming", "tools"]),
         tool_schema_mode: ToolSchemaMode::Preserve,
+        responses_store: ResponsesStorePolicy::Preserve,
         models: vec![ModelRoute {
             public: PUBLIC_MODEL.to_owned(),
             backend: BACKEND_MODEL.to_owned(),
             context_length: None,
             tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
             endpoints: btree_set(["chat", "tools"]),
         }],
     }

@@ -29,8 +29,10 @@ fn responses_request_converts_to_chat_completions() {
         body.to_string().as_bytes(),
         Some("application/json"),
         Some("backend-model"),
+        "/v1/responses",
         RequestMode::ResponsesViaChatCompletions,
         ToolSchemaMode::Preserve,
+        ResponsesStorePolicy::Preserve,
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -53,6 +55,67 @@ fn responses_request_converts_to_chat_completions() {
     assert!(rewritten.get("input").is_none());
     assert!(rewritten.get("instructions").is_none());
     assert!(rewritten.get("max_output_tokens").is_none());
+}
+
+#[test]
+fn native_responses_can_force_store_false_when_omitted() {
+    let body = json!({
+        "model": "public-model",
+        "input": "hello"
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_tool_schema_mode(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/responses",
+        RequestMode::Native,
+        ToolSchemaMode::Preserve,
+        ResponsesStorePolicy::ForceFalse,
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "backend-model");
+    assert_eq!(rewritten["store"], false);
+}
+
+#[test]
+fn native_responses_store_policy_preserves_explicit_store_and_chat_requests() {
+    let responses_body = json!({
+        "model": "public-model",
+        "input": "hello",
+        "store": true
+    });
+    let rewritten_responses = rewrite_request_body_for_mode_with_tool_schema_mode(
+        responses_body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/responses",
+        RequestMode::Native,
+        ToolSchemaMode::Preserve,
+        ResponsesStorePolicy::ForceFalse,
+    )
+    .unwrap();
+    let rewritten_responses: Value = serde_json::from_slice(&rewritten_responses).unwrap();
+    assert_eq!(rewritten_responses["store"], true);
+
+    let chat_body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    let rewritten_chat = rewrite_request_body_for_mode_with_tool_schema_mode(
+        chat_body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        ToolSchemaMode::Preserve,
+        ResponsesStorePolicy::ForceFalse,
+    )
+    .unwrap();
+    let rewritten_chat: Value = serde_json::from_slice(&rewritten_chat).unwrap();
+    assert!(rewritten_chat.get("store").is_none());
 }
 
 #[test]
@@ -88,8 +151,10 @@ fn responses_request_preserves_tool_strictness() {
         body.to_string().as_bytes(),
         Some("application/json"),
         Some("backend-model"),
+        "/v1/responses",
         RequestMode::ResponsesViaChatCompletions,
         ToolSchemaMode::Preserve,
+        ResponsesStorePolicy::Preserve,
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -140,8 +205,10 @@ fn llama_cpp_tool_schema_mode_sanitizes_common_schema_fragments() {
         body.to_string().as_bytes(),
         Some("application/json"),
         Some("backend-model"),
+        "/v1/responses",
         RequestMode::ResponsesViaChatCompletions,
         ToolSchemaMode::LlamacppCompat,
+        ResponsesStorePolicy::Preserve,
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -237,8 +304,10 @@ fn responses_request_ignores_null_tools_and_collapses_text_parts() {
         body.to_string().as_bytes(),
         Some("application/json"),
         Some("backend-model"),
+        "/v1/responses",
         RequestMode::ResponsesViaChatCompletions,
         ToolSchemaMode::Preserve,
+        ResponsesStorePolicy::Preserve,
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -276,8 +345,10 @@ fn responses_request_converts_image_parts_to_chat_content() {
         body.to_string().as_bytes(),
         Some("application/json"),
         Some("backend-model"),
+        "/v1/responses",
         RequestMode::ResponsesViaChatCompletions,
         ToolSchemaMode::Preserve,
+        ResponsesStorePolicy::Preserve,
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -337,8 +408,10 @@ fn responses_request_converts_function_call_items_to_tool_messages() {
         body.to_string().as_bytes(),
         Some("application/json"),
         Some("backend-model"),
+        "/v1/responses",
         RequestMode::ResponsesViaChatCompletions,
         ToolSchemaMode::Preserve,
+        ResponsesStorePolicy::Preserve,
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();

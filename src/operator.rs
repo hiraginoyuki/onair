@@ -100,6 +100,7 @@ pub(crate) struct BackendSnapshot {
     pub(crate) api_key_configured: bool,
     pub(crate) timeout_ms: u64,
     pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
+    pub(crate) responses_store: crate::config::ResponsesStorePolicy,
     pub(crate) capabilities: Vec<String>,
     pub(crate) models: Vec<BackendModelSnapshot>,
 }
@@ -110,6 +111,7 @@ pub(crate) struct BackendModelSnapshot {
     pub(crate) backend: String,
     pub(crate) context_length: Option<u64>,
     pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
+    pub(crate) responses_store: crate::config::ResponsesStorePolicy,
     pub(crate) endpoints: Vec<String>,
 }
 
@@ -126,6 +128,7 @@ pub(crate) struct ModelRouteSnapshot {
     pub(crate) backend: String,
     pub(crate) backend_model: String,
     pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
+    pub(crate) responses_store: crate::config::ResponsesStorePolicy,
     pub(crate) endpoints: Vec<String>,
 }
 
@@ -209,6 +212,7 @@ pub(crate) fn models_snapshot(config: &Config) -> OperatorModelsSnapshot {
                     backend: backend.id.clone(),
                     backend_model: model.backend.clone(),
                     tool_schema_mode: model.tool_schema_mode,
+                    responses_store: model.responses_store,
                     endpoints: sorted_strings(&model.endpoints),
                 });
             }
@@ -312,6 +316,7 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
         api_key_configured: backend.api_key.is_some(),
         timeout_ms: duration_millis(backend.timeout),
         tool_schema_mode: backend.tool_schema_mode,
+        responses_store: backend.responses_store,
         capabilities: sorted_strings(&backend.capabilities),
         models: backend
             .models
@@ -321,6 +326,7 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
                 backend: model.backend.clone(),
                 context_length: model.context_length,
                 tool_schema_mode: model.tool_schema_mode,
+                responses_store: model.responses_store,
                 endpoints: sorted_strings(&model.endpoints),
             })
             .collect(),

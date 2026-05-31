@@ -585,8 +585,10 @@ async fn do_proxy(
             &body,
             content_type.as_deref(),
             context.route.backend_model.as_deref(),
+            &upstream_path,
             context.route.request_mode,
             context.route.tool_schema_mode,
+            context.route.responses_store,
         )
         .map_err(|error| ApiError::bad_request(error.message(), error.param()))?;
         attempt_record.request_rewritten_us =
