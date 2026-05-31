@@ -203,6 +203,83 @@
       border-radius: inherit;
       background: var(--accent);
     }
+    .waterfall {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+    }
+    .waterfall-scale,
+    .waterfall-row {
+      display: grid;
+      grid-template-columns: 150px minmax(120px, 1fr);
+      gap: 8px;
+      align-items: start;
+    }
+    .waterfall-scale {
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .waterfall-axis {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .waterfall-label {
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .waterfall-label strong {
+      display: block;
+      color: var(--text);
+      font-weight: 600;
+    }
+    .waterfall-detail {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .waterfall-track {
+      position: relative;
+      height: 18px;
+      border-radius: 6px;
+      background: #1e293b;
+      overflow: hidden;
+    }
+    .waterfall-span {
+      position: absolute;
+      top: 4px;
+      height: 10px;
+      min-width: 2px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+    .waterfall-span.ok { background: var(--good); }
+    .waterfall-span.warn { background: var(--warn); }
+    .waterfall-span.bad { background: var(--bad); }
+    .waterfall-tick {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--text);
+      opacity: 0.72;
+    }
+    .waterfall-events {
+      grid-column: 2;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .waterfall-event {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--panel-2);
+      padding: 2px 6px;
+      white-space: nowrap;
+    }
     pre {
       margin: 0;
       padding: 10px;
@@ -296,6 +373,16 @@
       ["stream complete", "stream_complete_us"],
     ];
 
+    const attemptPhaseFields = [
+      ["rewrite", "request_rewritten_us"],
+      ["capture", "debug_capture_done_us"],
+      ["send", "backend_forward_start_us"],
+      ["headers", "backend_headers_received_us"],
+      ["first byte", "backend_body_first_chunk_us"],
+      ["body done", "backend_body_complete_us"],
+      ["stream done", "stream_complete_us"],
+    ];
+
     function setStatus(text, className) {
       statusText.textContent = text;
       statusDot.className = `dot ${className || ""}`;
@@ -366,6 +453,11 @@
       return parts.join(" · ");
     }
 
+    function attemptRecords(record) {
+      const attempts = record.backend_attempts || [];
+      return attempts.length ? attempts : (record.retried_attempts || []);
+    }
+
     function searchable(record) {
       return [
         record.record_id,
@@ -386,11 +478,13 @@
         record.path,
         record.query,
         outcomeText(record),
-        ...(record.retried_attempts || []).flatMap(attempt => [
+        ...attemptRecords(record).flatMap(attempt => [
           attempt.backend,
           attempt.backend_target,
+          attempt.backend_remote_addr,
           attempt.outcome,
           attempt.error_kind,
+          attempt.upstream_status,
           attempt.debug_capture_id,
         ]),
       ].filter(Boolean).join(" ").toLowerCase();
@@ -589,6 +683,98 @@
       return card;
     }
 
+    function percent(value, total) {
+      if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return 0;
+      return Math.max(0, Math.min(100, value / total * 100));
+    }
+
+    function attemptWaterfallCard(record) {
+      const attempts = attemptRecords(record);
+      if (!attempts.length) return null;
+      const timeline = record.timeline || {};
+      const total = Math.max(
+        Number(timeline.total_us || 0),
+        ...attempts.map(attempt => Number(attempt.ended_us || 0)),
+      );
+      const card = document.createElement("div");
+      card.className = "card";
+      const heading = document.createElement("h2");
+      heading.textContent = "attempt waterfall";
+      const list = document.createElement("div");
+      list.className = "waterfall";
+
+      const scale = document.createElement("div");
+      scale.className = "waterfall-scale";
+      const scaleLabel = document.createElement("div");
+      scaleLabel.textContent = "request";
+      const axis = document.createElement("div");
+      axis.className = "waterfall-axis";
+      [0, total / 2, total].forEach(value => {
+        const tick = document.createElement("span");
+        tick.textContent = `${ms(value)} ms`;
+        axis.appendChild(tick);
+      });
+      scale.append(scaleLabel, axis);
+      list.appendChild(scale);
+
+      for (const attempt of attempts) {
+        const started = Number(attempt.started_us || 0);
+        const ended = Number(attempt.ended_us || started);
+        const row = document.createElement("div");
+        row.className = "waterfall-row";
+
+        const label = document.createElement("div");
+        label.className = "waterfall-label";
+        const title = document.createElement("strong");
+        title.textContent = `#${attempt.attempt} ${attempt.backend || "unknown"}`;
+        const detail = document.createElement("span");
+        detail.className = "waterfall-detail";
+        detail.textContent = [
+          attempt.outcome,
+          `status ${attempt.status}`,
+          attempt.upstream_status ? `upstream ${attempt.upstream_status}` : null,
+          `${ms(attempt.elapsed_us)} ms`,
+        ].filter(Boolean).join(" · ");
+        label.append(title, detail);
+
+        const track = document.createElement("div");
+        track.className = "waterfall-track";
+        const span = document.createElement("div");
+        span.className = `waterfall-span ${statusClass(Number(attempt.status))}`;
+        span.style.left = `${percent(started, total)}%`;
+        span.style.width = `${Math.max(0.6, percent(ended - started, total))}%`;
+        span.title = [
+          attempt.backend_target,
+          attempt.backend_remote_addr,
+          attempt.debug_capture_id ? `capture ${attempt.debug_capture_id}` : null,
+        ].filter(Boolean).join(" · ");
+        track.appendChild(span);
+
+        const events = document.createElement("div");
+        events.className = "waterfall-events";
+        for (const [name, field] of attemptPhaseFields) {
+          const value = attempt[field];
+          if (value === null || value === undefined) continue;
+          const marker = document.createElement("div");
+          marker.className = "waterfall-tick";
+          marker.style.left = `${percent(Number(value), total)}%`;
+          marker.title = `${name}: ${ms(value)} ms`;
+          track.appendChild(marker);
+
+          const event = document.createElement("span");
+          event.className = "waterfall-event";
+          event.textContent = `${name} ${ms(value)} ms`;
+          events.appendChild(event);
+        }
+
+        row.append(label, track, events);
+        list.appendChild(row);
+      }
+
+      card.append(heading, list);
+      return card;
+    }
+
     function retryAttemptsCard(record) {
       const attempts = record.retried_attempts || [];
       if (!attempts.length) return null;
@@ -658,6 +844,8 @@
           ["debug capture id", record.debug_capture_id],
         ]),
       ];
+      const waterfallCard = attemptWaterfallCard(record);
+      if (waterfallCard) cards.push(waterfallCard);
       const retryCard = retryAttemptsCard(record);
       if (retryCard) cards.push(retryCard);
       cards.push(timelineCard(record), jsonCard(record));

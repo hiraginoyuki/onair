@@ -362,4 +362,11 @@ mod tests {
         assert!(record_id.contains("42-"));
         assert!(record_id.ends_with("req_test_value"));
     }
+
+    #[test]
+    fn embedded_ui_renders_attempt_waterfall() {
+        assert!(UI_HTML.contains("attempt waterfall"));
+        assert!(UI_HTML.contains("backend_attempts"));
+        assert!(UI_HTML.contains("waterfall-row"));
+    }
 }
