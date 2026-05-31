@@ -685,6 +685,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_native_capability_uses_native_backend_path() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let mut backend_config = test_chat_backend("backend-a", backend.base_url());
+        backend_config.capabilities = btree_set(["responses", "chat", "streaming"]);
+        backend_config.models[0].endpoints = btree_set(["responses", "chat"]);
+        let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
+        let app = router(state);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "instructions": "answer briefly",
+                    "input": [{"role": "user", "content": "hello"}],
+                    "max_output_tokens": 16,
+                    "tools": [{
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object"}
+                    }]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = json_body(response).await;
+        assert_eq!(response_body["object"], "response");
+        assert_eq!(response_body["model"], PUBLIC_MODEL);
+        assert_eq!(response_body["usage"]["input_tokens"], 13);
+
+        let captured = backend.requests();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0]["model"], BACKEND_MODEL);
+        assert_eq!(captured[0]["instructions"], "answer briefly");
+        assert_eq!(captured[0]["input"][0]["role"], "user");
+        assert_eq!(captured[0]["input"][0]["content"], "hello");
+        assert_eq!(captured[0]["max_output_tokens"], 16);
+        assert_eq!(captured[0]["tools"][0]["type"], "function");
+        assert!(captured[0].get("messages").is_none());
+        assert!(captured[0].get("max_tokens").is_none());
+
+        backend.abort();
+    }
+
+    #[tokio::test]
     async fn responses_full_compat_payload_translates_to_chat_backend() {
         let backend = TestBackend::spawn("backend-a").await;
         let state = test_state(
