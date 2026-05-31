@@ -9,7 +9,7 @@ use axum::http::header::{
     HeaderValue,
 };
 use axum::http::{HeaderMap, Method, Response, StatusCode, Uri};
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::TryStreamExt;
 use tokio::sync::watch;
 use tracing::{Instrument, debug, info_span, warn};
 
@@ -28,12 +28,17 @@ use crate::openai::{self, SseNormalizer, UsageTotals};
 use crate::routing::{self, SelectedRoute};
 
 mod attempt;
+mod upstream;
 
 use self::attempt::{InspectorAttemptBuilder, InspectorAttemptInit};
+use self::upstream::{
+    BufferedBodyReadError, UpstreamSendError, backend_target, next_stream_chunk,
+    read_buffered_upstream_body, read_capped_upstream_error_body, retryable_send_error,
+    send_upstream_request, upstream_error_kind, upstream_path, upstream_url,
+};
 
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
-const MAX_UPSTREAM_ERROR_CAPTURE_BYTES: usize = 1024 * 1024;
 
 pub async fn proxy_v1(
     state: Arc<AppState>,
@@ -1226,34 +1231,6 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
     .expect("stream response builder is valid")
 }
 
-enum UpstreamSendError {
-    Request(reqwest::Error),
-    Shutdown,
-}
-
-async fn send_upstream_request(
-    request: reqwest::RequestBuilder,
-    shutdown: &mut watch::Receiver<bool>,
-) -> std::result::Result<reqwest::Response, UpstreamSendError> {
-    if *shutdown.borrow() {
-        return Err(UpstreamSendError::Shutdown);
-    }
-    let send = request.send();
-    tokio::pin!(send);
-
-    tokio::select! {
-        biased;
-        changed = shutdown.changed() => {
-            if changed.is_err() || *shutdown.borrow() {
-                Err(UpstreamSendError::Shutdown)
-            } else {
-                send.await.map_err(UpstreamSendError::Request)
-            }
-        }
-        result = &mut send => result.map_err(UpstreamSendError::Request),
-    }
-}
-
 enum EitherNormalizer {
     Native(SseNormalizer),
     Responses(openai::ResponsesSseNormalizer),
@@ -1286,157 +1263,6 @@ impl EitherNormalizer {
             Self::Native(normalizer) => normalizer.usage = UsageTotals::default(),
             Self::Responses(normalizer) => normalizer.usage = UsageTotals::default(),
         }
-    }
-}
-
-async fn next_stream_chunk<S>(
-    chunks: &mut S,
-    shutdown: &mut watch::Receiver<bool>,
-) -> Option<std::result::Result<Bytes, reqwest::Error>>
-where
-    S: futures_util::Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Unpin,
-{
-    if *shutdown.borrow() {
-        return None;
-    }
-
-    tokio::select! {
-        biased;
-        changed = shutdown.changed() => {
-            if changed.is_err() || *shutdown.borrow() {
-                None
-            } else {
-                chunks.next().await
-            }
-        }
-        chunk = chunks.next() => chunk,
-    }
-}
-
-enum BufferedBodyReadError {
-    Upstream(reqwest::Error),
-    Shutdown,
-}
-
-async fn read_buffered_upstream_body(
-    upstream: reqwest::Response,
-    timeline: &mut RequestTimeline,
-    mut current_attempt: Option<&mut InspectorAttemptBuilder>,
-    shutdown: &mut watch::Receiver<bool>,
-) -> std::result::Result<Bytes, BufferedBodyReadError> {
-    let mut bytes = Vec::new();
-    let mut chunks = upstream.bytes_stream();
-    loop {
-        if *shutdown.borrow() {
-            return Err(BufferedBodyReadError::Shutdown);
-        }
-        tokio::select! {
-            biased;
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    return Err(BufferedBodyReadError::Shutdown);
-                }
-            }
-            chunk = chunks.next() => {
-                let Some(chunk) = chunk else {
-                    break;
-                };
-                let chunk = chunk.map_err(BufferedBodyReadError::Upstream)?;
-                let body_first_chunk_us = timeline.mark(TimelineEvent::BackendBodyFirstChunk);
-                if let Some(attempt_record) = current_attempt.as_deref_mut() {
-                    attempt_record.mark_body_first_chunk(body_first_chunk_us);
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-        }
-    }
-    let body_complete_us = timeline.mark(TimelineEvent::BackendBodyComplete);
-    if let Some(attempt_record) = current_attempt {
-        attempt_record.mark_body_complete(body_complete_us);
-    }
-    Ok(Bytes::from(bytes))
-}
-
-struct CapturedUpstreamErrorBody {
-    bytes: Bytes,
-    truncated: bool,
-}
-
-async fn read_capped_upstream_error_body(
-    upstream: reqwest::Response,
-    timeline: &mut RequestTimeline,
-    mut current_attempt: Option<&mut InspectorAttemptBuilder>,
-    shutdown: &mut watch::Receiver<bool>,
-) -> std::result::Result<CapturedUpstreamErrorBody, BufferedBodyReadError> {
-    let mut bytes = Vec::new();
-    let mut chunks = upstream.bytes_stream();
-    let mut truncated = false;
-    let mut completed = false;
-
-    loop {
-        let Some(chunk) = next_stream_chunk(&mut chunks, shutdown).await else {
-            if *shutdown.borrow() {
-                return Err(BufferedBodyReadError::Shutdown);
-            }
-            completed = true;
-            break;
-        };
-        let chunk = chunk.map_err(BufferedBodyReadError::Upstream)?;
-        let body_first_chunk_us = timeline.mark(TimelineEvent::BackendBodyFirstChunk);
-        if let Some(attempt_record) = current_attempt.as_deref_mut() {
-            attempt_record.mark_body_first_chunk(body_first_chunk_us);
-        }
-
-        let remaining = MAX_UPSTREAM_ERROR_CAPTURE_BYTES.saturating_sub(bytes.len());
-        if chunk.len() > remaining {
-            bytes.extend_from_slice(&chunk[..remaining]);
-            truncated = true;
-            break;
-        }
-        bytes.extend_from_slice(&chunk);
-        if bytes.len() == MAX_UPSTREAM_ERROR_CAPTURE_BYTES {
-            truncated = true;
-            break;
-        }
-    }
-
-    if completed {
-        let body_complete_us = timeline.mark(TimelineEvent::BackendBodyComplete);
-        if let Some(attempt_record) = current_attempt {
-            attempt_record.mark_body_complete(body_complete_us);
-        }
-    }
-
-    Ok(CapturedUpstreamErrorBody {
-        bytes: Bytes::from(bytes),
-        truncated,
-    })
-}
-
-fn upstream_url(base_url: &str, path: &str, query: Option<&str>) -> String {
-    let mut upstream_url = format!("{base_url}{path}");
-    if let Some(query) = query {
-        upstream_url.push('?');
-        upstream_url.push_str(query);
-    }
-    upstream_url
-}
-
-fn upstream_path(path: &str) -> &str {
-    match path {
-        "/v1/chat/completion" => "/v1/chat/completions",
-        path => path,
-    }
-}
-
-fn backend_target(base_url: &str) -> String {
-    let Ok(url) = url::Url::parse(base_url) else {
-        return "unknown".to_owned();
-    };
-    let host = url.host_str().unwrap_or("unknown");
-    match url.port_or_known_default() {
-        Some(port) => format!("{host}:{port}"),
-        None => host.to_owned(),
     }
 }
 
@@ -1533,29 +1359,6 @@ fn inspector_text(value: &str) -> String {
         })
         .take(MAX_INSPECTOR_TEXT_CHARS)
         .collect()
-}
-
-fn upstream_error_kind(error: &reqwest::Error) -> &'static str {
-    if error.is_timeout() {
-        "timeout"
-    } else if error.is_connect() {
-        "connect"
-    } else if error.is_request() {
-        "request"
-    } else if error.is_body() {
-        "body"
-    } else if error.is_decode() {
-        "decode"
-    } else if error.is_redirect() {
-        "redirect"
-    } else {
-        "unknown"
-    }
-}
-
-fn retryable_send_error(error: &reqwest::Error) -> bool {
-    error.is_connect()
-        || (error.is_request() && !error.is_body() && !error.is_decode() && !error.is_redirect())
 }
 
 fn record_preflight_failure(
