@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use notify::event::{AccessKind, AccessMode};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
 use tokio::sync::mpsc;
@@ -102,7 +104,7 @@ impl ConfigWatcher {
 
         let callback_path = path.clone();
         let callback_filename = filename.clone();
-        let (tx, mut rx) = mpsc::unbounded_channel::<notify::Result<Event>>();
+        let (tx, rx) = mpsc::unbounded_channel::<notify::Result<Event>>();
         let mut watcher = notify::recommended_watcher(move |event| {
             let event = match event {
                 Ok(event) if is_reload_event(&event, &callback_path, &callback_filename) => {
@@ -124,25 +126,7 @@ impl ConfigWatcher {
             .map_err(|error| Error::ConfigWatch(error.to_string()))?;
 
         let task_path = path.clone();
-        let task = tokio::spawn(async move {
-            info!(path = %task_path.display(), "watching config file");
-            while let Some(event) = rx.recv().await {
-                match event {
-                    Ok(event) if is_reload_event(&event, &task_path, &filename) => {
-                        if !wait_for_reload_quiet(&mut rx, &task_path, &filename).await {
-                            return;
-                        }
-                        reload_config_with_retries(&task_path, &store).await;
-                    }
-                    Ok(event) => {
-                        debug!(?event, "ignored config watch event");
-                    }
-                    Err(error) => {
-                        warn!(?error, "config watch event failed");
-                    }
-                }
-            }
-        });
+        let task = tokio::spawn(process_config_watch_events(rx, task_path, filename, store));
 
         Ok(Self {
             _watcher: watcher,
@@ -184,6 +168,31 @@ async fn wait_for_reload_quiet(
 
         if !saw_reload_event {
             return true;
+        }
+    }
+}
+
+async fn process_config_watch_events(
+    mut rx: mpsc::UnboundedReceiver<notify::Result<Event>>,
+    task_path: PathBuf,
+    filename: OsString,
+    store: ConfigStore,
+) {
+    info!(path = %task_path.display(), "watching config file");
+    while let Some(event) = rx.recv().await {
+        match event {
+            Ok(event) if is_reload_event(&event, &task_path, &filename) => {
+                if !wait_for_reload_quiet(&mut rx, &task_path, &filename).await {
+                    return;
+                }
+                reload_config_with_retries(&task_path, &store).await;
+            }
+            Ok(event) => {
+                debug!(?event, "ignored config watch event");
+            }
+            Err(error) => {
+                warn!(?error, "config watch event failed");
+            }
         }
     }
 }
@@ -775,7 +784,11 @@ fn absolute_path(path: &Path) -> Result<PathBuf> {
 fn is_reload_event(event: &Event, path: &Path, filename: &std::ffi::OsStr) -> bool {
     if !matches!(
         event.kind,
-        EventKind::Any | EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+        EventKind::Any
+            | EventKind::Create(_)
+            | EventKind::Modify(_)
+            | EventKind::Remove(_)
+            | EventKind::Access(AccessKind::Close(AccessMode::Write | AccessMode::Any))
     ) {
         return false;
     }
@@ -1161,9 +1174,20 @@ mod tests {
         let path = temp_config_path("watch");
         std::fs::write(&path, config_with_model("first-model")).unwrap();
         let store = ConfigStore::new(Config::load(&path).unwrap());
-        let watcher = ConfigWatcher::start(&path, store.clone()).unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let task = tokio::spawn(process_config_watch_events(
+            rx,
+            path.clone(),
+            path.file_name().unwrap().to_owned(),
+            store.clone(),
+        ));
 
         std::fs::write(&path, config_with_model("second-model")).unwrap();
+        send_reload_event(
+            &tx,
+            EventKind::Access(AccessKind::Close(AccessMode::Write)),
+            &path,
+        );
         wait_for_model(&store, "second-model").await;
         assert!(
             !store
@@ -1179,6 +1203,11 @@ mod tests {
             let _ = std::fs::remove_file(&path);
         }
         std::fs::rename(&replacement, &path).unwrap();
+        send_reload_event(
+            &tx,
+            EventKind::Create(notify::event::CreateKind::File),
+            &path,
+        );
         wait_for_model(&store, "third-model").await;
         assert!(
             !store
@@ -1187,9 +1216,11 @@ mod tests {
                 .contains_key("second-model")
         );
 
-        drop(watcher);
+        drop(tx);
+        task.await.unwrap();
         let _ = std::fs::remove_file(path);
     }
+
     #[test]
     fn reload_keeps_previous_config_when_new_config_is_invalid() {
         let path = temp_config_path("reload");
@@ -1219,6 +1250,28 @@ mod tests {
         assert!(models.contains_key("second-model"));
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reload_events_include_close_after_write() {
+        let path = PathBuf::from("/tmp/onair.toml");
+        let filename = path.file_name().unwrap();
+        let write_close = Event::new(EventKind::Access(AccessKind::Close(AccessMode::Write)))
+            .add_path(path.clone());
+        let read_close = Event::new(EventKind::Access(AccessKind::Close(AccessMode::Read)))
+            .add_path(path.clone());
+
+        assert!(is_reload_event(&write_close, &path, filename));
+        assert!(!is_reload_event(&read_close, &path, filename));
+    }
+
+    fn send_reload_event(
+        tx: &mpsc::UnboundedSender<notify::Result<Event>>,
+        kind: EventKind,
+        path: &Path,
+    ) {
+        tx.send(Ok(Event::new(kind).add_path(path.to_path_buf())))
+            .unwrap();
     }
 
     async fn wait_for_model(store: &ConfigStore, model: &str) {
