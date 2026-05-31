@@ -9,20 +9,24 @@ mod operator;
 mod proxy;
 mod routing;
 
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use clap::Parser;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::app::AppState;
 use crate::config::{Config, ConfigWatcher};
 use crate::error::Result;
 use crate::metrics::{Metrics, TelemetryGuard};
+
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Parser)]
 #[command(version, about = "OpenAI-compatible reverse proxy router")]
@@ -62,12 +66,29 @@ fn build_router(state: Arc<AppState>) -> Router {
 
 async fn serve(bind: SocketAddr, app: Router, shutdown: watch::Sender<bool>) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
-    axum::serve(
+    let mut shutdown_rx = shutdown.subscribe();
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal(shutdown))
-    .await?;
+    .into_future();
+    tokio::pin!(server);
+
+    tokio::select! {
+        result = &mut server => result?,
+        _ = wait_for_shutdown(&mut shutdown_rx) => {
+            match tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, &mut server).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    warn!(
+                        timeout_ms = GRACEFUL_SHUTDOWN_TIMEOUT.as_millis(),
+                        "graceful shutdown timed out; forcing server task drop"
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -94,4 +115,12 @@ async fn shutdown_signal(shutdown: watch::Sender<bool>) {
         _ = terminate => {},
     }
     let _ = shutdown.send(true);
+}
+
+async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {
+    while !*shutdown.borrow_and_update() {
+        if shutdown.changed().await.is_err() {
+            break;
+        }
+    }
 }

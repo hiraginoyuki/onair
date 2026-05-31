@@ -588,7 +588,7 @@ async fn do_proxy(
 
         attempt_record.backend_forward_start_us =
             Some(context.timeline.mark(TimelineEvent::BackendForwardStart));
-        match upstream_request.send().await {
+        match send_upstream_request(upstream_request, &mut context.shutdown).await {
             Ok(response) => {
                 attempt_record.backend_headers_received_us =
                     Some(context.timeline.mark(TimelineEvent::BackendHeadersReceived));
@@ -597,7 +597,11 @@ async fn do_proxy(
                 context.current_attempt = Some(attempt_record);
                 break response;
             }
-            Err(error) if error.is_timeout() => {
+            Err(UpstreamSendError::Shutdown) => {
+                warn!("shutdown signaled during upstream request");
+                return Err(ApiError::internal());
+            }
+            Err(UpstreamSendError::Request(error)) if error.is_timeout() => {
                 if let Some(next_route) = fallback_routes.next() {
                     let attempt_elapsed = attempt_started.elapsed();
                     if let Some(capture) = &mut context.debug_capture {
@@ -670,7 +674,7 @@ async fn do_proxy(
                 );
                 return Err(ApiError::timeout());
             }
-            Err(error) => {
+            Err(UpstreamSendError::Request(error)) => {
                 let error_kind = upstream_error_kind(&error);
                 if retryable_send_error(&error)
                     && let Some(next_route) = fallback_routes.next()
@@ -830,7 +834,7 @@ async fn buffered_response(
         inspector_enabled,
         inspector_retention_requests,
         client_info,
-        shutdown: _,
+        mut shutdown,
         backend_target,
         backend_remote_addr,
         route,
@@ -849,11 +853,20 @@ async fn buffered_response(
     let upstream_status = upstream.status();
     let upstream_headers = upstream.headers().clone();
     let content_type = header_str(&upstream_headers, &CONTENT_TYPE).map(str::to_owned);
-    let bytes = match read_buffered_upstream_body(upstream, &mut timeline, current_attempt.as_mut())
-        .await
+    let bytes = match read_buffered_upstream_body(
+        upstream,
+        &mut timeline,
+        current_attempt.as_mut(),
+        &mut shutdown,
+    )
+    .await
     {
         Ok(bytes) => bytes,
-        Err(error) => {
+        Err(BufferedBodyReadError::Shutdown) => {
+            warn!("shutdown signaled while reading upstream body");
+            return Err(ApiError::internal());
+        }
+        Err(BufferedBodyReadError::Upstream(error)) => {
             let error_kind = upstream_error_kind(&error);
             warn!(error_kind = error_kind, "failed to read upstream body");
             state.metrics.record_request(
@@ -1143,6 +1156,34 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
     .expect("stream response builder is valid")
 }
 
+enum UpstreamSendError {
+    Request(reqwest::Error),
+    Shutdown,
+}
+
+async fn send_upstream_request(
+    request: reqwest::RequestBuilder,
+    shutdown: &mut watch::Receiver<bool>,
+) -> std::result::Result<reqwest::Response, UpstreamSendError> {
+    if *shutdown.borrow() {
+        return Err(UpstreamSendError::Shutdown);
+    }
+    let send = request.send();
+    tokio::pin!(send);
+
+    tokio::select! {
+        biased;
+        changed = shutdown.changed() => {
+            if changed.is_err() || *shutdown.borrow() {
+                Err(UpstreamSendError::Shutdown)
+            } else {
+                send.await.map_err(UpstreamSendError::Request)
+            }
+        }
+        result = &mut send => result.map_err(UpstreamSendError::Request),
+    }
+}
+
 enum EitherNormalizer {
     Native(SseNormalizer),
     Responses(openai::ResponsesSseNormalizer),
@@ -1202,20 +1243,42 @@ where
     }
 }
 
+enum BufferedBodyReadError {
+    Upstream(reqwest::Error),
+    Shutdown,
+}
+
 async fn read_buffered_upstream_body(
     upstream: reqwest::Response,
     timeline: &mut RequestTimeline,
     mut current_attempt: Option<&mut InspectorAttemptBuilder>,
-) -> std::result::Result<Bytes, reqwest::Error> {
+    shutdown: &mut watch::Receiver<bool>,
+) -> std::result::Result<Bytes, BufferedBodyReadError> {
     let mut bytes = Vec::new();
     let mut chunks = upstream.bytes_stream();
-    while let Some(chunk) = chunks.next().await {
-        let chunk = chunk?;
-        let body_first_chunk_us = timeline.mark(TimelineEvent::BackendBodyFirstChunk);
-        if let Some(attempt_record) = current_attempt.as_deref_mut() {
-            attempt_record.mark_body_first_chunk(body_first_chunk_us);
+    loop {
+        if *shutdown.borrow() {
+            return Err(BufferedBodyReadError::Shutdown);
         }
-        bytes.extend_from_slice(&chunk);
+        tokio::select! {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Err(BufferedBodyReadError::Shutdown);
+                }
+            }
+            chunk = chunks.next() => {
+                let Some(chunk) = chunk else {
+                    break;
+                };
+                let chunk = chunk.map_err(BufferedBodyReadError::Upstream)?;
+                let body_first_chunk_us = timeline.mark(TimelineEvent::BackendBodyFirstChunk);
+                if let Some(attempt_record) = current_attempt.as_deref_mut() {
+                    attempt_record.mark_body_first_chunk(body_first_chunk_us);
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+        }
     }
     let body_complete_us = timeline.mark(TimelineEvent::BackendBodyComplete);
     if let Some(attempt_record) = current_attempt {

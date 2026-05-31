@@ -683,6 +683,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shutdown_signal_cancels_buffered_upstream_wait() {
+        let backend = TestBackend::spawn_slow("backend-a").await;
+        let state = test_state(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+        );
+        let app = router(state.clone());
+        let request = json_request(
+            "/v1/responses",
+            json!({
+                "model": PUBLIC_MODEL,
+                "input": "hello"
+            }),
+        );
+        let pending = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        state.shutdown.send(true).unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(1), pending)
+            .await
+            .expect("request did not stop after shutdown signal")
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(backend.hits(), 1);
+        backend.abort();
+    }
+
+    #[tokio::test]
     async fn sticky_routing_reuses_backend_for_same_prompt_cache_key() {
         let backend_a = TestBackend::spawn("backend-a").await;
         let backend_b = TestBackend::spawn("backend-b").await;
@@ -1707,6 +1736,29 @@ mod tests {
             }
         }
 
+        async fn spawn_slow(name: &str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let state = BackendState {
+                name: name.to_owned(),
+                requests: Arc::new(Mutex::new(Vec::new())),
+                hits: Arc::new(AtomicUsize::new(0)),
+            };
+            let app = Router::new()
+                .route("/v1/models", get(backend_models))
+                .route("/v1/responses", post(slow_backend_responses))
+                .with_state(state.clone());
+            let handle = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+
+            Self {
+                address,
+                state,
+                handle,
+            }
+        }
+
         fn base_url(&self) -> String {
             format!("http://{}", self.address)
         }
@@ -1781,6 +1833,21 @@ mod tests {
                 },
                 "output_tokens": 3
             }
+        }))
+    }
+
+    async fn slow_backend_responses(
+        State(state): State<BackendState>,
+        Json(payload): Json<Value>,
+    ) -> Json<Value> {
+        state.hits.fetch_add(1, Ordering::SeqCst);
+        state.requests.lock().unwrap().push(payload.clone());
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        Json(json!({
+            "id": format!("resp_{}", state.name),
+            "object": "response",
+            "model": payload["model"],
+            "output": []
         }))
     }
 
