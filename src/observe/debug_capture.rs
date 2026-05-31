@@ -16,6 +16,7 @@ use crate::metrics::MetricLabels;
 
 const INBOUND_BODY_FILE: &str = "inbound.body";
 const UPSTREAM_BODY_FILE: &str = "upstream.body";
+const UPSTREAM_ERROR_BODY_FILE: &str = "upstream_error.body";
 const METADATA_FILE: &str = "metadata.json";
 
 static CAPTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -58,6 +59,41 @@ impl RequestCapture {
         }
     }
 
+    pub fn record_upstream_error_response(
+        &mut self,
+        upstream_status: u16,
+        content_type: Option<&str>,
+        body: &[u8],
+        truncated: bool,
+    ) {
+        if let Err(error) =
+            self.write_upstream_error_response(upstream_status, content_type, body, truncated)
+        {
+            warn!(
+                capture_id = %self.metadata.id,
+                directory = %self.directory.display(),
+                ?error,
+                "failed to capture upstream error response body"
+            );
+        }
+    }
+
+    fn write_upstream_error_response(
+        &mut self,
+        upstream_status: u16,
+        content_type: Option<&str>,
+        body: &[u8],
+        truncated: bool,
+    ) -> std::io::Result<()> {
+        write_private_file_replace(&self.directory.join(UPSTREAM_ERROR_BODY_FILE), body)?;
+        self.metadata.files.upstream_error_body = Some(UPSTREAM_ERROR_BODY_FILE);
+        self.metadata.upstream_error_status = Some(upstream_status);
+        self.metadata.upstream_error_content_type = content_type.map(str::to_owned);
+        self.metadata.upstream_error_body_bytes = Some(body.len());
+        self.metadata.upstream_error_body_truncated = Some(truncated);
+        self.write_metadata()
+    }
+
     fn write_metadata(&self) -> std::io::Result<()> {
         let bytes = serde_json::to_vec_pretty(&self.metadata).map_err(std::io::Error::other)?;
         write_private_file_replace(&self.directory.join(METADATA_FILE), &bytes)
@@ -88,6 +124,14 @@ struct CaptureMetadata {
     stream: bool,
     request_body_bytes: usize,
     upstream_body_bytes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upstream_error_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upstream_error_content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upstream_error_body_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upstream_error_body_truncated: Option<bool>,
     files: CaptureFiles,
     outcome: CaptureOutcome,
 }
@@ -96,6 +140,8 @@ struct CaptureMetadata {
 struct CaptureFiles {
     inbound_body: &'static str,
     upstream_body: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upstream_error_body: Option<&'static str>,
 }
 
 #[derive(Clone, Serialize)]
@@ -239,9 +285,14 @@ fn create_capture(
         stream: request.labels.stream,
         request_body_bytes: request.inbound_body.len(),
         upstream_body_bytes: request.upstream_body.len(),
+        upstream_error_status: None,
+        upstream_error_content_type: None,
+        upstream_error_body_bytes: None,
+        upstream_error_body_truncated: None,
         files: CaptureFiles {
             inbound_body: INBOUND_BODY_FILE,
             upstream_body: UPSTREAM_BODY_FILE,
+            upstream_error_body: None,
         },
         outcome: CaptureOutcome::SentToUpstream,
     };

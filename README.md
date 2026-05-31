@@ -242,7 +242,7 @@ Prompt and response bodies are not logged by onair.
 
 ## Debug Capture
 
-`[debug_capture]` is a default-off troubleshooting path for cases where exact request bytes are needed. It is not controlled by `RUST_LOG`, and enabling it writes prompt and request bodies to disk.
+`[debug_capture]` is a default-off troubleshooting path for cases where exact request bytes are needed. It is not controlled by `RUST_LOG`, and enabling it writes prompt, request, and selected upstream error-response bodies to disk.
 
 ```toml
 [debug_capture]
@@ -254,6 +254,7 @@ For each successfully routed upstream attempt, onair creates one private capture
 
 - `inbound.body`: the exact body received from the client before model rewriting.
 - `upstream.body`: the exact body sent to the backend after model rewriting.
+- `upstream_error.body`: the upstream non-success response body, only when the backend returns a non-success status and a body is available. This diagnostic file is capped at 1 MiB and marked as truncated in metadata when the cap is reached.
 - `metadata.json`: route, identity, public/backend model IDs, path/query metadata, body sizes, status/outcome, and capture file names.
 
 Security guidance:

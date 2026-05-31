@@ -29,6 +29,7 @@ use crate::routing::{self, SelectedRoute};
 
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
+const MAX_UPSTREAM_ERROR_CAPTURE_BYTES: usize = 1024 * 1024;
 
 pub async fn proxy_v1(
     state: Arc<AppState>,
@@ -758,6 +759,39 @@ async fn do_proxy(
 
     let upstream_status = upstream.status();
     if !upstream_status.is_success() {
+        let upstream_content_type =
+            header_str(upstream.headers(), &CONTENT_TYPE).map(str::to_owned);
+        if context.debug_capture.is_some() {
+            match read_capped_upstream_error_body(
+                upstream,
+                &mut context.timeline,
+                context.current_attempt.as_mut(),
+                &mut context.shutdown,
+            )
+            .await
+            {
+                Ok(error_body) => {
+                    if let Some(capture) = &mut context.debug_capture {
+                        capture.record_upstream_error_response(
+                            upstream_status.as_u16(),
+                            upstream_content_type.as_deref(),
+                            &error_body.bytes,
+                            error_body.truncated,
+                        );
+                    }
+                }
+                Err(BufferedBodyReadError::Shutdown) => {
+                    warn!("shutdown signaled while capturing upstream error body");
+                }
+                Err(BufferedBodyReadError::Upstream(error)) => {
+                    let error_kind = upstream_error_kind(&error);
+                    warn!(
+                        error_kind = error_kind,
+                        "failed to capture upstream error body"
+                    );
+                }
+            }
+        }
         let api_error = ApiError::upstream(upstream_status);
         warn!(
             upstream_status = upstream_status.as_u16(),
@@ -1285,6 +1319,62 @@ async fn read_buffered_upstream_body(
         attempt_record.backend_body_complete_us = Some(body_complete_us);
     }
     Ok(Bytes::from(bytes))
+}
+
+struct CapturedUpstreamErrorBody {
+    bytes: Bytes,
+    truncated: bool,
+}
+
+async fn read_capped_upstream_error_body(
+    upstream: reqwest::Response,
+    timeline: &mut RequestTimeline,
+    mut current_attempt: Option<&mut InspectorAttemptBuilder>,
+    shutdown: &mut watch::Receiver<bool>,
+) -> std::result::Result<CapturedUpstreamErrorBody, BufferedBodyReadError> {
+    let mut bytes = Vec::new();
+    let mut chunks = upstream.bytes_stream();
+    let mut truncated = false;
+    let mut completed = false;
+
+    loop {
+        let Some(chunk) = next_stream_chunk(&mut chunks, shutdown).await else {
+            if *shutdown.borrow() {
+                return Err(BufferedBodyReadError::Shutdown);
+            }
+            completed = true;
+            break;
+        };
+        let chunk = chunk.map_err(BufferedBodyReadError::Upstream)?;
+        let body_first_chunk_us = timeline.mark(TimelineEvent::BackendBodyFirstChunk);
+        if let Some(attempt_record) = current_attempt.as_deref_mut() {
+            attempt_record.mark_body_first_chunk(body_first_chunk_us);
+        }
+
+        let remaining = MAX_UPSTREAM_ERROR_CAPTURE_BYTES.saturating_sub(bytes.len());
+        if chunk.len() > remaining {
+            bytes.extend_from_slice(&chunk[..remaining]);
+            truncated = true;
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() == MAX_UPSTREAM_ERROR_CAPTURE_BYTES {
+            truncated = true;
+            break;
+        }
+    }
+
+    if completed {
+        let body_complete_us = timeline.mark(TimelineEvent::BackendBodyComplete);
+        if let Some(attempt_record) = current_attempt {
+            attempt_record.backend_body_complete_us = Some(body_complete_us);
+        }
+    }
+
+    Ok(CapturedUpstreamErrorBody {
+        bytes: Bytes::from(bytes),
+        truncated,
+    })
 }
 
 fn upstream_url(base_url: &str, path: &str, query: Option<&str>) -> String {

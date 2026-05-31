@@ -1019,6 +1019,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn debug_capture_writes_upstream_error_response_body() {
+        let backend = TestBackend::spawn_error("backend-a").await;
+        let capture_dir = temp_capture_dir("error-response");
+        let state = test_state_with_debug_capture(
+            RoutingStrategy::Priority,
+            vec![test_backend("backend-a", backend.base_url())],
+            DebugCaptureConfig {
+                enabled: true,
+                directory: capture_dir.clone(),
+            },
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "please fail"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response_body = json_body(response).await;
+        assert_eq!(
+            response_body["error"]["message"],
+            "The request could not be completed by the selected model."
+        );
+
+        let capture_path = only_capture_path(&capture_dir);
+        let upstream_error_body: Value = serde_json::from_slice(
+            &std::fs::read(capture_path.join("upstream_error.body")).unwrap(),
+        )
+        .unwrap();
+        let metadata: Value =
+            serde_json::from_slice(&std::fs::read(capture_path.join("metadata.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(
+            upstream_error_body["error"]["message"],
+            "upstream failure detail"
+        );
+        assert_eq!(metadata["upstream_error_status"], 400);
+        assert_eq!(metadata["upstream_error_content_type"], "application/json");
+        assert_eq!(metadata["upstream_error_body_truncated"], false);
+        assert!(metadata["upstream_error_body_bytes"].as_u64().unwrap() > 0);
+        assert_eq!(metadata["outcome"]["kind"], "upstream_non_success");
+        assert_eq!(metadata["outcome"]["upstream_status"], 400);
+
+        backend.abort();
+        std::fs::remove_dir_all(capture_dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn inspector_records_completed_requests_and_serves_details() {
         let backend = TestBackend::spawn("backend-a").await;
         let state = test_state_with_inspector(
@@ -1898,6 +1954,30 @@ mod tests {
             }
         }
 
+        async fn spawn_error(name: &str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let state = BackendState {
+                name: name.to_owned(),
+                requests: Arc::new(Mutex::new(Vec::new())),
+                hits: Arc::new(AtomicUsize::new(0)),
+            };
+            let app = Router::new()
+                .route("/v1/models", get(backend_models))
+                .route("/v1/responses", post(error_backend_responses))
+                .route("/v1/chat/completions", post(backend_chat_completions))
+                .with_state(state.clone());
+            let handle = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+
+            Self {
+                address,
+                state,
+                handle,
+            }
+        }
+
         async fn spawn_slow(name: &str) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
@@ -1996,6 +2076,27 @@ mod tests {
                 "output_tokens": 3
             }
         }))
+    }
+
+    async fn error_backend_responses(
+        State(state): State<BackendState>,
+        Json(payload): Json<Value>,
+    ) -> Response<Body> {
+        state.hits.fetch_add(1, Ordering::SeqCst);
+        state.requests.lock().unwrap().push(payload.clone());
+        Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "error": {
+                        "message": "upstream failure detail",
+                        "type": "invalid_request_error"
+                    }
+                })
+                .to_string(),
+            ))
+            .unwrap()
     }
 
     async fn slow_backend_responses(
