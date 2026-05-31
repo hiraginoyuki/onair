@@ -99,6 +99,12 @@
     .quick-label {
       color: var(--muted);
     }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px;
+    }
     .columns {
       position: relative;
     }
@@ -393,6 +399,7 @@
           <summary title="Show or hide request table columns">columns</summary>
           <div id="columnOptions" class="column-options"></div>
         </details>
+        <button id="pause" type="button" title="Pause or resume applying live SSE updates to the table">pause</button>
         <button id="reload" type="button">reload</button>
       </div>
       <div id="quickFilters" class="toolbar-row quick-filters" aria-label="quick filters"></div>
@@ -428,6 +435,7 @@
     const filter = document.getElementById("filter");
     const quickFiltersElement = document.getElementById("quickFilters");
     const columnOptions = document.getElementById("columnOptions");
+    const pauseButton = document.getElementById("pause");
     const statusText = document.getElementById("status");
     const statusDot = document.getElementById("dot");
     const countText = document.getElementById("count");
@@ -435,6 +443,7 @@
     const sortStorageKey = "onair.inspector.tableSort.v1";
     const slowRequestThresholdUs = 5_000_000;
     const records = new Map();
+    const pendingRecords = new Map();
     let operatorRuntime = null;
     let operatorConfig = null;
     let operatorModels = null;
@@ -442,6 +451,7 @@
     let operatorReloadPending = false;
     let selectedId = null;
     let source = null;
+    let livePaused = false;
 
     const timelineFields = [
       ["proxy entry", "proxy_entry_us"],
@@ -876,6 +886,32 @@
       return true;
     }
 
+    function updatePauseButton() {
+      const pending = pendingRecords.size;
+      pauseButton.textContent = livePaused
+        ? (pending ? `resume (${pending})` : "resume")
+        : "pause";
+      pauseButton.className = livePaused ? "active" : "";
+      pauseButton.title = livePaused
+        ? "Resume live updates and apply buffered request records."
+        : "Pause applying live request records to the table.";
+      if (livePaused) {
+        setStatus(pending ? `paused (+${pending})` : "paused", "");
+      }
+    }
+
+    function applyRecord(record) {
+      records.set(record.record_id, record);
+    }
+
+    function renderAfterRecordChange() {
+      if (operatorRuntime) operatorRuntime.inspector_retained_requests = records.size;
+      renderRows();
+      renderOverview();
+      scheduleOperatorReload();
+      if (selectedId && records.has(selectedId)) renderDetail(records.get(selectedId));
+    }
+
     function renderColumnOptions() {
       columnOptions.replaceChildren();
       for (const column of tableColumns) {
@@ -957,12 +993,13 @@
     }
 
     function upsert(record) {
-      records.set(record.record_id, record);
-      if (operatorRuntime) operatorRuntime.inspector_retained_requests = records.size;
-      renderRows();
-      renderOverview();
-      scheduleOperatorReload();
-      if (selectedId === record.record_id) renderDetail(record);
+      if (livePaused) {
+        pendingRecords.set(record.record_id, record);
+        updatePauseButton();
+        return;
+      }
+      applyRecord(record);
+      renderAfterRecordChange();
     }
 
     function hashRecordId() {
@@ -1267,6 +1304,75 @@
       return card;
     }
 
+    function recordJson(record) {
+      return `${JSON.stringify(record, null, 2)}\n`;
+    }
+
+    async function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      textarea.remove();
+      if (!copied) throw new Error("copy command failed");
+    }
+
+    function downloadRecordJson(record) {
+      const blob = new Blob([recordJson(record)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `onair-request-${record.record_id}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function actionsCard(record) {
+      const card = document.createElement("div");
+      card.className = "card";
+      const heading = document.createElement("h2");
+      heading.textContent = "actions";
+      const actions = document.createElement("div");
+      actions.className = "actions";
+
+      const copyButton = document.createElement("button");
+      copyButton.type = "button";
+      copyButton.textContent = "copy record json";
+      copyButton.title = "Copy the selected inspector record JSON to the clipboard.";
+      copyButton.addEventListener("click", async () => {
+        try {
+          await copyText(recordJson(record));
+          setStatus("copied record json", "live");
+        } catch (error) {
+          setStatus(`copy failed: ${error.message}`, "dead");
+        }
+      });
+
+      const downloadButton = document.createElement("button");
+      downloadButton.type = "button";
+      downloadButton.textContent = "download json";
+      downloadButton.title = "Download the selected inspector record JSON.";
+      downloadButton.addEventListener("click", () => {
+        downloadRecordJson(record);
+        setStatus("downloaded record json", "live");
+      });
+
+      actions.append(copyButton, downloadButton);
+      card.append(heading, actions);
+      return card;
+    }
+
     function renderDetail(record) {
       const cards = [
         kvCard("request", [
@@ -1308,6 +1414,7 @@
           ["debug capture id", record.debug_capture_id],
         ]),
       ];
+      cards.push(actionsCard(record));
       const waterfallCard = attemptWaterfallCard(record);
       if (waterfallCard) cards.push(waterfallCard);
       const retryCard = retryAttemptsCard(record);
@@ -1345,10 +1452,12 @@
       await reloadOperator();
       const list = await fetchJson(`${base}/requests?limit=${snapshotLimit}`);
       records.clear();
+      pendingRecords.clear();
       for (const record of list) records.set(record.record_id, record);
       if (operatorRuntime) operatorRuntime.inspector_retained_requests = records.size;
       renderRows();
       renderOverview();
+      updatePauseButton();
       const target = selectedId || hashRecordId();
       if (target) await selectRecordId(target, false);
     }
@@ -1356,7 +1465,13 @@
     function connect() {
       if (source) source.close();
       source = new EventSource(`${base}/events?snapshot_limit=${snapshotLimit}`);
-      source.addEventListener("open", () => setStatus("live", "live"));
+      source.addEventListener("open", () => {
+        if (livePaused) {
+          updatePauseButton();
+        } else {
+          setStatus("live", "live");
+        }
+      });
       source.addEventListener("snapshot", event => upsert(JSON.parse(event.data)));
       source.addEventListener("request", event => upsert(JSON.parse(event.data)));
       source.addEventListener("lagged", () => reload().catch(error => setStatus(error.message, "dead")));
@@ -1367,6 +1482,18 @@
 
     document.getElementById("reload").addEventListener("click", () => {
       reload().then(() => setStatus("reloaded", "live")).catch(error => setStatus(error.message, "dead"));
+    });
+    pauseButton.addEventListener("click", () => {
+      livePaused = !livePaused;
+      if (!livePaused) {
+        if (pendingRecords.size) {
+          for (const record of pendingRecords.values()) applyRecord(record);
+          pendingRecords.clear();
+          renderAfterRecordChange();
+        }
+        setStatus("live", "live");
+      }
+      updatePauseButton();
     });
     filter.addEventListener("input", renderRows);
     window.addEventListener("hashchange", () => {
@@ -1383,6 +1510,7 @@
     renderQuickFilters();
     renderColumnOptions();
     renderTableHeader();
+    updatePauseButton();
     renderOverview();
     reload().catch(error => setStatus(error.message, "dead")).finally(connect);
   </script>
