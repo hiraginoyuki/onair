@@ -372,9 +372,11 @@ mod tests {
         assert!(UI_HTML.contains("columnOptions"));
         assert!(UI_HTML.contains("quickFilters"));
         assert!(UI_HTML.contains("sortStorageKey"));
+        assert!(UI_HTML.contains("presetStorageKey"));
         assert!(UI_HTML.contains("Authenticated onair client identity."));
         assert!(UI_HTML.contains("copy record json"));
-        assert!(UI_HTML.contains("columnsMenu"));
+        assert!(UI_HTML.contains("Save and restore local table views"));
+        assert!(UI_HTML.contains("save view"));
         assert!(UI_HTML.contains("data-full"));
         assert!(UI_HTML.contains("pause"));
     }

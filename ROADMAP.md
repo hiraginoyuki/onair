@@ -7,7 +7,7 @@ These items are ordered roughly by dependency and operator value, not by impleme
 - Backend-anonymity-focused OpenAI-compatible reverse proxy behavior: public model visibility, backend model rewriting, header allowlisting, generic backend errors, and backend redirect blocking.
 - Filesystem config hot reload for runtime policy, with invalid reloads preserving the previous config.
 - Local read-only operator API and inspector overview cards for sanitized active config, effective model visibility, runtime state, and telemetry exporter status.
-- Local request inspector with live request table, identity column, sortable columns, filter help, quick filters, pause/resume live updates, selected-record JSON copy/download actions, column selection, hover-expanded table values, detail view, bounded SSE replay, per-request timing timelines, and backend-attempt waterfalls.
+- Local request inspector with live request table, identity column, sortable columns, filter help, quick filters, saved local table-view presets, pause/resume live updates, selected-record JSON copy/download actions, column selection, hover-expanded table values, detail view, bounded SSE replay, per-request timing timelines, and backend-attempt waterfalls.
 - Default-local inspector/operator access that uses the effective client address after trusted-proxy header processing.
 - Opt-in debug capture with private filesystem permissions for exact request-body troubleshooting.
 - Backend health snapshots from proxied traffic and optional active probes.
@@ -15,7 +15,7 @@ These items are ordered roughly by dependency and operator value, not by impleme
 
 ## Priority 1
 
-- Inspector usability from live testing: saved table presets and denser per-attempt detail controls.
+- Inspector usability from live testing: denser per-attempt detail controls.
 - Capability-aware health probes beyond the generic configured health path.
 - Health-aware routing, circuit breakers, and richer retry policies such as status-code-specific fallback.
 - Weighted backend selection for compatible routes.

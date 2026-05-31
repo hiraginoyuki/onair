@@ -280,7 +280,7 @@ Endpoints:
 - `GET /_onair/inspector/requests/{record_id}`: JSON detail for one retained record.
 - `GET /_onair/inspector/events`: server-sent events for low-latency live updates. Use `?snapshot_limit=<n>` to cap the initial replay; the UI defaults this to `1000`.
 - The UI updates the URL hash to the selected `record_id`, so a request detail view can be bookmarked or shared locally.
-- The request table includes sortable columns, identity by default, a column chooser, quick filters for errors/fallback/slow requests, pause/resume live updates, copy/download actions for the selected request JSON, and a filter input that uses space-separated terms so every term must match the retained request metadata it searches.
+- The request table includes sortable columns, identity by default, a column chooser, local saved table-view presets, quick filters for errors/fallback/slow requests, pause/resume live updates, copy/download actions for the selected request JSON, and a filter input that uses space-separated terms so every term must match the retained request metadata it searches.
 
 Read-only operator endpoints use the same `[inspector]` enablement and effective-client loopback/`allow_remote` gate:
 

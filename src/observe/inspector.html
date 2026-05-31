@@ -108,10 +108,10 @@
       gap: 8px;
       padding: 10px;
     }
-    .columns {
+    .toolbar-menu {
       position: relative;
     }
-    .columns summary {
+    .toolbar-menu summary {
       border: 1px solid var(--border);
       border-radius: 6px;
       background: var(--panel-2);
@@ -121,14 +121,20 @@
       padding: 6px 8px;
       user-select: none;
     }
-    .columns summary::-webkit-details-marker {
+    .toolbar-menu summary::-webkit-details-marker {
       display: none;
     }
-    .column-options {
+    .menu-panel {
       position: absolute;
       right: 0;
       top: calc(100% + 6px);
       z-index: 20;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
+    }
+    .column-options {
       display: grid;
       grid-template-columns: repeat(2, minmax(150px, 1fr));
       gap: 4px 10px;
@@ -136,10 +142,16 @@
       max-height: 52vh;
       overflow: auto;
       padding: 10px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--panel);
-      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
+    }
+    .preset-options {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: min(70vw, 540px);
+      max-width: min(80vw, 760px);
+      max-height: 60vh;
+      overflow: auto;
+      padding: 10px;
     }
     .column-options label {
       display: flex;
@@ -152,6 +164,52 @@
       width: auto;
       margin: 0;
       padding: 0;
+    }
+    .preset-form {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .preset-form input {
+      width: auto;
+      min-width: min(28vw, 220px);
+      flex: 1 1 220px;
+    }
+    .preset-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .preset-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+    .preset-meta {
+      min-width: 0;
+    }
+    .preset-name {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .preset-summary {
+      margin-top: 3px;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .preset-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .preset-actions button {
+      padding: 4px 8px;
     }
     main {
       display: grid;
@@ -412,8 +470,8 @@
       .toolbar-row { flex-wrap: wrap; }
       .toolbar-help { max-width: none; text-align: left; }
       input { width: 100%; }
-      .columns { position: static; }
-      .column-options { left: 0; right: 0; min-width: auto; }
+      .toolbar-menu { position: static; }
+      .menu-panel { left: 0; right: 0; min-width: auto; max-width: none; }
       main { grid-template-columns: 1fr; }
       .detail { max-height: none; }
     }
@@ -427,9 +485,13 @@
     <div class="toolbar">
       <div class="toolbar-row">
         <input id="filter" type="search" autocomplete="off" spellcheck="false" aria-describedby="filter-help" placeholder="filter terms, e.g. backend-a timeout" title="Filter uses space-separated terms; every term must match route, identity, models, backend, client addresses, user-agent, outcome, or attempt metadata.">
-        <details class="columns">
+        <details class="toolbar-menu columns">
           <summary title="Show or hide request table columns">columns</summary>
-          <div id="columnOptions" class="column-options"></div>
+          <div id="columnOptions" class="menu-panel column-options"></div>
+        </details>
+        <details class="toolbar-menu presets">
+          <summary title="Save and restore local table views">views</summary>
+          <div id="presetOptions" class="menu-panel preset-options"></div>
         </details>
         <button id="pause" type="button" title="Pause or resume applying live SSE updates to the table">pause</button>
         <button id="reload" type="button">reload</button>
@@ -466,14 +528,16 @@
     const detail = document.getElementById("detail");
     const filter = document.getElementById("filter");
     const quickFiltersElement = document.getElementById("quickFilters");
-    const columnsMenu = document.querySelector(".columns");
     const columnOptions = document.getElementById("columnOptions");
+    const presetOptions = document.getElementById("presetOptions");
     const pauseButton = document.getElementById("pause");
     const statusText = document.getElementById("status");
     const statusDot = document.getElementById("dot");
     const countText = document.getElementById("count");
     const columnStorageKey = "onair.inspector.tableColumns.v2";
     const sortStorageKey = "onair.inspector.tableSort.v1";
+    const presetStorageKey = "onair.inspector.tablePresets.v1";
+    const maxPresetCount = 24;
     const slowRequestThresholdUs = 5_000_000;
     const records = new Map();
     const pendingRecords = new Map();
@@ -485,6 +549,7 @@
     let selectedId = null;
     let source = null;
     let livePaused = false;
+    let viewPresets = [];
 
     const timelineFields = [
       ["proxy entry", "proxy_entry_us"],
@@ -722,6 +787,7 @@
         matches: record => Number((record.timeline || {}).total_us || 0) >= slowRequestThresholdUs,
       },
     ];
+    const quickFilterKeys = new Set(quickFilterDefinitions.map(definition => definition.key));
 
     function setStatus(text, className) {
       statusText.textContent = text;
@@ -838,6 +904,165 @@
         // Sorting preferences are optional.
       }
       return { key: "time", direction: "desc" };
+    }
+
+    function normalizePresetName(name) {
+      return String(name || "").trim().replace(/\s+/g, " ").slice(0, 64);
+    }
+
+    function normalizePresetColumns(columns) {
+      if (!Array.isArray(columns)) return defaultColumnKeys;
+      const ordered = [];
+      const selected = new Set(columns.filter(key => validColumnKeys.has(key)));
+      for (const column of tableColumns) {
+        if (selected.has(column.key)) ordered.push(column.key);
+      }
+      return ordered.length ? ordered : defaultColumnKeys;
+    }
+
+    function normalizePresetQuickFilters(filters) {
+      if (!Array.isArray(filters)) return [];
+      const selected = new Set(filters.filter(key => quickFilterKeys.has(key)));
+      return quickFilterDefinitions.filter(definition => selected.has(definition.key)).map(definition => definition.key);
+    }
+
+    function normalizePresetSort(sort) {
+      if (
+        sort
+        && validColumnKeys.has(sort.key)
+        && (sort.direction === "asc" || sort.direction === "desc")
+      ) {
+        return { key: sort.key, direction: sort.direction };
+      }
+      return { key: "time", direction: "desc" };
+    }
+
+    function normalizePreset(preset) {
+      const name = normalizePresetName(preset && preset.name);
+      if (!name) return null;
+      return {
+        name,
+        columns: normalizePresetColumns(preset.columns),
+        quickFilters: normalizePresetQuickFilters(preset.quickFilters),
+        sort: normalizePresetSort(preset.sort),
+      };
+    }
+
+    function loadViewPresets() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(presetStorageKey));
+        if (Array.isArray(parsed)) {
+          const presets = [];
+          const names = new Set();
+          for (const value of parsed) {
+            const preset = normalizePreset(value);
+            if (!preset) continue;
+            const key = preset.name.toLowerCase();
+            if (names.has(key)) continue;
+            names.add(key);
+            presets.push(preset);
+            if (presets.length >= maxPresetCount) break;
+          }
+          return presets;
+        }
+      } catch {
+        // Presets are optional.
+      }
+      return [];
+    }
+
+    function saveViewPresets() {
+      try {
+        localStorage.setItem(presetStorageKey, JSON.stringify(viewPresets));
+      } catch {
+        // Presets are optional.
+      }
+    }
+
+    function currentPresetState(name) {
+      return normalizePreset({
+        name,
+        columns: activeColumns().map(column => column.key),
+        quickFilters: [...quickFilters],
+        sort: sortState,
+      });
+    }
+
+    function presetSummary(preset) {
+      const parts = [
+        `columns ${preset.columns.length}`,
+        `sort ${preset.sort.key} ${preset.sort.direction}`,
+        preset.quickFilters.length ? `quick ${preset.quickFilters.join(", ")}` : "quick none",
+      ];
+      return parts.join(" · ");
+    }
+
+    function closeToolbarMenus(except = null) {
+      for (const menu of document.querySelectorAll(".toolbar-menu")) {
+        if (menu !== except) menu.open = false;
+      }
+    }
+
+    function applyPreset(preset) {
+      visibleColumns.clear();
+      for (const columnKey of preset.columns) visibleColumns.add(columnKey);
+      sortState = { ...preset.sort };
+      quickFilters.clear();
+      for (const key of preset.quickFilters) quickFilters.add(key);
+      saveVisibleColumns();
+      saveSortState();
+      renderColumnOptions();
+      renderQuickFilters();
+      renderTableHeader();
+      renderRows();
+      renderViewPresets();
+      setStatus(`applied view ${preset.name}`, "live");
+      closeToolbarMenus();
+    }
+
+    function savePreset(name) {
+      const preset = currentPresetState(name);
+      if (!preset) {
+        setStatus("preset name required", "dead");
+        return;
+      }
+      const index = viewPresets.findIndex(existing => existing.name.toLowerCase() === preset.name.toLowerCase());
+      if (index >= 0) {
+        viewPresets[index] = preset;
+      } else if (viewPresets.length < maxPresetCount) {
+        viewPresets.push(preset);
+      } else {
+        setStatus(`max ${maxPresetCount} presets reached`, "dead");
+        return;
+      }
+      saveViewPresets();
+      renderViewPresets();
+      setStatus(`saved view ${preset.name}`, "live");
+    }
+
+    function deletePreset(name) {
+      const index = viewPresets.findIndex(existing => existing.name === name);
+      if (index < 0) return;
+      viewPresets.splice(index, 1);
+      saveViewPresets();
+      renderViewPresets();
+      setStatus(`deleted view ${name}`, "live");
+    }
+
+    function resetTableView() {
+      visibleColumns.clear();
+      for (const columnKey of defaultColumnKeys) visibleColumns.add(columnKey);
+      sortState = { key: "time", direction: "desc" };
+      quickFilters.clear();
+      saveVisibleColumns();
+      saveSortState();
+      renderColumnOptions();
+      renderQuickFilters();
+      renderTableHeader();
+      renderRows();
+      renderViewPresets();
+      setStatus("restored default table view", "live");
+      closeToolbarMenus();
     }
 
     function saveSortState() {
@@ -988,6 +1213,89 @@
         label.append(checkbox, text);
         columnOptions.appendChild(label);
       }
+    }
+
+    function renderViewPresets() {
+      presetOptions.replaceChildren();
+
+      const form = document.createElement("form");
+      form.className = "preset-form";
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.autocomplete = "off";
+      nameInput.spellcheck = "false";
+      nameInput.maxLength = 64;
+      nameInput.placeholder = "preset name";
+      nameInput.title = "Save the current columns, sort, and quick filters under a local name.";
+      const saveButton = document.createElement("button");
+      saveButton.type = "submit";
+      saveButton.textContent = "save view";
+      saveButton.title = "Save the current table view as a local preset.";
+      const resetButton = document.createElement("button");
+      resetButton.type = "button";
+      resetButton.textContent = "reset";
+      resetButton.title = "Restore the default columns, sort, and quick filters.";
+      resetButton.addEventListener("click", resetTableView);
+      form.append(nameInput, saveButton, resetButton);
+      form.addEventListener("submit", event => {
+        event.preventDefault();
+        const name = nameInput.value.trim();
+        if (!name) {
+          setStatus("preset name required", "dead");
+          nameInput.focus();
+          return;
+        }
+        savePreset(name);
+        nameInput.value = "";
+        nameInput.focus();
+      });
+
+      presetOptions.appendChild(form);
+
+      const list = document.createElement("div");
+      list.className = "preset-list";
+      if (!viewPresets.length) {
+        const emptyState = document.createElement("div");
+        emptyState.className = "toolbar-help";
+        emptyState.style.textAlign = "left";
+        emptyState.textContent = "No saved views yet. Save the current table layout here, or reset to the defaults.";
+        list.appendChild(emptyState);
+      } else {
+        for (const preset of viewPresets) {
+          const row = document.createElement("div");
+          row.className = "preset-row";
+
+          const meta = document.createElement("div");
+          meta.className = "preset-meta";
+          const name = document.createElement("div");
+          name.className = "preset-name";
+          name.textContent = preset.name;
+          const summary = document.createElement("div");
+          summary.className = "preset-summary";
+          summary.textContent = presetSummary(preset);
+          meta.append(name, summary);
+
+          const actions = document.createElement("div");
+          actions.className = "preset-actions";
+
+          const applyButton = document.createElement("button");
+          applyButton.type = "button";
+          applyButton.textContent = "apply";
+          applyButton.title = "Apply this saved table view.";
+          applyButton.addEventListener("click", () => applyPreset(preset));
+
+          const deleteButton = document.createElement("button");
+          deleteButton.type = "button";
+          deleteButton.textContent = "delete";
+          deleteButton.title = "Delete this saved table view.";
+          deleteButton.addEventListener("click", () => deletePreset(preset.name));
+
+          actions.append(applyButton, deleteButton);
+          row.append(meta, actions);
+          list.appendChild(row);
+        }
+      }
+      presetOptions.appendChild(list);
     }
 
     function renderTableHeader() {
@@ -1550,20 +1858,28 @@
     });
     filter.addEventListener("input", renderRows);
     filter.addEventListener("search", renderRows);
+    for (const menu of document.querySelectorAll(".toolbar-menu")) {
+      menu.addEventListener("toggle", () => {
+        if (menu.open) closeToolbarMenus(menu);
+      });
+    }
     document.addEventListener("pointerdown", event => {
-      if (
-        columnsMenu
-        && columnsMenu.open
-        && event.target instanceof Node
-        && !columnsMenu.contains(event.target)
-      ) {
-        columnsMenu.open = false;
+      if (!(event.target instanceof Node)) return;
+      let insideMenu = false;
+      for (const menu of document.querySelectorAll(".toolbar-menu")) {
+        if (menu.contains(event.target)) {
+          insideMenu = true;
+          break;
+        }
       }
+      if (!insideMenu) closeToolbarMenus();
     });
     document.addEventListener("keydown", event => {
-      if (event.key === "Escape" && columnsMenu && columnsMenu.open) {
-        columnsMenu.open = false;
-        const summary = columnsMenu.querySelector("summary");
+      if (event.key === "Escape") {
+        const openMenu = document.querySelector(".toolbar-menu[open]");
+        if (!openMenu) return;
+        openMenu.open = false;
+        const summary = openMenu.querySelector("summary");
         if (summary) summary.focus();
       }
     });
@@ -1578,8 +1894,10 @@
       }
     });
 
+    viewPresets = loadViewPresets();
     renderQuickFilters();
     renderColumnOptions();
+    renderViewPresets();
     renderTableHeader();
     updatePauseButton();
     renderOverview();
