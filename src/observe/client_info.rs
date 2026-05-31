@@ -60,6 +60,10 @@ impl ClientInfo {
         &self.effective_client_addr
     }
 
+    pub fn effective_client_is_loopback(&self) -> bool {
+        client_ip(&self.effective_client_addr).is_some_and(|address| address.is_loopback())
+    }
+
     pub fn trusted_proxy_addr(&self) -> &str {
         self.trusted_proxy_addr.as_deref().unwrap_or(NONE)
     }
@@ -255,6 +259,13 @@ fn normalized_ip_or_socket(value: &str) -> Option<String> {
     None
 }
 
+fn client_ip(value: &str) -> Option<IpAddr> {
+    if let Ok(address) = value.parse::<SocketAddr>() {
+        return Some(address.ip());
+    }
+    value.parse::<IpAddr>().ok()
+}
+
 fn sanitized_value(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -320,6 +331,23 @@ mod tests {
 
         assert_eq!(info.effective_client_addr(), "198.51.100.20:55432");
         assert_eq!(info.trusted_proxy_addr(), "none");
+    }
+
+    #[test]
+    fn effective_client_loopback_uses_trusted_forwarded_address() {
+        let mut headers = HeaderMap::new();
+        headers.insert(FORWARDED, HeaderValue::from_static("for=198.51.100.20"));
+        let peer = "127.0.0.1:55432".parse().unwrap();
+        let remote =
+            ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);
+
+        assert!(!remote.effective_client_is_loopback());
+
+        headers.insert(FORWARDED, HeaderValue::from_static("for=127.0.0.1"));
+        let local =
+            ClientInfo::from_headers(&headers, Some(peer), &["127.0.0.1/32".parse().unwrap()]);
+
+        assert!(local.effective_client_is_loopback());
     }
 
     #[test]

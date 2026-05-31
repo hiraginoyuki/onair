@@ -22,7 +22,8 @@ use crate::config::{Config, ConfigStore};
 use crate::error::{ApiError, Result};
 use crate::metrics::{MetricLabels, Metrics, RequestTimer};
 use crate::observe::{
-    BackendHealthStore, HealthProbeTask, InspectorRequestRecord, InspectorStore, inspector,
+    BackendHealthStore, ClientInfo, HealthProbeTask, InspectorRequestRecord, InspectorStore,
+    inspector,
 };
 use crate::openai;
 use crate::operator;
@@ -478,10 +479,12 @@ fn local_operator_gate(state: &AppState, request: &Request<Body>) -> Option<Resp
             .extensions()
             .get::<ConnectInfo<SocketAddr>>()
             .map(|connect_info| connect_info.0);
-        if !peer_addr
-            .map(|address| address.ip().is_loopback())
-            .unwrap_or(false)
-        {
+        let client_info = ClientInfo::from_headers(
+            request.headers(),
+            peer_addr,
+            &config.server.trusted_proxy_cidrs,
+        );
+        if !client_info.effective_client_is_loopback() {
             return Some(inspector_not_found());
         }
     }
@@ -545,7 +548,7 @@ mod tests {
 
     use axum::body::{Body, to_bytes};
     use axum::extract::{ConnectInfo, State};
-    use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, LOCATION};
+    use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, FORWARDED, LOCATION};
     use axum::http::{Request, StatusCode};
     use axum::routing::{get, post};
     use axum::{Json, Router};
@@ -1251,6 +1254,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inspector_rejects_remote_forwarded_clients_by_default() {
+        let server = ServerConfig {
+            trusted_proxy_cidrs: vec!["127.0.0.1/32".parse().unwrap()],
+            ..ServerConfig::default()
+        };
+        let state = test_state_with_server_config_and_inspector(
+            RoutingStrategy::Priority,
+            vec![],
+            server,
+            btree_set([PUBLIC_MODEL]),
+            DebugCaptureConfig::default(),
+            InspectorConfig {
+                enabled: true,
+                retention_requests: 16,
+                allow_remote: false,
+            },
+            HealthConfig::default(),
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/_onair/inspector/requests")
+                    .header(FORWARDED, "for=198.51.100.20")
+                    .extension(ConnectInfo(
+                        "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn models_respect_context_length_output_policy() {
         let state = test_state_with_client_models(
             RoutingStrategy::Priority,
@@ -1406,10 +1447,30 @@ mod tests {
         inspector: InspectorConfig,
         health: HealthConfig,
     ) -> Arc<AppState> {
+        test_state_with_server_config_and_inspector(
+            strategy,
+            backends,
+            ServerConfig::default(),
+            client_models,
+            debug_capture,
+            inspector,
+            health,
+        )
+    }
+
+    fn test_state_with_server_config_and_inspector(
+        strategy: RoutingStrategy,
+        backends: Vec<ResolvedBackend>,
+        server: ServerConfig,
+        client_models: BTreeSet<String>,
+        debug_capture: DebugCaptureConfig,
+        inspector: InspectorConfig,
+        health: HealthConfig,
+    ) -> Arc<AppState> {
         Arc::new(
             AppState::new(
                 Config {
-                    server: ServerConfig::default(),
+                    server,
                     telemetry: TelemetryConfig::default(),
                     debug_capture,
                     inspector,

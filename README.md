@@ -296,7 +296,7 @@ Security guidance:
 
 - The inspector does not store prompt or completion bodies. It can still expose sensitive metadata such as model names, client IDs, source addresses, user agents, query strings, request sizes, token counts, and debug capture IDs.
 - Operator endpoints can expose backend IDs, backend URLs, backend model IDs, model visibility policy, and local filesystem paths such as `debug_capture.directory`.
-- With `allow_remote = false`, inspector endpoints are only served to loopback peers. This is the default and is appropriate for `bind = "127.0.0.1:8080"` plus a browser on the same host.
+- With `allow_remote = false`, inspector endpoints are only served when the effective client address resolves to loopback after trusted-proxy header processing. This is the default and is appropriate for `bind = "127.0.0.1:8080"` plus a browser on the same host, while still rejecting forwarded remote clients that arrive through a trusted proxy.
 - Set `allow_remote = true` only if the onair bind address is protected by another access-control layer, such as SSH tunneling, a private VPN, or a trusted reverse proxy with its own authentication.
 - Inspector data is memory-only and disappears on process restart. Increase `retention_requests` only as much as needed; config loading rejects values above `100000` to avoid accidental unbounded memory growth.
 - Inspector responses use `Cache-Control: no-store`; avoid putting them behind shared caches or public reverse proxies.
