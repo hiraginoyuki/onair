@@ -18,18 +18,22 @@ use crate::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
 use crate::observe::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
 use crate::observe::{
-    ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
-    InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts, RequestTimeline,
-    TimelineEvent, TimelineSnapshot,
+    ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase, InspectorStore,
+    InspectorTokenCounts, RequestTimeline, TimelineEvent, TimelineSnapshot,
 };
-use crate::openai::{self, UsageTotals};
+use crate::openai;
 use crate::routing::{self, SelectedRoute};
 
 mod attempt;
+mod inspector;
 mod response;
 mod upstream;
 
 use self::attempt::{InspectorAttemptBuilder, InspectorAttemptInit};
+use self::inspector::{
+    PreflightInspectorRecord, RequestObservationBase, record_context_inspector,
+    record_preflight_inspector, routed_inspector_base,
+};
 use self::response::{buffered_response, streaming_response};
 use self::upstream::{
     BufferedBodyReadError, UpstreamSendError, backend_target, read_capped_upstream_error_body,
@@ -1001,205 +1005,6 @@ fn record_preflight_failure(
     state
         .metrics
         .record_request(&labels, status.as_u16(), duration);
-}
-
-struct RequestObservationBase {
-    inspector_enabled: bool,
-    inspector_retention_requests: usize,
-    record_id: String,
-    client_request_id: Option<String>,
-    started_at_unix_ms: u64,
-    method: String,
-    path: String,
-    query: Option<String>,
-    client_info: ClientInfo,
-    request_body_bytes: usize,
-}
-
-struct PreflightInspectorRecord<'a> {
-    state: &'a Arc<AppState>,
-    observation: &'a RequestObservationBase,
-    timeline: &'a RequestTimeline,
-    route: &'a str,
-    identity: &'a str,
-    model: Option<&'a str>,
-    stream: bool,
-    status: StatusCode,
-    stage: &'static str,
-}
-
-fn routed_inspector_base(
-    observation: &RequestObservationBase,
-    labels: &MetricLabels,
-    model_log_fields: &ModelLogFields,
-    backend_target: &str,
-) -> InspectorRequestBase {
-    InspectorRequestBase {
-        record_id: observation.record_id.clone(),
-        client_request_id: observation.client_request_id.clone(),
-        started_at_unix_ms: observation.started_at_unix_ms,
-        method: observation.method.clone(),
-        path: observation.path.clone(),
-        query: observation.query.clone(),
-        route: labels.route.clone(),
-        identity: labels.identity.clone(),
-        requested_model: model_log_fields.requested.clone(),
-        public_model: model_log_fields.public.clone(),
-        backend_model: model_log_fields.backend.clone(),
-        backend: labels.backend.clone(),
-        backend_target: backend_target.to_owned(),
-        backend_remote_addr: None,
-        stream: labels.stream,
-        peer_addr: observation.client_info.peer_addr().to_owned(),
-        effective_client_addr: observation.client_info.effective_client_addr().to_owned(),
-        trusted_proxy_addr: observation.client_info.trusted_proxy_addr().to_owned(),
-        forwarded_for: observation.client_info.forwarded_for().to_owned(),
-        user_agent: observation.client_info.user_agent().to_owned(),
-        request_body_bytes: observation.request_body_bytes,
-        debug_capture_id: None,
-    }
-}
-
-fn preflight_inspector_base(record: &PreflightInspectorRecord<'_>) -> InspectorRequestBase {
-    let model = record.model.unwrap_or("none").to_owned();
-    InspectorRequestBase {
-        record_id: record.observation.record_id.clone(),
-        client_request_id: record.observation.client_request_id.clone(),
-        started_at_unix_ms: record.observation.started_at_unix_ms,
-        method: record.observation.method.clone(),
-        path: record.observation.path.clone(),
-        query: record.observation.query.clone(),
-        route: record.route.to_owned(),
-        identity: record.identity.to_owned(),
-        requested_model: model.clone(),
-        public_model: model,
-        backend_model: "none".to_owned(),
-        backend: "none".to_owned(),
-        backend_target: "none".to_owned(),
-        backend_remote_addr: None,
-        stream: record.stream,
-        peer_addr: record.observation.client_info.peer_addr().to_owned(),
-        effective_client_addr: record
-            .observation
-            .client_info
-            .effective_client_addr()
-            .to_owned(),
-        trusted_proxy_addr: record
-            .observation
-            .client_info
-            .trusted_proxy_addr()
-            .to_owned(),
-        forwarded_for: record.observation.client_info.forwarded_for().to_owned(),
-        user_agent: record.observation.client_info.user_agent().to_owned(),
-        request_body_bytes: record.observation.request_body_bytes,
-        debug_capture_id: None,
-    }
-}
-
-fn record_preflight_inspector(record: PreflightInspectorRecord<'_>) {
-    if !record.observation.inspector_enabled {
-        return;
-    }
-
-    record_inspector_request(
-        &record.state.inspector,
-        record.observation.inspector_enabled,
-        record.observation.inspector_retention_requests,
-        InspectorRecord {
-            base: preflight_inspector_base(&record),
-            timeline: record.timeline,
-            outcome: InspectorOutcome::Preflight {
-                stage: record.stage,
-            },
-            status: record.status,
-            error_kind: None,
-            backend_attempts: Vec::new(),
-            retried_attempts: Vec::new(),
-            response_body_bytes: None,
-            tokens: InspectorTokenCounts::default(),
-        },
-    );
-}
-
-fn record_context_inspector(
-    context: &ProxyContext,
-    outcome: InspectorOutcome,
-    status: StatusCode,
-    error_kind: Option<&'static str>,
-    response_body_bytes: Option<usize>,
-    tokens: InspectorTokenCounts,
-) {
-    let mut base = context.inspector_base.clone();
-    base.backend_remote_addr = context
-        .backend_remote_addr
-        .map(|address| address.to_string());
-    base.debug_capture_id = context
-        .debug_capture
-        .as_ref()
-        .map(|capture| capture.id().to_owned());
-    record_inspector_request(
-        &context.state.inspector,
-        context.inspector_enabled,
-        context.inspector_retention_requests,
-        InspectorRecord {
-            base,
-            timeline: &context.timeline,
-            outcome,
-            status,
-            error_kind,
-            backend_attempts: context.backend_attempts.clone(),
-            retried_attempts: context.retried_attempts.clone(),
-            response_body_bytes,
-            tokens,
-        },
-    );
-}
-
-struct InspectorRecord<'a> {
-    base: InspectorRequestBase,
-    timeline: &'a RequestTimeline,
-    outcome: InspectorOutcome,
-    status: StatusCode,
-    error_kind: Option<&'static str>,
-    backend_attempts: Vec<InspectorAttemptRecord>,
-    retried_attempts: Vec<InspectorAttemptRecord>,
-    response_body_bytes: Option<usize>,
-    tokens: InspectorTokenCounts,
-}
-
-fn record_inspector_request(
-    store: &InspectorStore,
-    enabled: bool,
-    retention_requests: usize,
-    record: InspectorRecord<'_>,
-) {
-    if !enabled {
-        return;
-    }
-
-    store.record(
-        enabled,
-        retention_requests,
-        crate::observe::InspectorRequestRecord::new(InspectorRequestRecordInit {
-            base: record.base,
-            outcome: record.outcome,
-            status: record.status.as_u16(),
-            error_kind: record.error_kind.map(str::to_owned),
-            backend_attempts: record.backend_attempts,
-            retried_attempts: record.retried_attempts,
-            response_body_bytes: record.response_body_bytes,
-            tokens: record.tokens,
-            timeline: record.timeline.snapshot(),
-        }),
-    );
-}
-
-fn inspector_tokens(usage: UsageTotals) -> InspectorTokenCounts {
-    InspectorTokenCounts {
-        input: usage.input,
-        cached_input: usage.cached_input,
-        output: usage.output,
-    }
 }
 
 struct PreflightFailureLog<'a> {

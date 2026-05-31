@@ -19,13 +19,13 @@ use crate::observe::{
 use crate::openai::{self, SseNormalizer, UsageTotals};
 
 use super::attempt::InspectorAttemptBuilder;
+use super::inspector::{InspectorRecord, inspector_tokens, record_inspector_request};
 use super::upstream::{
     BufferedBodyReadError, next_stream_chunk, read_buffered_upstream_body, upstream_error_kind,
 };
 use super::{
     ModelLogFields, PendingDebugCapture, ProxyContext, debug_timeline_fields,
-    ensure_failure_debug_capture, header_str, inspector_tokens, record_inspector_request,
-    response_builder, socket_addr_or_none,
+    ensure_failure_debug_capture, header_str, response_builder, socket_addr_or_none,
 };
 
 pub(super) async fn buffered_response(
@@ -120,7 +120,7 @@ pub(super) async fn buffered_response(
                 &state.inspector,
                 inspector_enabled,
                 inspector_retention_requests,
-                super::InspectorRecord {
+                InspectorRecord {
                     base: inspector_base,
                     timeline: &timeline,
                     outcome: InspectorOutcome::UpstreamBodyReadFailed,
@@ -199,7 +199,7 @@ pub(super) async fn buffered_response(
         &state.inspector,
         inspector_enabled,
         inspector_retention_requests,
-        super::InspectorRecord {
+        InspectorRecord {
             base: final_inspector_base,
             timeline: &timeline,
             outcome: InspectorOutcome::Completed,
@@ -633,7 +633,7 @@ impl Drop for StreamMetrics {
             &self.inspector_store,
             self.inspector_enabled,
             self.inspector_retention_requests,
-            super::InspectorRecord {
+            InspectorRecord {
                 base: inspector_base,
                 timeline: &self.timeline,
                 outcome: inspector_outcome,
