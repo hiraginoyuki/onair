@@ -299,7 +299,9 @@ pub async fn proxy_v1(
         timeline,
         attempt: 1,
         max_attempts,
+        backend_attempts: Vec::new(),
         retried_attempts: Vec::new(),
+        current_attempt: None,
     };
 
     do_proxy(context, request, fallback_routes)
@@ -335,7 +337,9 @@ struct ProxyContext {
     timeline: RequestTimeline,
     attempt: usize,
     max_attempts: usize,
+    backend_attempts: Vec<InspectorAttemptRecord>,
     retried_attempts: Vec<InspectorAttemptRecord>,
+    current_attempt: Option<InspectorAttemptBuilder>,
 }
 
 impl ProxyContext {
@@ -360,27 +364,117 @@ impl ProxyContext {
         self.route = route;
     }
 
-    fn record_retried_attempt(
+    fn record_retried_attempt(&mut self, attempt: InspectorAttemptRecord) {
+        self.backend_attempts.push(attempt.clone());
+        self.retried_attempts.push(attempt);
+    }
+
+    fn record_final_attempt(
         &mut self,
         status: StatusCode,
+        upstream_status: Option<u16>,
         outcome: &'static str,
         error_kind: Option<&'static str>,
-        elapsed: std::time::Duration,
     ) {
-        self.retried_attempts.push(InspectorAttemptRecord {
-            attempt: self.attempt,
-            backend: self.labels.backend.clone(),
-            backend_target: self.backend_target.clone(),
-            backend_remote_addr: self.backend_remote_addr.map(|address| address.to_string()),
-            debug_capture_id: self
+        if let Some(attempt) = self.current_attempt.take() {
+            let ended_us = self.timeline.elapsed_us();
+            self.backend_attempts.push(attempt.finish(
+                status,
+                upstream_status,
+                outcome,
+                error_kind,
+                ended_us,
+            ));
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct InspectorAttemptBuilder {
+    attempt: usize,
+    backend: String,
+    backend_target: String,
+    backend_remote_addr: Option<String>,
+    debug_capture_id: Option<String>,
+    started_us: u64,
+    request_rewritten_us: Option<u64>,
+    debug_capture_done_us: Option<u64>,
+    backend_forward_start_us: Option<u64>,
+    backend_headers_received_us: Option<u64>,
+    backend_body_first_chunk_us: Option<u64>,
+    backend_body_complete_us: Option<u64>,
+    stream_complete_us: Option<u64>,
+}
+
+impl InspectorAttemptBuilder {
+    fn new(context: &ProxyContext) -> Self {
+        Self {
+            attempt: context.attempt,
+            backend: context.labels.backend.clone(),
+            backend_target: context.backend_target.clone(),
+            backend_remote_addr: context
+                .backend_remote_addr
+                .map(|address| address.to_string()),
+            debug_capture_id: context
                 .debug_capture
                 .as_ref()
                 .map(|capture| capture.id().to_owned()),
+            started_us: context.timeline.elapsed_us(),
+            request_rewritten_us: None,
+            debug_capture_done_us: None,
+            backend_forward_start_us: None,
+            backend_headers_received_us: None,
+            backend_body_first_chunk_us: None,
+            backend_body_complete_us: None,
+            stream_complete_us: None,
+        }
+    }
+
+    fn set_debug_capture(&mut self, capture: Option<&RequestCapture>) {
+        self.debug_capture_id = capture.map(|capture| capture.id().to_owned());
+    }
+
+    fn set_backend_remote_addr(&mut self, address: Option<SocketAddr>) {
+        self.backend_remote_addr = address.map(|address| address.to_string());
+    }
+
+    fn mark_body_first_chunk(&mut self, elapsed_us: u64) {
+        if self.backend_body_first_chunk_us.is_none() {
+            self.backend_body_first_chunk_us = Some(elapsed_us);
+        }
+    }
+
+    fn finish(
+        self,
+        status: StatusCode,
+        upstream_status: Option<u16>,
+        outcome: &'static str,
+        error_kind: Option<&'static str>,
+        ended_us: u64,
+    ) -> InspectorAttemptRecord {
+        let elapsed_us = ended_us.saturating_sub(self.started_us);
+        InspectorAttemptRecord {
+            attempt: self.attempt,
+            backend: self.backend,
+            backend_target: self.backend_target,
+            backend_remote_addr: self.backend_remote_addr,
+            debug_capture_id: self.debug_capture_id,
             status: status.as_u16(),
             outcome: outcome.to_owned(),
             error_kind: error_kind.map(str::to_owned),
-            elapsed_ms: duration_millis(elapsed),
-        });
+            started_us: self.started_us,
+            ended_us,
+            elapsed_us,
+            elapsed_ms: duration_millis(std::time::Duration::from_micros(elapsed_us)),
+            upstream_status,
+            request_rewritten_us: self.request_rewritten_us,
+            debug_capture_done_us: self.debug_capture_done_us,
+            backend_forward_start_us: self.backend_forward_start_us,
+            backend_headers_received_us: self.backend_headers_received_us,
+            backend_body_first_chunk_us: self.backend_body_first_chunk_us,
+            backend_body_complete_us: self.backend_body_complete_us,
+            stream_complete_us: self.stream_complete_us,
+        }
     }
 }
 
@@ -407,6 +501,7 @@ async fn do_proxy(
     let mut fallback_routes = fallback_routes.into_iter();
     let upstream = loop {
         let attempt_started = Instant::now();
+        let mut attempt_record = InspectorAttemptBuilder::new(&context);
         context
             .state
             .metrics
@@ -416,7 +511,8 @@ async fn do_proxy(
             content_type.as_deref(),
             context.route.backend_model.as_deref(),
         );
-        context.timeline.mark(TimelineEvent::RequestRewritten);
+        attempt_record.request_rewritten_us =
+            Some(context.timeline.mark(TimelineEvent::RequestRewritten));
         let upstream_query = openai::rewrite_query_model(
             request_query.as_deref(),
             context.route.backend_model.as_deref(),
@@ -446,7 +542,9 @@ async fn do_proxy(
                 upstream_body: &outbound_body,
             },
         );
-        context.timeline.mark(TimelineEvent::DebugCaptureDone);
+        attempt_record.set_debug_capture(context.debug_capture.as_ref());
+        attempt_record.debug_capture_done_us =
+            Some(context.timeline.mark(TimelineEvent::DebugCaptureDone));
 
         let mut upstream_request = context
             .state
@@ -480,11 +578,15 @@ async fn do_proxy(
             upstream_request = upstream_request.header(X_REQUEST_ID, request_id);
         }
 
-        context.timeline.mark(TimelineEvent::BackendForwardStart);
+        attempt_record.backend_forward_start_us =
+            Some(context.timeline.mark(TimelineEvent::BackendForwardStart));
         match upstream_request.send().await {
             Ok(response) => {
-                context.timeline.mark(TimelineEvent::BackendHeadersReceived);
+                attempt_record.backend_headers_received_us =
+                    Some(context.timeline.mark(TimelineEvent::BackendHeadersReceived));
                 context.backend_remote_addr = response.remote_addr();
+                attempt_record.set_backend_remote_addr(context.backend_remote_addr);
+                context.current_attempt = Some(attempt_record);
                 break response;
             }
             Err(error) if error.is_timeout() => {
@@ -501,12 +603,14 @@ async fn do_proxy(
                         StatusCode::GATEWAY_TIMEOUT.as_u16(),
                         "timeout",
                     );
-                    context.record_retried_attempt(
+                    let attempt_record = attempt_record.finish(
                         StatusCode::GATEWAY_TIMEOUT,
+                        None,
                         "upstream_timeout",
                         Some("timeout"),
-                        attempt_elapsed,
+                        context.timeline.elapsed_us(),
                     );
+                    context.record_retried_attempt(attempt_record);
                     warn_proxy_retry(
                         &context,
                         &next_route,
@@ -535,6 +639,13 @@ async fn do_proxy(
                     StatusCode::GATEWAY_TIMEOUT.as_u16(),
                     "timeout",
                 );
+                context.backend_attempts.push(attempt_record.finish(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    None,
+                    "upstream_timeout",
+                    Some("timeout"),
+                    context.timeline.elapsed_us(),
+                ));
                 record_context_inspector(
                     &context,
                     InspectorOutcome::UpstreamTimeout,
@@ -569,12 +680,14 @@ async fn do_proxy(
                         StatusCode::BAD_GATEWAY.as_u16(),
                         error_kind,
                     );
-                    context.record_retried_attempt(
+                    let attempt_record = attempt_record.finish(
                         StatusCode::BAD_GATEWAY,
+                        None,
                         "upstream_request_failed",
                         Some(error_kind),
-                        attempt_elapsed,
+                        context.timeline.elapsed_us(),
                     );
+                    context.record_retried_attempt(attempt_record);
                     warn_proxy_retry(
                         &context,
                         &next_route,
@@ -605,6 +718,13 @@ async fn do_proxy(
                     StatusCode::BAD_GATEWAY.as_u16(),
                     error_kind,
                 );
+                context.backend_attempts.push(attempt_record.finish(
+                    StatusCode::BAD_GATEWAY,
+                    None,
+                    "upstream_request_failed",
+                    Some(error_kind),
+                    context.timeline.elapsed_us(),
+                ));
                 record_context_inspector(
                     &context,
                     InspectorOutcome::UpstreamRequestFailed,
@@ -658,6 +778,12 @@ async fn do_proxy(
             upstream_status.as_u16(),
             "upstream_non_success",
         );
+        context.record_final_attempt(
+            api_error.status,
+            Some(upstream_status.as_u16()),
+            "upstream_non_success",
+            None,
+        );
         record_context_inspector(
             &context,
             InspectorOutcome::UpstreamNonSuccess,
@@ -707,14 +833,18 @@ async fn buffered_response(
         mut timeline,
         attempt,
         max_attempts,
+        mut backend_attempts,
         retried_attempts,
+        mut current_attempt,
     } = context;
     let upstream_status = upstream.status();
     let upstream_headers = upstream.headers().clone();
     let content_type = header_str(&upstream_headers, &CONTENT_TYPE).map(str::to_owned);
-    let bytes = read_buffered_upstream_body(upstream, &mut timeline)
+    let bytes = match read_buffered_upstream_body(upstream, &mut timeline, current_attempt.as_mut())
         .await
-        .map_err(|error| {
+    {
+        Ok(bytes) => bytes,
+        Err(error) => {
             let error_kind = upstream_error_kind(&error);
             warn!(error_kind = error_kind, "failed to read upstream body");
             state.metrics.record_request(
@@ -734,6 +864,15 @@ async fn buffered_response(
                 StatusCode::BAD_GATEWAY.as_u16(),
                 error_kind,
             );
+            if let Some(attempt_record) = current_attempt.take() {
+                backend_attempts.push(attempt_record.finish(
+                    StatusCode::BAD_GATEWAY,
+                    Some(upstream_status.as_u16()),
+                    "upstream_body_read_failed",
+                    Some(error_kind),
+                    timeline.elapsed_us(),
+                ));
+            }
             let mut inspector_base = inspector_base.clone();
             inspector_base.backend_remote_addr =
                 backend_remote_addr.map(|address| address.to_string());
@@ -750,13 +889,15 @@ async fn buffered_response(
                     outcome: InspectorOutcome::UpstreamBodyReadFailed,
                     status: StatusCode::BAD_GATEWAY,
                     error_kind: Some(error_kind),
+                    backend_attempts: backend_attempts.clone(),
                     retried_attempts: retried_attempts.clone(),
                     response_body_bytes: None,
                     tokens: InspectorTokenCounts::default(),
                 },
             );
-            ApiError::upstream(StatusCode::BAD_GATEWAY)
-        })?;
+            return Err(ApiError::upstream(StatusCode::BAD_GATEWAY));
+        }
+    };
 
     let (response_bytes, usage) = openai::rewrite_response_body(
         &bytes,
@@ -800,6 +941,18 @@ async fn buffered_response(
         request_timer.elapsed(),
         upstream_status.as_u16(),
     );
+    if let Some(attempt_record) = current_attempt.take() {
+        let ended_us = attempt_record
+            .backend_body_complete_us
+            .unwrap_or_else(|| timeline.elapsed_us());
+        backend_attempts.push(attempt_record.finish(
+            upstream_status,
+            Some(upstream_status.as_u16()),
+            "completed",
+            None,
+            ended_us,
+        ));
+    }
     timeline.mark(TimelineEvent::ClientResponseReady);
     let mut final_inspector_base = inspector_base;
     final_inspector_base.backend_remote_addr =
@@ -817,6 +970,7 @@ async fn buffered_response(
             outcome: InspectorOutcome::Completed,
             status: upstream_status,
             error_kind: None,
+            backend_attempts,
             retried_attempts,
             response_body_bytes: Some(response_bytes.len()),
             tokens: inspector_tokens(usage),
@@ -857,7 +1011,9 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         mut timeline,
         attempt,
         max_attempts,
+        backend_attempts,
         retried_attempts,
+        current_attempt,
     } = context;
     let upstream_status = upstream.status();
     let upstream_headers = upstream.headers().clone();
@@ -886,7 +1042,9 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         timeline,
         attempt,
         max_attempts,
+        backend_attempts,
         retried_attempts,
+        current_attempt,
     });
     debug!(
         upstream_status = upstream_status.as_u16(),
@@ -972,15 +1130,22 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
 async fn read_buffered_upstream_body(
     upstream: reqwest::Response,
     timeline: &mut RequestTimeline,
+    mut current_attempt: Option<&mut InspectorAttemptBuilder>,
 ) -> std::result::Result<Bytes, reqwest::Error> {
     let mut bytes = Vec::new();
     let mut chunks = upstream.bytes_stream();
     while let Some(chunk) = chunks.next().await {
         let chunk = chunk?;
-        timeline.mark(TimelineEvent::BackendBodyFirstChunk);
+        let body_first_chunk_us = timeline.mark(TimelineEvent::BackendBodyFirstChunk);
+        if let Some(attempt_record) = current_attempt.as_deref_mut() {
+            attempt_record.mark_body_first_chunk(body_first_chunk_us);
+        }
         bytes.extend_from_slice(&chunk);
     }
-    timeline.mark(TimelineEvent::BackendBodyComplete);
+    let body_complete_us = timeline.mark(TimelineEvent::BackendBodyComplete);
+    if let Some(attempt_record) = current_attempt {
+        attempt_record.backend_body_complete_us = Some(body_complete_us);
+    }
     Ok(Bytes::from(bytes))
 }
 
@@ -1260,6 +1425,7 @@ fn record_preflight_inspector(record: PreflightInspectorRecord<'_>) {
             },
             status: record.status,
             error_kind: None,
+            backend_attempts: Vec::new(),
             retried_attempts: Vec::new(),
             response_body_bytes: None,
             tokens: InspectorTokenCounts::default(),
@@ -1293,6 +1459,7 @@ fn record_context_inspector(
             outcome,
             status,
             error_kind,
+            backend_attempts: context.backend_attempts.clone(),
             retried_attempts: context.retried_attempts.clone(),
             response_body_bytes,
             tokens,
@@ -1306,6 +1473,7 @@ struct InspectorRecord<'a> {
     outcome: InspectorOutcome,
     status: StatusCode,
     error_kind: Option<&'static str>,
+    backend_attempts: Vec<InspectorAttemptRecord>,
     retried_attempts: Vec<InspectorAttemptRecord>,
     response_body_bytes: Option<usize>,
     tokens: InspectorTokenCounts,
@@ -1329,6 +1497,7 @@ fn record_inspector_request(
             outcome: record.outcome,
             status: record.status.as_u16(),
             error_kind: record.error_kind.map(str::to_owned),
+            backend_attempts: record.backend_attempts,
             retried_attempts: record.retried_attempts,
             response_body_bytes: record.response_body_bytes,
             tokens: record.tokens,
@@ -1523,7 +1692,9 @@ struct StreamMetrics {
     timeline: RequestTimeline,
     attempt: usize,
     max_attempts: usize,
+    backend_attempts: Vec<InspectorAttemptRecord>,
     retried_attempts: Vec<InspectorAttemptRecord>,
+    current_attempt: Option<InspectorAttemptBuilder>,
     started: Instant,
     usage: UsageTotals,
     body_complete: bool,
@@ -1548,7 +1719,9 @@ struct StreamMetricsInit {
     timeline: RequestTimeline,
     attempt: usize,
     max_attempts: usize,
+    backend_attempts: Vec<InspectorAttemptRecord>,
     retried_attempts: Vec<InspectorAttemptRecord>,
+    current_attempt: Option<InspectorAttemptBuilder>,
 }
 
 impl StreamMetrics {
@@ -1571,7 +1744,9 @@ impl StreamMetrics {
             timeline: init.timeline,
             attempt: init.attempt,
             max_attempts: init.max_attempts,
+            backend_attempts: init.backend_attempts,
             retried_attempts: init.retried_attempts,
+            current_attempt: init.current_attempt,
             started: Instant::now(),
             usage: UsageTotals::default(),
             body_complete: false,
@@ -1580,12 +1755,18 @@ impl StreamMetrics {
     }
 
     fn mark_body_chunk(&mut self) {
-        self.timeline.mark(TimelineEvent::BackendBodyFirstChunk);
+        let body_first_chunk_us = self.timeline.mark(TimelineEvent::BackendBodyFirstChunk);
+        if let Some(attempt_record) = &mut self.current_attempt {
+            attempt_record.mark_body_first_chunk(body_first_chunk_us);
+        }
     }
 
     fn mark_body_complete(&mut self) {
         self.body_complete = true;
-        self.timeline.mark(TimelineEvent::BackendBodyComplete);
+        let body_complete_us = self.timeline.mark(TimelineEvent::BackendBodyComplete);
+        if let Some(attempt_record) = &mut self.current_attempt {
+            attempt_record.backend_body_complete_us = Some(body_complete_us);
+        }
     }
 
     fn add_usage(&mut self, usage: UsageTotals) {
@@ -1599,14 +1780,30 @@ impl StreamMetrics {
     }
 
     fn inspect_base(&self) -> InspectorRequestBase {
-        self.inspector_base.clone()
+        let mut base = self.inspector_base.clone();
+        base.backend_remote_addr = self.backend_remote_addr.map(|address| address.to_string());
+        base
     }
 }
 
 impl Drop for StreamMetrics {
     fn drop(&mut self) {
         let duration = self.started.elapsed();
-        self.timeline.mark(TimelineEvent::StreamComplete);
+        let stream_complete_us = self.timeline.mark(TimelineEvent::StreamComplete);
+        if let Some(mut attempt_record) = self.current_attempt.take() {
+            attempt_record.stream_complete_us = Some(stream_complete_us);
+            self.backend_attempts.push(attempt_record.finish(
+                StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::OK),
+                Some(self.status_code),
+                match self.stream_error_kind {
+                    Some(_) => "upstream_stream_failed",
+                    None if !self.body_complete => "stream_incomplete",
+                    None => "completed",
+                },
+                self.stream_error_kind,
+                stream_complete_us,
+            ));
+        }
         if !self.usage.is_empty() {
             self.metrics.record_usage(&self.labels, self.usage);
         }
@@ -1691,6 +1888,7 @@ impl Drop for StreamMetrics {
                 outcome: inspector_outcome,
                 status: StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::OK),
                 error_kind: self.stream_error_kind,
+                backend_attempts: self.backend_attempts.clone(),
                 retried_attempts: self.retried_attempts.clone(),
                 response_body_bytes: None,
                 tokens: inspector_tokens(self.usage),

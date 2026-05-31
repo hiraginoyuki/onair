@@ -120,6 +120,8 @@ pub(crate) struct InspectorRequestRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error_kind: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) backend_attempts: Vec<InspectorAttemptRecord>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) retried_attempts: Vec<InspectorAttemptRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) response_body_bytes: Option<usize>,
@@ -137,6 +139,7 @@ impl InspectorRequestRecord {
             outcome: init.outcome,
             status: init.status,
             error_kind: init.error_kind,
+            backend_attempts: init.backend_attempts,
             retried_attempts: init.retried_attempts,
             response_body_bytes: init.response_body_bytes,
             input_tokens: init.tokens.input,
@@ -154,6 +157,7 @@ pub(crate) struct InspectorRequestRecordInit {
     pub(crate) outcome: InspectorOutcome,
     pub(crate) status: u16,
     pub(crate) error_kind: Option<String>,
+    pub(crate) backend_attempts: Vec<InspectorAttemptRecord>,
     pub(crate) retried_attempts: Vec<InspectorAttemptRecord>,
     pub(crate) response_body_bytes: Option<usize>,
     pub(crate) tokens: InspectorTokenCounts,
@@ -173,7 +177,26 @@ pub(crate) struct InspectorAttemptRecord {
     pub(crate) outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error_kind: Option<String>,
+    pub(crate) started_us: u64,
+    pub(crate) ended_us: u64,
+    pub(crate) elapsed_us: u64,
     pub(crate) elapsed_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) upstream_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) request_rewritten_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) debug_capture_done_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) backend_forward_start_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) backend_headers_received_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) backend_body_first_chunk_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) backend_body_complete_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stream_complete_us: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -303,6 +326,7 @@ mod tests {
             outcome: InspectorOutcome::Completed,
             status: 200,
             error_kind: None,
+            backend_attempts: Vec::new(),
             retried_attempts: Vec::new(),
             response_body_bytes: Some(32),
             tokens: InspectorTokenCounts::default(),

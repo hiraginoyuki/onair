@@ -86,6 +86,10 @@ impl RequestTimeline {
             stream_complete_us: self.stream_complete_us,
         }
     }
+
+    pub fn elapsed_us(&self) -> u64 {
+        duration_micros(self.started.elapsed())
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

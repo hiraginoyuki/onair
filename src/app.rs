@@ -792,6 +792,19 @@ mod tests {
         assert_eq!(record["effective_client_addr"], "127.0.0.1:55432");
         assert_eq!(record["outcome"]["kind"], "completed");
         assert!(record["timeline"]["backend_forward_start_us"].is_number());
+        let attempts = record["backend_attempts"].as_array().unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0]["attempt"], 1);
+        assert_eq!(attempts[0]["backend"], "backend-a");
+        assert_eq!(attempts[0]["outcome"], "completed");
+        assert_eq!(attempts[0]["status"], 200);
+        assert_eq!(attempts[0]["upstream_status"], 200);
+        assert!(attempts[0]["started_us"].is_number());
+        assert!(attempts[0]["ended_us"].as_u64() >= attempts[0]["started_us"].as_u64());
+        assert!(attempts[0]["backend_forward_start_us"].is_number());
+        assert!(attempts[0]["backend_headers_received_us"].is_number());
+        assert!(attempts[0]["backend_body_first_chunk_us"].is_number());
+        assert!(attempts[0]["backend_body_complete_us"].is_number());
 
         let record_id = record["record_id"].as_str().unwrap();
         let response = app
@@ -1128,6 +1141,22 @@ mod tests {
             record["retried_attempts"][0]["outcome"],
             "upstream_request_failed"
         );
+        let attempts = record["backend_attempts"].as_array().unwrap();
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0]["attempt"], 1);
+        assert_eq!(attempts[0]["backend"], "backend-a");
+        assert_eq!(attempts[0]["outcome"], "upstream_request_failed");
+        assert_eq!(attempts[0]["status"], 502);
+        assert!(attempts[0]["backend_forward_start_us"].is_number());
+        assert_eq!(attempts[1]["attempt"], 2);
+        assert_eq!(attempts[1]["backend"], "backend-b");
+        assert_eq!(attempts[1]["outcome"], "completed");
+        assert_eq!(attempts[1]["status"], 200);
+        assert!(attempts[1]["backend_body_complete_us"].is_number());
+        assert_eq!(
+            record["retried_attempts"][0]["started_us"],
+            attempts[0]["started_us"]
+        );
 
         let health = json_body(
             app.oneshot(inspector_get("/_onair/operator/health"))
@@ -1186,6 +1215,13 @@ mod tests {
         assert_eq!(record["backend"], "backend-a");
         assert_eq!(record["outcome"]["kind"], "upstream_non_success");
         assert!(record.get("retried_attempts").is_none());
+        let attempts = record["backend_attempts"].as_array().unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0]["backend"], "backend-a");
+        assert_eq!(attempts[0]["outcome"], "upstream_non_success");
+        assert_eq!(attempts[0]["status"], 502);
+        assert_eq!(attempts[0]["upstream_status"], 302);
+        assert!(attempts[0]["backend_headers_received_us"].is_number());
 
         redirect.abort();
         fallback.abort();
