@@ -54,6 +54,7 @@ base_url = "http://127.0.0.1:8000"
 # Optional backend-level value for model routes that use context_length = "inherit".
 context_length = 131072
 # Use ["all", "streaming"] for a backend that should receive any OpenAI-compatible /v1/* route it supports.
+# Chat-capable backends can also serve client /v1/responses through onair's Responses-to-Chat conversion.
 capabilities = ["chat", "responses", "streaming"]
 timeout_ms = 120000
 

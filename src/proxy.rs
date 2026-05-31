@@ -506,11 +506,13 @@ async fn do_proxy(
             .state
             .metrics
             .record_backend_attempt(&context.labels);
-        let outbound_body = openai::rewrite_request_body(
+        let outbound_body = openai::rewrite_request_body_for_mode(
             &body,
             content_type.as_deref(),
             context.route.backend_model.as_deref(),
-        );
+            context.route.request_mode,
+        )
+        .map_err(|error| ApiError::bad_request(error.message(), error.param()))?;
         attempt_record.request_rewritten_us =
             Some(context.timeline.mark(TimelineEvent::RequestRewritten));
         let upstream_query = openai::rewrite_query_model(
@@ -518,9 +520,11 @@ async fn do_proxy(
             context.route.backend_model.as_deref(),
         )
         .filter(|query| !query.is_empty());
+        let actual_upstream_path =
+            openai::upstream_path_for_mode(&upstream_path, context.route.request_mode);
         let upstream_url = upstream_url(
             &context.route.base_url,
-            &upstream_path,
+            actual_upstream_path,
             upstream_query.as_deref(),
         );
 
@@ -530,7 +534,7 @@ async fn do_proxy(
                 method: &method,
                 client_path: &request_path,
                 client_query: request_query.as_deref(),
-                upstream_path: &upstream_path,
+                upstream_path: actual_upstream_path,
                 upstream_query: upstream_query.as_deref(),
                 content_type: content_type.as_deref(),
                 request_id: request_id.as_deref(),
@@ -904,6 +908,7 @@ async fn buffered_response(
         content_type.as_deref(),
         route.backend_model.as_deref(),
         route.public_model.as_deref(),
+        route.request_mode,
     );
     timeline.mark(TimelineEvent::ResponseRewritten);
 
@@ -1065,6 +1070,7 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         request_body_bytes,
         "streaming response started"
     );
+    let request_mode = route.request_mode;
     let backend_model = route.backend_model;
     let public_model = route.public_model;
     let stream = try_stream! {
@@ -1072,7 +1078,11 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         let mut chunks = upstream.bytes_stream();
 
         if normalize_sse {
-            let mut normalizer = SseNormalizer::new(backend_model, public_model);
+            let mut normalizer = if matches!(request_mode, openai::RequestMode::ResponsesViaChatCompletions) {
+                EitherNormalizer::Responses(openai::ResponsesSseNormalizer::new(backend_model, public_model))
+            } else {
+                EitherNormalizer::Native(SseNormalizer::new(backend_model, public_model))
+            };
             while let Some(chunk) = chunks.next().await {
                 let chunk = match chunk {
                     Ok(chunk) => chunk,
@@ -1086,15 +1096,15 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
                 stream_metrics.mark_body_chunk();
                 let normalized = normalizer.push(&chunk);
                 if !normalized.is_empty() {
-                    stream_metrics.add_usage(normalizer.usage);
-                    normalizer.usage = UsageTotals::default();
+                    stream_metrics.add_usage(normalizer.usage());
+                    normalizer.clear_usage();
                     yield Bytes::from(normalized);
                 }
             }
             stream_metrics.mark_body_complete();
             let tail = normalizer.finish();
             if !tail.is_empty() {
-                stream_metrics.add_usage(normalizer.usage);
+                stream_metrics.add_usage(normalizer.usage());
                 yield Bytes::from(tail);
             }
         } else {
@@ -1125,6 +1135,41 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
     )
     .body(Body::from_stream(stream))
     .expect("stream response builder is valid")
+}
+
+enum EitherNormalizer {
+    Native(SseNormalizer),
+    Responses(openai::ResponsesSseNormalizer),
+}
+
+impl EitherNormalizer {
+    fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
+        match self {
+            Self::Native(normalizer) => normalizer.push(chunk),
+            Self::Responses(normalizer) => normalizer.push(chunk),
+        }
+    }
+
+    fn finish(&mut self) -> Vec<u8> {
+        match self {
+            Self::Native(normalizer) => normalizer.finish(),
+            Self::Responses(normalizer) => normalizer.finish(),
+        }
+    }
+
+    fn usage(&self) -> UsageTotals {
+        match self {
+            Self::Native(normalizer) => normalizer.usage,
+            Self::Responses(normalizer) => normalizer.usage,
+        }
+    }
+
+    fn clear_usage(&mut self) {
+        match self {
+            Self::Native(normalizer) => normalizer.usage = UsageTotals::default(),
+            Self::Responses(normalizer) => normalizer.usage = UsageTotals::default(),
+        }
+    }
 }
 
 async fn read_buffered_upstream_body(

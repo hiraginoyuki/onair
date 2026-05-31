@@ -17,6 +17,7 @@ Planned work lives in [ROADMAP.md](ROADMAP.md). This README describes the curren
 - Public model names are mapped to backend model names after access checks pass.
 - `/v1/*` requests that are not handled by onair itself can be forwarded to a compatible backend when backend capabilities allow it.
 - `POST /v1/chat/completion` is accepted as a typo-compatible alias and forwarded upstream as `/v1/chat/completions`.
+- `POST /v1/responses` can be served by chat-completions backends: onair translates common Responses API fields such as `input`, `instructions`, `max_output_tokens`, and function tools to `/v1/chat/completions`, then translates successful chat-completion responses back to Responses shape.
 - `stream: true` responses are proxied as server-sent events, with configured backend model names rewritten back to public model names in JSON/SSE responses.
 - Backend errors are converted to generic OpenAI-style errors, and response headers are allowlisted before returning to the client.
 - OpenTelemetry metrics record request counts, status codes, latency, stream duration, backend usage, and token counters when an OpenAI-compatible `usage` object is present.
@@ -140,7 +141,7 @@ Repeated `Forwarded` or `X-Forwarded-For` header lines are treated as one chain 
 `[[backend]].capabilities` is a marker list; `capability` is accepted as a TOML alias. Capability markers are matched against `/v1/*` path families and common aliases:
 
 - `chat` or `chat_completions` for `/v1/chat/completions`.
-- `responses` for `/v1/responses`.
+- `responses` for native `/v1/responses`; `chat`/`chat_completions` backends can also serve `/v1/responses` through onair's Responses-to-Chat compatibility layer.
 - `embeddings` for `/v1/embeddings`.
 - `images` or `image` for `/v1/images/*`.
 - `audio` for `/v1/audio/*`.
@@ -151,7 +152,7 @@ Repeated `Forwarded` or `X-Forwarded-For` header lines are treated as one chain 
 
 `[[backend.model]]` entries are optional for backends that only serve model-less endpoints. They are required for model-bearing requests, synthetic `/v1/models` output, and public-to-backend model rewrites.
 
-`[[backend.model]].endpoints` can further restrict a model route to endpoint keys such as `chat`, `chat_completions`, `responses`, `audio`, or `embeddings`. If omitted or empty, the model route is allowed for any endpoint supported by the backend. Backend order is priority order when multiple compatible routes match, and also for model-less requests.
+`[[backend.model]].endpoints` can further restrict a model route to endpoint keys such as `chat`, `chat_completions`, `responses`, `audio`, or `embeddings`. If omitted or empty, the model route is allowed for any endpoint supported by the backend. A route that allows `chat` can also serve client `/v1/responses` requests through the compatibility layer when the backend itself is chat-capable. Backend order is priority order when multiple compatible routes match, and also for model-less requests.
 
 Set `[routing].strategy = "sticky"` when multiple backends serve the same public model and you want cache-heavy traffic to keep landing on the same backend. The sticky key is derived from identity, path, public model, and `prompt_cache_key` when provided. The router still forwards `prompt_cache_key` and `prompt_cache_retention` unchanged.
 

@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::config::{ResolvedBackend, RoutingStrategy};
 use crate::error::ApiError;
+use crate::openai::RequestMode;
 
 #[derive(Clone)]
 pub struct SelectedRoute {
@@ -12,6 +13,7 @@ pub struct SelectedRoute {
     pub timeout: std::time::Duration,
     pub public_model: Option<String>,
     pub backend_model: Option<String>,
+    pub request_mode: RequestMode,
 }
 
 pub fn select_backend_candidates(
@@ -50,6 +52,7 @@ pub fn select_backend_candidates(
                     timeout: backend.timeout,
                     public_model: Some(route.public.clone()),
                     backend_model: Some(route.backend.clone()),
+                    request_mode: request_mode_for_backend(path, &backend.capabilities),
                 });
             }
             continue;
@@ -62,6 +65,7 @@ pub fn select_backend_candidates(
             timeout: backend.timeout,
             public_model: None,
             backend_model: None,
+            request_mode: request_mode_for_backend(path, &backend.capabilities),
         });
     }
 
@@ -93,6 +97,18 @@ fn sticky_index(key: &str, count: usize) -> usize {
     let mut hasher = FnvHasher::default();
     key.hash(&mut hasher);
     (hasher.finish() as usize) % count
+}
+
+fn request_mode_for_backend(path: &str, capabilities: &BTreeSet<String>) -> RequestMode {
+    if path.trim_end_matches('/') == "/v1/responses"
+        && (has_capability(capabilities, "chat")
+            || has_capability(capabilities, "chat_completions")
+            || has_capability(capabilities, "completions"))
+    {
+        RequestMode::ResponsesViaChatCompletions
+    } else {
+        RequestMode::Native
+    }
 }
 
 #[derive(Default)]
@@ -210,6 +226,11 @@ pub fn path_capability_candidates(path: &str) -> Vec<String> {
             push_unique(&mut candidates, "chat_completions".to_owned());
             push_unique(&mut candidates, "completions".to_owned());
         }
+        "responses" => {
+            push_unique(&mut candidates, "chat".to_owned());
+            push_unique(&mut candidates, "chat_completions".to_owned());
+            push_unique(&mut candidates, "completions".to_owned());
+        }
         "images" => {
             push_unique(&mut candidates, "image".to_owned());
         }
@@ -312,6 +333,40 @@ mod tests {
                 .iter()
                 .map(|route| route.backend_id.as_str())
                 .collect::<BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn responses_can_route_to_chat_backend() {
+        let backend = ResolvedBackend {
+            id: "chat-backend".to_owned(),
+            base_url: "http://chat-backend.example.invalid".to_owned(),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["chat"]),
+            models: vec![ModelRoute {
+                public: "public-model".to_owned(),
+                backend: "backend-private".to_owned(),
+                context_length: None,
+                endpoints: btree_set(["chat"]),
+            }],
+        };
+
+        let routes = select_backend_candidates(
+            &[backend],
+            RoutingStrategy::Priority,
+            "/v1/responses",
+            Some("public-model"),
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].backend_id, "chat-backend");
+        assert_eq!(
+            routes[0].request_mode,
+            RequestMode::ResponsesViaChatCompletions
         );
     }
 

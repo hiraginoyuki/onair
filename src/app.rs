@@ -607,6 +607,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_translates_to_chat_completions_for_chat_backend() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let state = test_state(
+            RoutingStrategy::Priority,
+            vec![test_chat_backend("backend-a", backend.base_url())],
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "instructions": "answer briefly",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": "hello"}
+                            ]
+                        }
+                    ],
+                    "max_output_tokens": 16,
+                    "tools": [{
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object"}
+                    }]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = json_body(response).await;
+        assert_eq!(response_body["object"], "response");
+        assert_eq!(response_body["model"], PUBLIC_MODEL);
+        assert_eq!(response_body["output_text"], "chat response");
+        assert_eq!(response_body["usage"]["input_tokens"], 11);
+        assert_eq!(response_body["usage"]["output_tokens"], 5);
+
+        let captured = backend.requests();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0]["model"], BACKEND_MODEL);
+        assert_eq!(captured[0]["messages"][0]["role"], "system");
+        assert_eq!(captured[0]["messages"][0]["content"], "answer briefly");
+        assert_eq!(captured[0]["messages"][1]["role"], "user");
+        assert_eq!(captured[0]["messages"][1]["content"], "hello");
+        assert_eq!(captured[0]["max_tokens"], 16);
+        assert_eq!(captured[0]["tools"][0]["type"], "function");
+        assert_eq!(captured[0]["tools"][0]["function"]["name"], "lookup");
+        assert!(captured[0].get("input").is_none());
+        assert!(captured[0].get("max_output_tokens").is_none());
+
+        backend.abort();
+    }
+
+    #[tokio::test]
     async fn sticky_routing_reuses_backend_for_same_prompt_cache_key() {
         let backend_a = TestBackend::spawn("backend-a").await;
         let backend_b = TestBackend::spawn("backend-b").await;
@@ -1508,6 +1566,22 @@ mod tests {
         }
     }
 
+    fn test_chat_backend(id: &str, base_url: String) -> ResolvedBackend {
+        ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            capabilities: btree_set(["chat", "streaming"]),
+            models: vec![ModelRoute {
+                public: PUBLIC_MODEL.to_owned(),
+                backend: BACKEND_MODEL.to_owned(),
+                context_length: None,
+                endpoints: btree_set(["chat"]),
+            }],
+        }
+    }
+
     fn json_request(uri: &str, body: Value) -> Request<Body> {
         Request::builder()
             .method("POST")
@@ -1601,6 +1675,7 @@ mod tests {
             let app = Router::new()
                 .route("/v1/models", get(backend_models))
                 .route("/v1/responses", post(backend_responses))
+                .route("/v1/chat/completions", post(backend_chat_completions))
                 .with_state(state.clone());
             let handle = tokio::spawn(async move {
                 axum::serve(listener, app).await.unwrap();
@@ -1686,6 +1761,36 @@ mod tests {
                     "cached_tokens": 7
                 },
                 "output_tokens": 3
+            }
+        }))
+    }
+
+    async fn backend_chat_completions(
+        State(state): State<BackendState>,
+        Json(payload): Json<Value>,
+    ) -> Json<Value> {
+        state.hits.fetch_add(1, Ordering::SeqCst);
+        state.requests.lock().unwrap().push(payload.clone());
+        Json(json!({
+            "id": format!("chatcmpl_{}", state.name),
+            "object": "chat.completion",
+            "created": 123,
+            "model": payload["model"],
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "chat response"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 11,
+                "prompt_tokens_details": {
+                    "cached_tokens": 2
+                },
+                "completion_tokens": 5,
+                "total_tokens": 16
             }
         }))
     }
