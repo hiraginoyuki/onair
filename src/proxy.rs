@@ -15,7 +15,7 @@ use tracing::{Instrument, debug, info_span, warn};
 
 use crate::app::AppState;
 use crate::auth::authenticate;
-use crate::config::DebugCaptureConfig;
+use crate::config::{DebugCaptureConfig, DebugCaptureMode};
 use crate::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
 use crate::observe::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
@@ -288,6 +288,7 @@ pub async fn proxy_v1(
         client_headers: headers,
         debug_capture_config: config.debug_capture.clone(),
         debug_capture: None,
+        pending_debug_capture: None,
         inspector_base,
         inspector_enabled: observation.inspector_enabled,
         inspector_retention_requests: observation.inspector_retention_requests,
@@ -327,6 +328,7 @@ struct ProxyContext {
     client_headers: HeaderMap,
     debug_capture_config: DebugCaptureConfig,
     debug_capture: Option<RequestCapture>,
+    pending_debug_capture: Option<PendingDebugCapture>,
     inspector_base: InspectorRequestBase,
     inspector_enabled: bool,
     inspector_retention_requests: usize,
@@ -353,6 +355,7 @@ impl ProxyContext {
         self.backend_target = backend_target(&route.base_url);
         self.backend_remote_addr = None;
         self.debug_capture = None;
+        self.pending_debug_capture = None;
         self.model_log_fields = ModelLogFields::from_route(self.requested_model.as_deref(), &route);
         self.labels.backend = route.backend_id.clone();
         self.labels.public_model = route
@@ -392,6 +395,71 @@ impl ProxyContext {
                 ended_us,
             ));
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PendingDebugCapture {
+    method: Method,
+    client_path: String,
+    client_query: Option<String>,
+    upstream_path: String,
+    upstream_query: Option<String>,
+    content_type: Option<String>,
+    request_id: Option<String>,
+    labels: MetricLabels,
+    requested_model: String,
+    public_model: String,
+    backend_model: String,
+    inbound_body: Bytes,
+    upstream_body: Vec<u8>,
+}
+
+impl PendingDebugCapture {
+    fn capture(&self, config: &DebugCaptureConfig) -> Option<RequestCapture> {
+        debug_capture::capture_request(
+            config,
+            CaptureRequest {
+                method: &self.method,
+                client_path: &self.client_path,
+                client_query: self.client_query.as_deref(),
+                upstream_path: &self.upstream_path,
+                upstream_query: self.upstream_query.as_deref(),
+                content_type: self.content_type.as_deref(),
+                request_id: self.request_id.as_deref(),
+                labels: &self.labels,
+                requested_model: &self.requested_model,
+                public_model: &self.public_model,
+                backend_model: &self.backend_model,
+                inbound_body: &self.inbound_body,
+                upstream_body: &self.upstream_body,
+            },
+        )
+    }
+}
+
+fn ensure_failure_debug_capture(
+    config: &DebugCaptureConfig,
+    pending_debug_capture: &mut Option<PendingDebugCapture>,
+    debug_capture: &mut Option<RequestCapture>,
+    timeline: &mut RequestTimeline,
+    attempt_record: Option<&mut InspectorAttemptBuilder>,
+) {
+    let had_capture = debug_capture.is_some();
+    if debug_capture.is_none()
+        && let Some(pending_capture) = pending_debug_capture.take()
+    {
+        *debug_capture = pending_capture.capture(config);
+    }
+
+    if let Some(attempt_record) = attempt_record {
+        attempt_record.set_debug_capture(debug_capture.as_ref());
+        if !had_capture && debug_capture.is_some() {
+            attempt_record.debug_capture_done_us =
+                Some(timeline.mark(TimelineEvent::DebugCaptureDone));
+        }
+    } else if !had_capture && debug_capture.is_some() {
+        timeline.mark(TimelineEvent::DebugCaptureDone);
     }
 }
 
@@ -504,6 +572,7 @@ async fn do_proxy(
         .get(X_REQUEST_ID)
         .and_then(header_str_value)
         .map(str::to_owned);
+    let capture_mode = context.debug_capture_config.mode;
     let mut fallback_routes = fallback_routes.into_iter();
     let upstream = loop {
         let attempt_started = Instant::now();
@@ -534,28 +603,36 @@ async fn do_proxy(
             actual_upstream_path,
             upstream_query.as_deref(),
         );
-
-        context.debug_capture = debug_capture::capture_request(
-            &context.debug_capture_config,
-            CaptureRequest {
-                method: &method,
-                client_path: &request_path,
-                client_query: request_query.as_deref(),
-                upstream_path: actual_upstream_path,
-                upstream_query: upstream_query.as_deref(),
-                content_type: content_type.as_deref(),
-                request_id: request_id.as_deref(),
-                labels: &context.labels,
-                requested_model: &context.model_log_fields.requested,
-                public_model: &context.model_log_fields.public,
-                backend_model: &context.model_log_fields.backend,
-                inbound_body: &body,
-                upstream_body: &outbound_body,
-            },
-        );
+        let pending_debug_capture = PendingDebugCapture {
+            method: method.clone(),
+            client_path: request_path.clone(),
+            client_query: request_query.clone(),
+            upstream_path: actual_upstream_path.to_owned(),
+            upstream_query: upstream_query.clone(),
+            content_type: content_type.clone(),
+            request_id: request_id.clone(),
+            labels: context.labels.clone(),
+            requested_model: context.model_log_fields.requested.clone(),
+            public_model: context.model_log_fields.public.clone(),
+            backend_model: context.model_log_fields.backend.clone(),
+            inbound_body: body.clone(),
+            upstream_body: outbound_body.clone(),
+        };
+        if !context.debug_capture_config.enabled {
+            context.debug_capture = None;
+            context.pending_debug_capture = None;
+        } else if capture_mode == DebugCaptureMode::All {
+            context.debug_capture = pending_debug_capture.capture(&context.debug_capture_config);
+            context.pending_debug_capture = None;
+        } else {
+            context.debug_capture = None;
+            context.pending_debug_capture = Some(pending_debug_capture);
+        }
         attempt_record.set_debug_capture(context.debug_capture.as_ref());
-        attempt_record.debug_capture_done_us =
-            Some(context.timeline.mark(TimelineEvent::DebugCaptureDone));
+        attempt_record.debug_capture_done_us = context
+            .debug_capture
+            .as_ref()
+            .map(|_| context.timeline.mark(TimelineEvent::DebugCaptureDone));
 
         let mut upstream_request = context
             .state
@@ -564,7 +641,7 @@ async fn do_proxy(
             .timeout(context.route.timeout);
 
         if !outbound_body.is_empty() {
-            upstream_request = upstream_request.body(outbound_body);
+            upstream_request = upstream_request.body(outbound_body.clone());
             if let Some(content_type) = context
                 .client_headers
                 .get(CONTENT_TYPE)
@@ -605,6 +682,13 @@ async fn do_proxy(
                 return Err(ApiError::internal());
             }
             Err(UpstreamSendError::Request(error)) if error.is_timeout() => {
+                ensure_failure_debug_capture(
+                    &context.debug_capture_config,
+                    &mut context.pending_debug_capture,
+                    &mut context.debug_capture,
+                    &mut context.timeline,
+                    Some(&mut attempt_record),
+                );
                 if let Some(next_route) = fallback_routes.next() {
                     let attempt_elapsed = attempt_started.elapsed();
                     if let Some(capture) = &mut context.debug_capture {
@@ -679,6 +763,13 @@ async fn do_proxy(
             }
             Err(UpstreamSendError::Request(error)) => {
                 let error_kind = upstream_error_kind(&error);
+                ensure_failure_debug_capture(
+                    &context.debug_capture_config,
+                    &mut context.pending_debug_capture,
+                    &mut context.debug_capture,
+                    &mut context.timeline,
+                    Some(&mut attempt_record),
+                );
                 if retryable_send_error(&error)
                     && let Some(next_route) = fallback_routes.next()
                 {
@@ -763,6 +854,13 @@ async fn do_proxy(
     if !upstream_status.is_success() {
         let upstream_content_type =
             header_str(upstream.headers(), &CONTENT_TYPE).map(str::to_owned);
+        ensure_failure_debug_capture(
+            &context.debug_capture_config,
+            &mut context.pending_debug_capture,
+            &mut context.debug_capture,
+            &mut context.timeline,
+            context.current_attempt.as_mut(),
+        );
         if context.debug_capture.is_some() {
             match read_capped_upstream_error_body(
                 upstream,
@@ -807,6 +905,7 @@ async fn do_proxy(
             max_attempts = context.max_attempts,
             path = %request_path,
             request_body_bytes = context.request_body_bytes,
+            debug_capture_id = debug_capture_id(context.debug_capture.as_ref()),
             "upstream returned non-success status"
         );
         context.state.metrics.record_request(
@@ -864,8 +963,9 @@ async fn buffered_response(
     let ProxyContext {
         state,
         client_headers,
-        debug_capture_config: _,
+        debug_capture_config,
         mut debug_capture,
+        mut pending_debug_capture,
         inspector_base,
         inspector_enabled,
         inspector_retention_requests,
@@ -909,6 +1009,13 @@ async fn buffered_response(
                 &labels,
                 StatusCode::BAD_GATEWAY.as_u16(),
                 request_timer.elapsed(),
+            );
+            ensure_failure_debug_capture(
+                &debug_capture_config,
+                &mut pending_debug_capture,
+                &mut debug_capture,
+                &mut timeline,
+                current_attempt.as_mut(),
             );
             if let Some(capture) = &mut debug_capture {
                 capture.record_outcome(CaptureOutcome::UpstreamBodyReadFailed {
@@ -1053,8 +1160,9 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
     let ProxyContext {
         state,
         client_headers,
-        debug_capture_config: _,
+        debug_capture_config,
         debug_capture,
+        pending_debug_capture,
         inspector_base,
         inspector_enabled,
         inspector_retention_requests,
@@ -1095,7 +1203,9 @@ fn streaming_response(context: ProxyContext, upstream: reqwest::Response) -> Res
         status_code: upstream_status.as_u16(),
         model_log_fields: model_log_fields.clone(),
         request_body_bytes,
+        debug_capture_config,
         debug_capture,
+        pending_debug_capture,
         client_info: client_info.clone(),
         backend_target: backend_target.clone(),
         backend_remote_addr,
@@ -1410,6 +1520,10 @@ fn socket_addr_or_none(address: Option<SocketAddr>) -> String {
     address
         .map(|address| address.to_string())
         .unwrap_or_else(|| "none".to_owned())
+}
+
+fn debug_capture_id(capture: Option<&RequestCapture>) -> &str {
+    capture.map(RequestCapture::id).unwrap_or("none")
 }
 
 fn duration_millis(duration: std::time::Duration) -> u64 {
@@ -1805,6 +1919,7 @@ fn warn_proxy_failure(
         max_attempts = context.max_attempts,
         stream = context.labels.stream,
         request_body_bytes = context.request_body_bytes,
+        debug_capture_id = debug_capture_id(context.debug_capture.as_ref()),
         timeline_started_unix_ms = snapshot.started_unix_ms,
         timeline_total_us = snapshot.total_us,
         timeline_proxy_entry_us = snapshot.proxy_entry_us,
@@ -1850,6 +1965,7 @@ fn warn_proxy_retry(
         next_attempt = context.attempt + 1,
         stream = context.labels.stream,
         request_body_bytes = context.request_body_bytes,
+        debug_capture_id = debug_capture_id(context.debug_capture.as_ref()),
         timeline_started_unix_ms = snapshot.started_unix_ms,
         timeline_total_us = snapshot.total_us,
         timeline_proxy_entry_us = snapshot.proxy_entry_us,
@@ -1915,7 +2031,9 @@ struct StreamMetrics {
     status_code: u16,
     model_log_fields: ModelLogFields,
     request_body_bytes: usize,
+    debug_capture_config: DebugCaptureConfig,
     debug_capture: Option<RequestCapture>,
+    pending_debug_capture: Option<PendingDebugCapture>,
     client_info: ClientInfo,
     backend_target: String,
     backend_remote_addr: Option<SocketAddr>,
@@ -1942,7 +2060,9 @@ struct StreamMetricsInit {
     status_code: u16,
     model_log_fields: ModelLogFields,
     request_body_bytes: usize,
+    debug_capture_config: DebugCaptureConfig,
     debug_capture: Option<RequestCapture>,
+    pending_debug_capture: Option<PendingDebugCapture>,
     client_info: ClientInfo,
     backend_target: String,
     backend_remote_addr: Option<SocketAddr>,
@@ -1967,7 +2087,9 @@ impl StreamMetrics {
             status_code: init.status_code,
             model_log_fields: init.model_log_fields,
             request_body_bytes: init.request_body_bytes,
+            debug_capture_config: init.debug_capture_config,
             debug_capture: init.debug_capture,
+            pending_debug_capture: init.pending_debug_capture,
             client_info: init.client_info,
             backend_target: init.backend_target,
             backend_remote_addr: init.backend_remote_addr,
@@ -2021,6 +2143,15 @@ impl Drop for StreamMetrics {
     fn drop(&mut self) {
         let duration = self.started.elapsed();
         let stream_complete_us = self.timeline.mark(TimelineEvent::StreamComplete);
+        if self.stream_error_kind.is_some() {
+            ensure_failure_debug_capture(
+                &self.debug_capture_config,
+                &mut self.pending_debug_capture,
+                &mut self.debug_capture,
+                &mut self.timeline,
+                self.current_attempt.as_mut(),
+            );
+        }
         if let Some(mut attempt_record) = self.current_attempt.take() {
             attempt_record.stream_complete_us = Some(stream_complete_us);
             self.backend_attempts.push(attempt_record.finish(

@@ -11,7 +11,7 @@ use bytes::Bytes;
 use serde::Serialize;
 use tracing::warn;
 
-use crate::config::DebugCaptureConfig;
+use crate::config::{DebugCaptureConfig, DebugCaptureMode};
 use crate::metrics::MetricLabels;
 
 const INBOUND_BODY_FILE: &str = "inbound.body";
@@ -115,6 +115,7 @@ struct CaptureMetadata {
     content_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     request_id: Option<String>,
+    mode: DebugCaptureMode,
     identity: String,
     route: String,
     backend: String,
@@ -237,6 +238,7 @@ pub fn capture_request(
             warn!(
                 capture_id = %capture.metadata.id,
                 directory = %capture.directory.display(),
+                mode = ?config.mode,
                 "debug capture wrote exact request bodies; disable after debugging"
             );
             Some(capture)
@@ -276,6 +278,7 @@ fn create_capture(
         upstream_query: request.upstream_query.map(str::to_owned),
         content_type: request.content_type.map(str::to_owned),
         request_id: request.request_id.map(str::to_owned),
+        mode: config.mode,
         identity: request.labels.identity.clone(),
         route: request.labels.route.clone(),
         backend: request.labels.backend.clone(),
@@ -422,6 +425,7 @@ mod tests {
         let upstream = br#"{"model":"backend"}"#;
         let config = DebugCaptureConfig {
             enabled: true,
+            mode: DebugCaptureMode::All,
             directory: root.clone(),
         };
 

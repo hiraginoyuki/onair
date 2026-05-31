@@ -16,8 +16,9 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::config::{
-    Config, DebugCaptureConfig, HealthConfig, InspectorConfig, ModelRoute, ResolvedBackend,
-    ResolvedClient, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
+    Config, DebugCaptureConfig, DebugCaptureMode, HealthConfig, InspectorConfig, ModelRoute,
+    ResolvedBackend, ResolvedClient, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig,
+    ToolSchemaMode,
 };
 
 const CLIENT_KEY: &str = "sk-test";
@@ -498,6 +499,7 @@ async fn debug_capture_writes_inbound_and_upstream_request_bodies() {
         vec![test_backend("backend-a", backend.base_url())],
         DebugCaptureConfig {
             enabled: true,
+            mode: DebugCaptureMode::All,
             directory: capture_dir.clone(),
         },
     );
@@ -549,6 +551,7 @@ async fn debug_capture_writes_upstream_error_response_body() {
         vec![test_backend("backend-a", backend.base_url())],
         DebugCaptureConfig {
             enabled: true,
+            mode: DebugCaptureMode::All,
             directory: capture_dir.clone(),
         },
     );
@@ -592,6 +595,80 @@ async fn debug_capture_writes_upstream_error_response_body() {
     assert_eq!(metadata["outcome"]["upstream_status"], 400);
 
     backend.abort();
+    std::fs::remove_dir_all(capture_dir).unwrap();
+}
+
+#[tokio::test]
+async fn debug_capture_failures_mode_skips_success_and_captures_upstream_error() {
+    let capture_dir = temp_capture_dir("failures-only");
+    let success_backend = TestBackend::spawn("backend-a").await;
+    let success_state = test_state_with_debug_capture(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", success_backend.base_url())],
+        DebugCaptureConfig {
+            enabled: true,
+            mode: DebugCaptureMode::Failures,
+            directory: capture_dir.clone(),
+        },
+    );
+    let success_app = router(success_state);
+
+    let success_response = success_app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({
+                "model": PUBLIC_MODEL,
+                "input": "this should not be captured"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(success_response.status(), StatusCode::OK);
+    let _ = json_body(success_response).await;
+    assert!(!capture_dir.exists());
+    success_backend.abort();
+
+    let error_backend = TestBackend::spawn_error("backend-a").await;
+    let error_state = test_state_with_debug_capture(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", error_backend.base_url())],
+        DebugCaptureConfig {
+            enabled: true,
+            mode: DebugCaptureMode::Failures,
+            directory: capture_dir.clone(),
+        },
+    );
+    let error_app = router(error_state);
+
+    let error_response = error_app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({
+                "model": PUBLIC_MODEL,
+                "input": "please fail"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(error_response.status(), StatusCode::BAD_REQUEST);
+
+    let capture_path = only_capture_path(&capture_dir);
+    let upstream_error_body: Value =
+        serde_json::from_slice(&std::fs::read(capture_path.join("upstream_error.body")).unwrap())
+            .unwrap();
+    let metadata: Value =
+        serde_json::from_slice(&std::fs::read(capture_path.join("metadata.json")).unwrap())
+            .unwrap();
+
+    assert_eq!(
+        upstream_error_body["error"]["message"],
+        "upstream failure detail"
+    );
+    assert_eq!(metadata["mode"], "failures");
+    assert_eq!(metadata["outcome"]["kind"], "upstream_non_success");
+    assert!(metadata["id"].as_str().unwrap().len() > 10);
+
+    error_backend.abort();
     std::fs::remove_dir_all(capture_dir).unwrap();
 }
 

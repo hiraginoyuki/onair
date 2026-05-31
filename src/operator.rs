@@ -62,6 +62,7 @@ pub(crate) struct TelemetrySnapshot {
 #[derive(Debug, Serialize)]
 pub(crate) struct DebugCaptureSnapshot {
     pub(crate) enabled: bool,
+    pub(crate) mode: crate::config::DebugCaptureMode,
     pub(crate) directory: String,
 }
 
@@ -262,6 +263,7 @@ fn telemetry_snapshot(config: &TelemetryConfig) -> TelemetrySnapshot {
 fn debug_capture_snapshot(config: &DebugCaptureConfig) -> DebugCaptureSnapshot {
     DebugCaptureSnapshot {
         enabled: config.enabled,
+        mode: config.mode,
         directory: config.directory.display().to_string(),
     }
 }

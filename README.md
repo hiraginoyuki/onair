@@ -88,7 +88,7 @@ id = "local-vllm"
 base_url = "http://127.0.0.1:8000"
 api_key_env = "LOCAL_VLLM_API_KEY"
 context_length = 131072
-capabilities = ["chat", "responses", "streaming"]
+capabilities = ["chat", "responses", "streaming", "tools"]
 timeout_ms = 120000
 
 [[backend.model]]
@@ -250,15 +250,20 @@ Prompt and response bodies are not logged by onair.
 ```toml
 [debug_capture]
 enabled = true
+mode = "failures"
 directory = "onair-debug-captures"
 ```
 
-For each successfully routed upstream attempt, onair creates one private capture directory containing:
+Set `mode = "failures"` to capture only attempts that fail with an upstream non-success response, upstream send error, timeout, body-read error, or stream error. Set `mode = "all"` to capture every successfully routed upstream attempt, including successful responses. The default mode is `all` for backward-compatible troubleshooting behavior when debug capture is enabled.
+
+For each captured upstream attempt, onair creates one private capture directory containing:
 
 - `inbound.body`: the exact body received from the client before model rewriting.
 - `upstream.body`: the exact body sent to the backend after model rewriting.
 - `upstream_error.body`: the upstream non-success response body, only when the backend returns a non-success status and a body is available. This diagnostic file is capped at 1 MiB and marked as truncated in metadata when the cap is reached.
-- `metadata.json`: route, identity, public/backend model IDs, path/query metadata, body sizes, status/outcome, and capture file names.
+- `metadata.json`: route, identity, public/backend model IDs, path/query metadata, debug-capture mode, body sizes, status/outcome, and capture file names.
+
+When a capture is written, proxy failure/retry logs and inspector records include `debug_capture_id` so a generic client-facing upstream error can be correlated with the local capture directory.
 
 Security guidance:
 

@@ -14,6 +14,8 @@ export_interval_ms = 30000
 [debug_capture]
 # Dangerous: captures exact prompt/request bodies to local files. Enable only while reproducing.
 enabled = false
+# Use "failures" for safer diagnosis of upstream 400/422 responses; use "all" to capture successes too.
+mode = "failures"
 directory = "onair-debug-captures"
 
 [inspector]

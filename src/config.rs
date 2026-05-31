@@ -249,6 +249,7 @@ pub enum TelemetryExporter {
 #[serde(default, deny_unknown_fields)]
 pub struct DebugCaptureConfig {
     pub enabled: bool,
+    pub mode: DebugCaptureMode,
     pub directory: PathBuf,
 }
 
@@ -256,9 +257,18 @@ impl Default for DebugCaptureConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            mode: DebugCaptureMode::All,
             directory: PathBuf::from("onair-debug-captures"),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DebugCaptureMode {
+    #[default]
+    All,
+    Failures,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -950,6 +960,7 @@ mod tests {
             r#"
             [debug_capture]
             enabled = true
+            mode = "failures"
             directory = "onair-debug-captures"
 
             [access]
@@ -971,6 +982,7 @@ mod tests {
         );
 
         assert!(config.debug_capture.enabled);
+        assert_eq!(config.debug_capture.mode, DebugCaptureMode::Failures);
         assert_eq!(
             config.debug_capture.directory,
             PathBuf::from("onair-debug-captures")
