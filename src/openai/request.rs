@@ -3,7 +3,7 @@ use url::form_urlencoded;
 
 use crate::config::{ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode};
 
-use super::{is_json_content_type, rewrite_responses_request_as_chat};
+use super::{is_json_content_type, responses_compat::rewrite_responses_request_as_chat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestMode {
