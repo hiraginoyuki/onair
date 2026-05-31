@@ -86,6 +86,9 @@
     input {
       width: min(36vw, 420px);
     }
+    input[type="search"]::-webkit-search-cancel-button {
+      cursor: pointer;
+    }
     button {
       cursor: pointer;
     }
@@ -166,7 +169,8 @@
       max-height: calc(100vh - 51px);
     }
     table {
-      width: 100%;
+      width: max-content;
+      min-width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
     }
@@ -199,6 +203,27 @@
       text-overflow: ellipsis;
       white-space: nowrap;
       vertical-align: top;
+      position: relative;
+    }
+    th[data-full]:hover::after,
+    td[data-full]:hover::after {
+      content: attr(data-full);
+      position: absolute;
+      left: 8px;
+      top: calc(100% - 1px);
+      z-index: 30;
+      max-width: min(72vw, 760px);
+      min-width: min(38vw, 340px);
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.45);
+      overflow-wrap: anywhere;
+      white-space: normal;
+      pointer-events: none;
+      font-weight: 400;
     }
     tbody tr {
       cursor: pointer;
@@ -207,12 +232,19 @@
     tbody tr.selected {
       background: rgba(56, 189, 248, 0.10);
     }
-    .c-time { width: 92px; }
-    .c-status { width: 62px; }
-    .c-ms { width: 70px; text-align: right; }
-    .c-route { width: 110px; }
-    .c-identity { width: 92px; }
-    .c-stream { width: 54px; }
+    .c-time { width: 110px; }
+    .c-status { width: 78px; }
+    .c-ms { width: 92px; text-align: right; }
+    .c-route { width: 130px; }
+    .c-identity { width: 130px; }
+    .c-model { width: 180px; }
+    .c-backend { width: 140px; }
+    .c-client { width: 180px; }
+    .c-user-agent { width: 260px; }
+    .c-stream { width: 72px; }
+    .c-outcome { width: 150px; }
+    .c-wide { width: 220px; }
+    .c-wider { width: 300px; }
     .status-code.ok { color: var(--good); }
     .status-code.warn { color: var(--warn); }
     .status-code.bad { color: var(--bad); }
@@ -434,6 +466,7 @@
     const detail = document.getElementById("detail");
     const filter = document.getElementById("filter");
     const quickFiltersElement = document.getElementById("quickFilters");
+    const columnsMenu = document.querySelector(".columns");
     const columnOptions = document.getElementById("columnOptions");
     const pauseButton = document.getElementById("pause");
     const statusText = document.getElementById("status");
@@ -529,6 +562,7 @@
       {
         key: "model",
         label: "model",
+        headerClass: "c-model",
         defaultVisible: true,
         value: record => record.public_model || record.requested_model,
         help: "Public model visible to the client.",
@@ -536,6 +570,7 @@
       {
         key: "backend",
         label: "backend",
+        headerClass: "c-backend",
         defaultVisible: true,
         value: record => record.backend,
         help: "Selected backend ID.",
@@ -543,6 +578,7 @@
       {
         key: "client",
         label: "client",
+        headerClass: "c-client",
         defaultVisible: true,
         value: record => record.effective_client_addr,
         help: "Effective client address after trusted-proxy handling.",
@@ -550,6 +586,7 @@
       {
         key: "user_agent",
         label: "user-agent",
+        headerClass: "c-user-agent",
         defaultVisible: true,
         value: record => record.user_agent,
         help: "Client User-Agent header.",
@@ -565,6 +602,7 @@
       {
         key: "outcome",
         label: "outcome",
+        headerClass: "c-outcome",
         defaultVisible: true,
         value: outcomeText,
         className: record => outcomeText(record) !== "completed" ? "outcome-bad" : "",
@@ -573,72 +611,84 @@
       {
         key: "record_id",
         label: "record id",
+        headerClass: "c-wider",
         value: record => record.record_id,
         help: "Inspector record ID used for deep links.",
       },
       {
         key: "client_request_id",
         label: "x-request-id",
+        headerClass: "c-wider",
         value: record => record.client_request_id,
         help: "Client-supplied X-Request-ID when present.",
       },
       {
         key: "path",
         label: "path",
+        headerClass: "c-wider",
         value: record => record.query ? `${record.path}?${record.query}` : record.path,
         help: "Request path and query string.",
       },
       {
         key: "requested_model",
         label: "requested model",
+        headerClass: "c-wide",
         value: record => record.requested_model,
         help: "Model name received from the client.",
       },
       {
         key: "backend_model",
         label: "backend model",
+        headerClass: "c-wide",
         value: record => record.backend_model,
         help: "Private model name sent to the backend.",
       },
       {
         key: "backend_target",
         label: "backend target",
+        headerClass: "c-wider",
         value: record => record.backend_target,
         help: "Configured backend host and port.",
       },
       {
         key: "backend_remote_addr",
         label: "backend remote",
+        headerClass: "c-wide",
         value: record => record.backend_remote_addr,
         help: "Backend socket address observed by reqwest when available.",
       },
       {
         key: "peer_addr",
         label: "peer addr",
+        headerClass: "c-wide",
         value: record => record.peer_addr,
         help: "Immediate socket peer address.",
       },
       {
         key: "trusted_proxy_addr",
         label: "trusted proxy",
+        headerClass: "c-wide",
         value: record => record.trusted_proxy_addr,
         help: "Trusted proxy address used for forwarded client metadata.",
       },
       {
         key: "forwarded_for",
         label: "forwarded for",
+        headerClass: "c-wide",
         value: record => record.forwarded_for,
         help: "Forwarded client address trusted by onair.",
       },
       {
         key: "error_kind",
         label: "error kind",
+        headerClass: "c-wide",
         value: record => record.error_kind,
         help: "Transport/body error kind for failures.",
       },
       {
         key: "attempts",
         label: "attempts",
+        headerClass: "c-status",
         value: record => attemptRecords(record).length || "",
         sortValue: record => attemptRecords(record).length,
         help: "Number of backend attempts recorded for the request.",
@@ -952,6 +1002,8 @@
         button.type = "button";
         button.className = "sort-button";
         button.textContent = `${column.label}${sortState.key === column.key ? (sortState.direction === "asc" ? " ↑" : " ↓") : ""}`;
+        const headerText = `${column.label}: ${column.help || "Click to sort."}`;
+        th.dataset.full = headerText;
         button.title = `${column.help || column.label} Click to sort.`;
         button.addEventListener("click", () => toggleSort(column.key));
         th.appendChild(button);
@@ -1074,6 +1126,7 @@
           const text = value == null || value === "" ? "" : String(value);
           const td = document.createElement("td");
           td.textContent = text;
+          if (text) td.dataset.full = text;
           td.title = column.title ? String(column.title(record, value) || text) : text;
           const className = typeof column.className === "function"
             ? column.className(record, value)
@@ -1496,6 +1549,24 @@
       updatePauseButton();
     });
     filter.addEventListener("input", renderRows);
+    filter.addEventListener("search", renderRows);
+    document.addEventListener("pointerdown", event => {
+      if (
+        columnsMenu
+        && columnsMenu.open
+        && event.target instanceof Node
+        && !columnsMenu.contains(event.target)
+      ) {
+        columnsMenu.open = false;
+      }
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && columnsMenu && columnsMenu.open) {
+        columnsMenu.open = false;
+        const summary = columnsMenu.querySelector("summary");
+        if (summary) summary.focus();
+      }
+    });
     window.addEventListener("hashchange", () => {
       const target = hashRecordId();
       if (target) {

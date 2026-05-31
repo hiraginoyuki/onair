@@ -374,6 +374,8 @@ mod tests {
         assert!(UI_HTML.contains("sortStorageKey"));
         assert!(UI_HTML.contains("Authenticated onair client identity."));
         assert!(UI_HTML.contains("copy record json"));
+        assert!(UI_HTML.contains("columnsMenu"));
+        assert!(UI_HTML.contains("data-full"));
         assert!(UI_HTML.contains("pause"));
     }
 }
