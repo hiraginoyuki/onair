@@ -20,12 +20,13 @@ use crate::openai::{self, SseNormalizer, UsageTotals};
 
 use super::attempt::InspectorAttemptBuilder;
 use super::inspector::{InspectorRecord, inspector_tokens, record_inspector_request};
+use super::logging::{debug_timeline_fields, socket_addr_or_none};
 use super::upstream::{
     BufferedBodyReadError, next_stream_chunk, read_buffered_upstream_body, upstream_error_kind,
 };
 use super::{
-    ModelLogFields, PendingDebugCapture, ProxyContext, debug_timeline_fields,
-    ensure_failure_debug_capture, header_str, response_builder, socket_addr_or_none,
+    ModelLogFields, PendingDebugCapture, ProxyContext, ensure_failure_debug_capture, header_str,
+    response_builder,
 };
 
 pub(super) async fn buffered_response(
