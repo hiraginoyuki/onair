@@ -27,6 +27,10 @@ use crate::observe::{
 use crate::openai::{self, SseNormalizer, UsageTotals};
 use crate::routing::{self, SelectedRoute};
 
+mod attempt;
+
+use self::attempt::{InspectorAttemptBuilder, InspectorAttemptInit};
+
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
 const MAX_UPSTREAM_ERROR_CAPTURE_BYTES: usize = 1024 * 1024;
@@ -455,100 +459,10 @@ fn ensure_failure_debug_capture(
     if let Some(attempt_record) = attempt_record {
         attempt_record.set_debug_capture(debug_capture.as_ref());
         if !had_capture && debug_capture.is_some() {
-            attempt_record.debug_capture_done_us =
-                Some(timeline.mark(TimelineEvent::DebugCaptureDone));
+            attempt_record.mark_debug_capture_done(timeline.mark(TimelineEvent::DebugCaptureDone));
         }
     } else if !had_capture && debug_capture.is_some() {
         timeline.mark(TimelineEvent::DebugCaptureDone);
-    }
-}
-
-#[derive(Debug, Clone)]
-struct InspectorAttemptBuilder {
-    attempt: usize,
-    backend: String,
-    backend_target: String,
-    backend_remote_addr: Option<String>,
-    debug_capture_id: Option<String>,
-    started_us: u64,
-    request_rewritten_us: Option<u64>,
-    debug_capture_done_us: Option<u64>,
-    backend_forward_start_us: Option<u64>,
-    backend_headers_received_us: Option<u64>,
-    backend_body_first_chunk_us: Option<u64>,
-    backend_body_complete_us: Option<u64>,
-    stream_complete_us: Option<u64>,
-}
-
-impl InspectorAttemptBuilder {
-    fn new(context: &ProxyContext) -> Self {
-        Self {
-            attempt: context.attempt,
-            backend: context.labels.backend.clone(),
-            backend_target: context.backend_target.clone(),
-            backend_remote_addr: context
-                .backend_remote_addr
-                .map(|address| address.to_string()),
-            debug_capture_id: context
-                .debug_capture
-                .as_ref()
-                .map(|capture| capture.id().to_owned()),
-            started_us: context.timeline.elapsed_us(),
-            request_rewritten_us: None,
-            debug_capture_done_us: None,
-            backend_forward_start_us: None,
-            backend_headers_received_us: None,
-            backend_body_first_chunk_us: None,
-            backend_body_complete_us: None,
-            stream_complete_us: None,
-        }
-    }
-
-    fn set_debug_capture(&mut self, capture: Option<&RequestCapture>) {
-        self.debug_capture_id = capture.map(|capture| capture.id().to_owned());
-    }
-
-    fn set_backend_remote_addr(&mut self, address: Option<SocketAddr>) {
-        self.backend_remote_addr = address.map(|address| address.to_string());
-    }
-
-    fn mark_body_first_chunk(&mut self, elapsed_us: u64) {
-        if self.backend_body_first_chunk_us.is_none() {
-            self.backend_body_first_chunk_us = Some(elapsed_us);
-        }
-    }
-
-    fn finish(
-        self,
-        status: StatusCode,
-        upstream_status: Option<u16>,
-        outcome: &'static str,
-        error_kind: Option<&'static str>,
-        ended_us: u64,
-    ) -> InspectorAttemptRecord {
-        let elapsed_us = ended_us.saturating_sub(self.started_us);
-        InspectorAttemptRecord {
-            attempt: self.attempt,
-            backend: self.backend,
-            backend_target: self.backend_target,
-            backend_remote_addr: self.backend_remote_addr,
-            debug_capture_id: self.debug_capture_id,
-            status: status.as_u16(),
-            outcome: outcome.to_owned(),
-            error_kind: error_kind.map(str::to_owned),
-            started_us: self.started_us,
-            ended_us,
-            elapsed_us,
-            elapsed_ms: duration_millis(std::time::Duration::from_micros(elapsed_us)),
-            upstream_status,
-            request_rewritten_us: self.request_rewritten_us,
-            debug_capture_done_us: self.debug_capture_done_us,
-            backend_forward_start_us: self.backend_forward_start_us,
-            backend_headers_received_us: self.backend_headers_received_us,
-            backend_body_first_chunk_us: self.backend_body_first_chunk_us,
-            backend_body_complete_us: self.backend_body_complete_us,
-            stream_complete_us: self.stream_complete_us,
-        }
     }
 }
 
@@ -576,7 +490,14 @@ async fn do_proxy(
     let mut fallback_routes = fallback_routes.into_iter();
     let upstream = loop {
         let attempt_started = Instant::now();
-        let mut attempt_record = InspectorAttemptBuilder::new(&context);
+        let mut attempt_record = InspectorAttemptBuilder::new(InspectorAttemptInit {
+            attempt: context.attempt,
+            backend: context.labels.backend.clone(),
+            backend_target: context.backend_target.clone(),
+            backend_remote_addr: context.backend_remote_addr,
+            debug_capture: context.debug_capture.as_ref(),
+            started_us: context.timeline.elapsed_us(),
+        });
         context
             .state
             .metrics
@@ -594,8 +515,8 @@ async fn do_proxy(
             },
         )
         .map_err(|error| ApiError::bad_request(error.message(), error.param()))?;
-        attempt_record.request_rewritten_us =
-            Some(context.timeline.mark(TimelineEvent::RequestRewritten));
+        attempt_record
+            .mark_request_rewritten(context.timeline.mark(TimelineEvent::RequestRewritten));
         let upstream_query = openai::rewrite_query_model(
             request_query.as_deref(),
             context.route.backend_model.as_deref(),
@@ -634,10 +555,10 @@ async fn do_proxy(
             context.pending_debug_capture = Some(pending_debug_capture);
         }
         attempt_record.set_debug_capture(context.debug_capture.as_ref());
-        attempt_record.debug_capture_done_us = context
-            .debug_capture
-            .as_ref()
-            .map(|_| context.timeline.mark(TimelineEvent::DebugCaptureDone));
+        if context.debug_capture.is_some() {
+            attempt_record
+                .mark_debug_capture_done(context.timeline.mark(TimelineEvent::DebugCaptureDone));
+        }
 
         let mut upstream_request = context
             .state
@@ -671,12 +592,13 @@ async fn do_proxy(
             upstream_request = upstream_request.header(X_REQUEST_ID, request_id);
         }
 
-        attempt_record.backend_forward_start_us =
-            Some(context.timeline.mark(TimelineEvent::BackendForwardStart));
+        attempt_record
+            .mark_backend_forward_start(context.timeline.mark(TimelineEvent::BackendForwardStart));
         match send_upstream_request(upstream_request, &mut context.shutdown).await {
             Ok(response) => {
-                attempt_record.backend_headers_received_us =
-                    Some(context.timeline.mark(TimelineEvent::BackendHeadersReceived));
+                attempt_record.mark_backend_headers_received(
+                    context.timeline.mark(TimelineEvent::BackendHeadersReceived),
+                );
                 context.backend_remote_addr = response.remote_addr();
                 attempt_record.set_backend_remote_addr(context.backend_remote_addr);
                 context.current_attempt = Some(attempt_record);
@@ -1113,15 +1035,12 @@ async fn buffered_response(
         upstream_status.as_u16(),
     );
     if let Some(attempt_record) = current_attempt.take() {
-        let ended_us = attempt_record
-            .backend_body_complete_us
-            .unwrap_or_else(|| timeline.elapsed_us());
-        backend_attempts.push(attempt_record.finish(
+        backend_attempts.push(attempt_record.finish_at_body_complete_or(
             upstream_status,
             Some(upstream_status.as_u16()),
             "completed",
             None,
-            ended_us,
+            timeline.elapsed_us(),
         ));
     }
     timeline.mark(TimelineEvent::ClientResponseReady);
@@ -1433,7 +1352,7 @@ async fn read_buffered_upstream_body(
     }
     let body_complete_us = timeline.mark(TimelineEvent::BackendBodyComplete);
     if let Some(attempt_record) = current_attempt {
-        attempt_record.backend_body_complete_us = Some(body_complete_us);
+        attempt_record.mark_body_complete(body_complete_us);
     }
     Ok(Bytes::from(bytes))
 }
@@ -1484,7 +1403,7 @@ async fn read_capped_upstream_error_body(
     if completed {
         let body_complete_us = timeline.mark(TimelineEvent::BackendBodyComplete);
         if let Some(attempt_record) = current_attempt {
-            attempt_record.backend_body_complete_us = Some(body_complete_us);
+            attempt_record.mark_body_complete(body_complete_us);
         }
     }
 
@@ -1529,10 +1448,6 @@ fn socket_addr_or_none(address: Option<SocketAddr>) -> String {
 
 fn debug_capture_id(capture: Option<&RequestCapture>) -> &str {
     capture.map(RequestCapture::id).unwrap_or("none")
-}
-
-fn duration_millis(duration: std::time::Duration) -> u64 {
-    duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 fn response_builder(
@@ -2122,7 +2037,7 @@ impl StreamMetrics {
         self.body_complete = true;
         let body_complete_us = self.timeline.mark(TimelineEvent::BackendBodyComplete);
         if let Some(attempt_record) = &mut self.current_attempt {
-            attempt_record.backend_body_complete_us = Some(body_complete_us);
+            attempt_record.mark_body_complete(body_complete_us);
         }
     }
 
@@ -2158,7 +2073,7 @@ impl Drop for StreamMetrics {
             );
         }
         if let Some(mut attempt_record) = self.current_attempt.take() {
-            attempt_record.stream_complete_us = Some(stream_complete_us);
+            attempt_record.mark_stream_complete(stream_complete_us);
             self.backend_attempts.push(attempt_record.finish(
                 StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::OK),
                 Some(self.status_code),
