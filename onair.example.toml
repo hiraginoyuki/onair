@@ -17,7 +17,7 @@ enabled = false
 directory = "onair-debug-captures"
 
 [inspector]
-# Disabled by default. When enabled, serves a local request/timeline Web UI at /_onair/inspector.
+# Disabled by default. When enabled, serves a local request/timing Web UI at /_onair/inspector.
 enabled = false
 retention_requests = 10000
 # Keep false unless the onair bind address is protected by another access-control layer.
