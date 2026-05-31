@@ -1,4 +1,5 @@
 use crate::config::{ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode};
+use serde_json::{Value, json};
 
 use super::*;
 
