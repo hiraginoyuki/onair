@@ -304,7 +304,7 @@ async fn inspector_ui(
     let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "text/html; charset=utf-8")
-        .body(Body::from(inspector::UI_HTML))
+        .body(Body::from(inspector::ui_html()))
         .expect("inspector UI response builder is valid");
     add_inspector_headers(&mut response);
     response.headers_mut().insert(

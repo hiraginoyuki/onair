@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -15,7 +15,19 @@ const MAX_RETENTION_REQUESTS: usize = 100_000;
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-pub(crate) const UI_HTML: &str = include_str!("inspector.html");
+const UI_TEMPLATE: &str = include_str!("inspector.html");
+const UI_CSS: &str = include_str!("inspector.css");
+const UI_JS: &str = include_str!("inspector.js");
+
+pub(crate) static UI_HTML: LazyLock<String> = LazyLock::new(|| {
+    UI_TEMPLATE
+        .replace("__ONAIR_INSPECTOR_CSS__", UI_CSS)
+        .replace("__ONAIR_INSPECTOR_JS__", UI_JS)
+});
+
+pub(crate) fn ui_html() -> &'static str {
+    UI_HTML.as_str()
+}
 
 #[derive(Clone)]
 pub(crate) struct InspectorStore {
@@ -365,21 +377,23 @@ mod tests {
 
     #[test]
     fn embedded_ui_renders_attempt_waterfall() {
-        assert!(UI_HTML.contains("attempt waterfall"));
-        assert!(UI_HTML.contains("backend_attempts"));
-        assert!(UI_HTML.contains("waterfall-row"));
-        assert!(UI_HTML.contains("Filter uses space-separated terms"));
-        assert!(UI_HTML.contains("columnOptions"));
-        assert!(UI_HTML.contains("quickFilters"));
-        assert!(UI_HTML.contains("sortStorageKey"));
-        assert!(UI_HTML.contains("presetStorageKey"));
-        assert!(UI_HTML.contains("Authenticated onair client identity."));
-        assert!(UI_HTML.contains("copy record json"));
-        assert!(UI_HTML.contains("Save and restore local table views"));
-        assert!(UI_HTML.contains("save view"));
-        assert!(UI_HTML.contains("data-full"));
-        assert!(UI_HTML.contains("expand all"));
-        assert!(UI_HTML.contains("waterfall-row-body"));
-        assert!(UI_HTML.contains("pause"));
+        let html = ui_html();
+        assert!(!html.contains("__ONAIR_INSPECTOR_"));
+        assert!(html.contains("attempt waterfall"));
+        assert!(html.contains("backend_attempts"));
+        assert!(html.contains("waterfall-row"));
+        assert!(html.contains("Filter uses space-separated terms"));
+        assert!(html.contains("columnOptions"));
+        assert!(html.contains("quickFilters"));
+        assert!(html.contains("sortStorageKey"));
+        assert!(html.contains("presetStorageKey"));
+        assert!(html.contains("Authenticated onair client identity."));
+        assert!(html.contains("copy record json"));
+        assert!(html.contains("Save and restore local table views"));
+        assert!(html.contains("save view"));
+        assert!(html.contains("data-full"));
+        assert!(html.contains("expand all"));
+        assert!(html.contains("waterfall-row-body"));
+        assert!(html.contains("pause"));
     }
 }
