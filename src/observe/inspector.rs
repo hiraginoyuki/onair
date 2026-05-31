@@ -368,5 +368,7 @@ mod tests {
         assert!(UI_HTML.contains("attempt waterfall"));
         assert!(UI_HTML.contains("backend_attempts"));
         assert!(UI_HTML.contains("waterfall-row"));
+        assert!(UI_HTML.contains("Filter uses space-separated terms"));
+        assert!(UI_HTML.contains("columnOptions"));
     }
 }

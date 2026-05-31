@@ -60,8 +60,20 @@
     .toolbar {
       margin-left: auto;
       display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 4px;
+    }
+    .toolbar-row {
+      display: flex;
       align-items: center;
       gap: 8px;
+    }
+    .toolbar-help {
+      color: var(--muted);
+      font-size: 11px;
+      max-width: min(52vw, 640px);
+      text-align: right;
     }
     input, button {
       border: 1px solid var(--border);
@@ -76,6 +88,51 @@
     }
     button {
       cursor: pointer;
+    }
+    .columns {
+      position: relative;
+    }
+    .columns summary {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel-2);
+      color: var(--text);
+      cursor: pointer;
+      list-style: none;
+      padding: 6px 8px;
+      user-select: none;
+    }
+    .columns summary::-webkit-details-marker {
+      display: none;
+    }
+    .column-options {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      z-index: 20;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(150px, 1fr));
+      gap: 4px 10px;
+      min-width: min(76vw, 420px);
+      max-height: 52vh;
+      overflow: auto;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
+    }
+    .column-options label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .column-options input {
+      width: auto;
+      margin: 0;
+      padding: 0;
     }
     main {
       display: grid;
@@ -290,8 +347,12 @@
     }
     @media (max-width: 980px) {
       header { align-items: stretch; flex-direction: column; }
-      .toolbar { margin-left: 0; }
+      .toolbar { align-items: stretch; margin-left: 0; }
+      .toolbar-row { flex-wrap: wrap; }
+      .toolbar-help { max-width: none; text-align: left; }
       input { width: 100%; }
+      .columns { position: static; }
+      .column-options { left: 0; right: 0; min-width: auto; }
       main { grid-template-columns: 1fr; }
       .detail { max-height: none; }
     }
@@ -303,27 +364,21 @@
     <span class="status"><span id="dot" class="dot"></span><span id="status">connecting</span></span>
     <span id="count" class="status">0 requests</span>
     <div class="toolbar">
-      <input id="filter" type="search" autocomplete="off" spellcheck="false" placeholder="filter route, model, backend, client, user-agent">
-      <button id="reload" type="button">reload</button>
+      <div class="toolbar-row">
+        <input id="filter" type="search" autocomplete="off" spellcheck="false" aria-describedby="filter-help" placeholder="filter terms, e.g. backend-a timeout" title="Filter uses space-separated terms; every term must match route, identity, models, backend, client addresses, user-agent, outcome, or attempt metadata.">
+        <details class="columns">
+          <summary title="Show or hide request table columns">columns</summary>
+          <div id="columnOptions" class="column-options"></div>
+        </details>
+        <button id="reload" type="button">reload</button>
+      </div>
+      <div id="filter-help" class="toolbar-help">Filter uses space-separated terms; every term must match route, identity, models, backend, client, user-agent, outcome, or attempt metadata.</div>
     </div>
   </header>
   <main>
     <section class="table-wrap">
       <table>
-        <thead>
-          <tr>
-            <th class="c-time">time</th>
-            <th class="c-status">status</th>
-            <th class="c-ms">total ms</th>
-            <th class="c-route">route</th>
-            <th>model</th>
-            <th>backend</th>
-            <th>client</th>
-            <th>user-agent</th>
-            <th class="c-stream">stream</th>
-            <th>outcome</th>
-          </tr>
-        </thead>
+        <thead id="tableHead"></thead>
         <tbody id="rows"></tbody>
       </table>
       <div id="empty" class="empty">Waiting for requests…</div>
@@ -341,14 +396,17 @@
     const base = "/_onair/inspector";
     const operatorBase = "/_onair/operator";
     const snapshotLimit = 1000;
+    const tableHead = document.getElementById("tableHead");
     const rows = document.getElementById("rows");
     const empty = document.getElementById("empty");
     const overview = document.getElementById("overview");
     const detail = document.getElementById("detail");
     const filter = document.getElementById("filter");
+    const columnOptions = document.getElementById("columnOptions");
     const statusText = document.getElementById("status");
     const statusDot = document.getElementById("dot");
     const countText = document.getElementById("count");
+    const columnStorageKey = "onair.inspector.tableColumns.v1";
     const records = new Map();
     let operatorRuntime = null;
     let operatorConfig = null;
@@ -383,6 +441,172 @@
       ["body done", "backend_body_complete_us"],
       ["stream done", "stream_complete_us"],
     ];
+
+    const tableColumns = [
+      {
+        key: "time",
+        label: "time",
+        headerClass: "c-time",
+        defaultVisible: true,
+        value: record => timeOf(record.started_at_unix_ms),
+        title: record => new Date(record.started_at_unix_ms).toISOString(),
+        help: "Request start time.",
+      },
+      {
+        key: "status",
+        label: "status",
+        headerClass: "c-status",
+        defaultVisible: true,
+        value: record => record.status,
+        className: record => `status-code ${statusClass(Number(record.status))}`,
+        help: "Client-facing response status.",
+      },
+      {
+        key: "total_ms",
+        label: "total ms",
+        headerClass: "c-ms",
+        defaultVisible: true,
+        value: record => ms(record.timeline && record.timeline.total_us),
+        className: "c-ms",
+        title: record => `${ms(record.timeline && record.timeline.total_us)} ms`,
+        help: "Total request time measured by onair.",
+      },
+      {
+        key: "route",
+        label: "route",
+        headerClass: "c-route",
+        defaultVisible: true,
+        value: record => record.route,
+        help: "OpenAI-compatible route family.",
+      },
+      {
+        key: "model",
+        label: "model",
+        defaultVisible: true,
+        value: record => record.public_model || record.requested_model,
+        help: "Public model visible to the client.",
+      },
+      {
+        key: "backend",
+        label: "backend",
+        defaultVisible: true,
+        value: record => record.backend,
+        help: "Selected backend ID.",
+      },
+      {
+        key: "client",
+        label: "client",
+        defaultVisible: true,
+        value: record => record.effective_client_addr,
+        help: "Effective client address after trusted-proxy handling.",
+      },
+      {
+        key: "user_agent",
+        label: "user-agent",
+        defaultVisible: true,
+        value: record => record.user_agent,
+        help: "Client User-Agent header.",
+      },
+      {
+        key: "stream",
+        label: "stream",
+        headerClass: "c-stream",
+        defaultVisible: true,
+        value: record => record.stream ? "yes" : "no",
+        help: "Whether the request used streaming.",
+      },
+      {
+        key: "outcome",
+        label: "outcome",
+        defaultVisible: true,
+        value: outcomeText,
+        className: record => outcomeText(record) !== "completed" ? "outcome-bad" : "",
+        help: "Final proxy outcome.",
+      },
+      {
+        key: "record_id",
+        label: "record id",
+        value: record => record.record_id,
+        help: "Inspector record ID used for deep links.",
+      },
+      {
+        key: "client_request_id",
+        label: "x-request-id",
+        value: record => record.client_request_id,
+        help: "Client-supplied X-Request-ID when present.",
+      },
+      {
+        key: "identity",
+        label: "identity",
+        value: record => record.identity,
+        help: "Authenticated onair client identity.",
+      },
+      {
+        key: "path",
+        label: "path",
+        value: record => record.query ? `${record.path}?${record.query}` : record.path,
+        help: "Request path and query string.",
+      },
+      {
+        key: "requested_model",
+        label: "requested model",
+        value: record => record.requested_model,
+        help: "Model name received from the client.",
+      },
+      {
+        key: "backend_model",
+        label: "backend model",
+        value: record => record.backend_model,
+        help: "Private model name sent to the backend.",
+      },
+      {
+        key: "backend_target",
+        label: "backend target",
+        value: record => record.backend_target,
+        help: "Configured backend host and port.",
+      },
+      {
+        key: "backend_remote_addr",
+        label: "backend remote",
+        value: record => record.backend_remote_addr,
+        help: "Backend socket address observed by reqwest when available.",
+      },
+      {
+        key: "peer_addr",
+        label: "peer addr",
+        value: record => record.peer_addr,
+        help: "Immediate socket peer address.",
+      },
+      {
+        key: "trusted_proxy_addr",
+        label: "trusted proxy",
+        value: record => record.trusted_proxy_addr,
+        help: "Trusted proxy address used for forwarded client metadata.",
+      },
+      {
+        key: "forwarded_for",
+        label: "forwarded for",
+        value: record => record.forwarded_for,
+        help: "Forwarded client address trusted by onair.",
+      },
+      {
+        key: "error_kind",
+        label: "error kind",
+        value: record => record.error_kind,
+        help: "Transport/body error kind for failures.",
+      },
+      {
+        key: "attempts",
+        label: "attempts",
+        value: record => attemptRecords(record).length || "",
+        help: "Number of backend attempts recorded for the request.",
+      },
+    ];
+    const defaultColumnKeys = tableColumns
+      .filter(column => column.defaultVisible)
+      .map(column => column.key);
+    const validColumnKeys = new Set(tableColumns.map(column => column.key));
+    const visibleColumns = new Set(loadVisibleColumns());
 
     function setStatus(text, className) {
       statusText.textContent = text;
@@ -457,6 +681,72 @@
     function attemptRecords(record) {
       const attempts = record.backend_attempts || [];
       return attempts.length ? attempts : (record.retried_attempts || []);
+    }
+
+    function loadVisibleColumns() {
+      try {
+        const raw = localStorage.getItem(columnStorageKey);
+        const parsed = raw && JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const selected = parsed.filter(key => validColumnKeys.has(key));
+          if (selected.length) return selected;
+        }
+      } catch {
+        // Ignore localStorage or JSON failures and use defaults.
+      }
+      return defaultColumnKeys;
+    }
+
+    function saveVisibleColumns() {
+      try {
+        localStorage.setItem(columnStorageKey, JSON.stringify([...visibleColumns]));
+      } catch {
+        // Column preferences are optional.
+      }
+    }
+
+    function activeColumns() {
+      return tableColumns.filter(column => visibleColumns.has(column.key));
+    }
+
+    function renderColumnOptions() {
+      columnOptions.replaceChildren();
+      for (const column of tableColumns) {
+        const label = document.createElement("label");
+        label.title = column.help || column.label;
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = visibleColumns.has(column.key);
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) {
+            visibleColumns.add(column.key);
+          } else if (visibleColumns.size > 1) {
+            visibleColumns.delete(column.key);
+          } else {
+            checkbox.checked = true;
+            return;
+          }
+          saveVisibleColumns();
+          renderTableHeader();
+          renderRows();
+        });
+        const text = document.createElement("span");
+        text.textContent = column.label;
+        label.append(checkbox, text);
+        columnOptions.appendChild(label);
+      }
+    }
+
+    function renderTableHeader() {
+      const tr = document.createElement("tr");
+      for (const column of activeColumns()) {
+        const th = document.createElement("th");
+        th.textContent = column.label;
+        th.title = column.help || column.label;
+        if (column.headerClass) th.className = column.headerClass;
+        tr.appendChild(th);
+      }
+      tableHead.replaceChildren(tr);
     }
 
     function searchable(record) {
@@ -541,16 +831,22 @@
     }
 
     function recordList() {
-      const needle = filter.value.trim().toLowerCase();
+      const tokens = filter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
       const list = Array.from(records.values()).sort((a, b) => {
         if (a.started_at_unix_ms !== b.started_at_unix_ms) return b.started_at_unix_ms - a.started_at_unix_ms;
         return String(b.record_id).localeCompare(String(a.record_id));
       });
-      return needle ? list.filter(record => searchable(record).includes(needle)) : list;
+      return tokens.length
+        ? list.filter(record => {
+          const haystack = searchable(record);
+          return tokens.every(token => haystack.includes(token));
+        })
+        : list;
     }
 
     function renderRows() {
       const list = recordList();
+      const columns = activeColumns();
       rows.replaceChildren();
       countText.textContent = `${records.size} request${records.size === 1 ? "" : "s"}`;
       empty.style.display = list.length ? "none" : "block";
@@ -561,26 +857,18 @@
         tr.addEventListener("click", () => {
           selectRecord(record, true);
         });
-        const cells = [
-          timeOf(record.started_at_unix_ms),
-          record.status,
-          ms(record.timeline && record.timeline.total_us),
-          record.route,
-          record.public_model || record.requested_model,
-          record.backend,
-          record.effective_client_addr,
-          record.user_agent,
-          record.stream ? "yes" : "no",
-          outcomeText(record),
-        ];
-        cells.forEach((value, index) => {
+        for (const column of columns) {
+          const value = column.value(record);
+          const text = value == null || value === "" ? "" : String(value);
           const td = document.createElement("td");
-          td.textContent = value == null ? "" : String(value);
-          if (index === 1) td.className = `status-code ${statusClass(Number(value))}`;
-          if (index === 2) td.className = "c-ms";
-          if (index === 9 && outcomeText(record) !== "completed") td.className = "outcome-bad";
+          td.textContent = text;
+          td.title = column.title ? String(column.title(record, value) || text) : text;
+          const className = typeof column.className === "function"
+            ? column.className(record, value)
+            : column.className;
+          if (className) td.className = className;
           tr.appendChild(td);
-        });
+        }
         rows.appendChild(tr);
       }
     }
@@ -917,6 +1205,8 @@
       }
     });
 
+    renderColumnOptions();
+    renderTableHeader();
     renderOverview();
     reload().catch(error => setStatus(error.message, "dead")).finally(connect);
   </script>
