@@ -685,6 +685,119 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_full_compat_payload_translates_to_chat_backend() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let state = test_state(
+            RoutingStrategy::Priority,
+            vec![test_chat_backend("backend-a", backend.base_url())],
+        );
+        let app = router(state);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "instructions": "You are Kai, a helpful Discord bot.",
+                    "input": [
+                        {"role": "user", "content": "What time is it in Tokyo?"},
+                        {
+                            "type": "function_call",
+                            "call_id": "call_abc",
+                            "name": "get_time",
+                            "arguments": "{\"timezone\":\"Asia/Tokyo\"}"
+                        },
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call_abc",
+                            "output": "18:30 JST"
+                        },
+                        {"role": "user", "content": "Thanks!"}
+                    ],
+                    "stream": false,
+                    "max_output_tokens": 10000,
+                    "tools": [{
+                        "type": "function",
+                        "name": "get_time",
+                        "description": "Get current time",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "timezone": {"type": "string"}
+                            }
+                        }
+                    }]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response_body = json_body(response).await;
+        assert_eq!(response_body["object"], "response");
+        assert_eq!(response_body["model"], PUBLIC_MODEL);
+        assert_eq!(response_body["usage"]["total_tokens"], 16);
+
+        let captured = backend.requests();
+        assert_eq!(captured.len(), 1);
+        let payload = &captured[0];
+        assert_eq!(payload["model"], BACKEND_MODEL);
+        assert_eq!(payload["stream"], false);
+        assert_eq!(payload["max_tokens"], 10000);
+        assert!(payload.get("input").is_none());
+        assert!(payload.get("instructions").is_none());
+        assert!(payload.get("max_output_tokens").is_none());
+
+        assert_eq!(
+            payload["messages"],
+            json!([
+                {
+                    "role": "system",
+                    "content": "You are Kai, a helpful Discord bot."
+                },
+                {
+                    "role": "user",
+                    "content": "What time is it in Tokyo?"
+                },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {
+                            "name": "get_time",
+                            "arguments": "{\"timezone\":\"Asia/Tokyo\"}"
+                        }
+                    }]
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_abc",
+                    "content": "18:30 JST"
+                },
+                {
+                    "role": "user",
+                    "content": "Thanks!"
+                }
+            ])
+        );
+        assert_eq!(payload["tools"][0]["type"], "function");
+        assert_eq!(payload["tools"][0]["function"]["name"], "get_time");
+        assert_eq!(
+            payload["tools"][0]["function"]["description"],
+            "Get current time"
+        );
+        assert_eq!(
+            payload["tools"][0]["function"]["parameters"]["properties"]["timezone"]["type"],
+            "string"
+        );
+        assert_eq!(payload["tools"][0]["function"]["strict"], true);
+
+        backend.abort();
+    }
+
+    #[tokio::test]
     async fn shutdown_signal_cancels_buffered_upstream_wait() {
         let backend = TestBackend::spawn_slow("backend-a").await;
         let state = test_state(
