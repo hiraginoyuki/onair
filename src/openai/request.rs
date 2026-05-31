@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde_json::{Map, Value};
 use url::form_urlencoded;
 
@@ -77,6 +79,11 @@ pub fn rewrite_request_body_for_mode_with_policies(
     request_mode: RequestMode,
     policies: RequestRewritePolicies,
 ) -> Result<Vec<u8>, RequestRewriteError> {
+    let native_responses = path.trim_end_matches('/') == "/v1/responses";
+    if native_responses && should_parse_json(content_type, body) {
+        validate_responses_tool_history(body)?;
+    }
+
     if request_mode == RequestMode::ResponsesViaChatCompletions {
         return rewrite_responses_request_as_chat(
             body,
@@ -93,7 +100,6 @@ pub fn rewrite_request_body_for_mode_with_policies(
         return Ok(Vec::new());
     }
 
-    let native_responses = path.trim_end_matches('/') == "/v1/responses";
     if should_parse_json(content_type, body)
         && let Some(rewritten) = rewrite_json_request_body(
             body,
@@ -119,6 +125,62 @@ pub fn rewrite_request_body_for_mode_with_policies(
     }
 
     Ok(body.to_vec())
+}
+
+fn validate_responses_tool_history(body: &[u8]) -> Result<(), RequestRewriteError> {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return Ok(());
+    };
+    let Some(input) = value.get("input").and_then(Value::as_array) else {
+        return Ok(());
+    };
+
+    let mut function_calls = Vec::new();
+    let mut function_outputs = BTreeSet::new();
+
+    for item in input {
+        let Some(item) = item.as_object() else {
+            continue;
+        };
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call") => {
+                let Some(call_id) = item
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|call_id| !call_id.is_empty())
+                else {
+                    return Err(RequestRewriteError::new(
+                        "function_call input items require call_id.",
+                        Some("input"),
+                    ));
+                };
+                function_calls.push(call_id.to_owned());
+            }
+            Some("function_call_output") => {
+                if let Some(call_id) = item
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|call_id| !call_id.is_empty())
+                {
+                    function_outputs.insert(call_id.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for call_id in function_calls {
+        if !function_outputs.contains(&call_id) {
+            return Err(RequestRewriteError::new(
+                format!("No tool output found for function call {call_id}."),
+                Some("input"),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 pub fn rewrite_query_model(query: Option<&str>, backend_model: Option<&str>) -> Option<String> {

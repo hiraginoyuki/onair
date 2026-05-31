@@ -517,6 +517,11 @@ fn responses_request_converts_function_call_items_to_tool_messages() {
                 "call_id": "call_time",
                 "output": "10:00 AM"
             },
+            {
+                "type": "function_call_output",
+                "call_id": "call_weather",
+                "output": "Sunny"
+            },
             {"role": "user", "content": "Thanks!"}
         ]
     });
@@ -534,7 +539,7 @@ fn responses_request_converts_function_call_items_to_tool_messages() {
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
     let messages = rewritten["messages"].as_array().unwrap();
 
-    assert_eq!(messages.len(), 4);
+    assert_eq!(messages.len(), 5);
     assert_eq!(messages[0]["role"], "user");
     assert_eq!(messages[1]["role"], "assistant");
     assert_eq!(messages[1]["content"], "");
@@ -547,8 +552,48 @@ fn responses_request_converts_function_call_items_to_tool_messages() {
     assert_eq!(messages[2]["role"], "tool");
     assert_eq!(messages[2]["tool_call_id"], "call_time");
     assert_eq!(messages[2]["content"], "10:00 AM");
-    assert_eq!(messages[3]["role"], "user");
-    assert_eq!(messages[3]["content"], "Thanks!");
+    assert_eq!(messages[3]["role"], "tool");
+    assert_eq!(messages[3]["tool_call_id"], "call_weather");
+    assert_eq!(messages[3]["content"], "Sunny");
+    assert_eq!(messages[4]["role"], "user");
+    assert_eq!(messages[4]["content"], "Thanks!");
+}
+
+#[test]
+fn native_responses_rejects_function_calls_without_matching_outputs() {
+    let body = json!({
+        "model": "public-model",
+        "input": [
+            {"role": "user", "content": "What time is it?"},
+            {
+                "type": "function_call",
+                "call_id": "call_time",
+                "name": "get_time",
+                "arguments": "{}"
+            },
+            {"role": "user", "content": "Thanks!"}
+        ]
+    });
+
+    let error = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/responses",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+        },
+    )
+    .expect_err("expected missing tool output to be rejected");
+
+    assert_eq!(
+        error.message(),
+        "No tool output found for function call call_time."
+    );
+    assert_eq!(error.param().as_deref(), Some("input"));
 }
 
 #[test]

@@ -279,6 +279,47 @@ async fn native_responses_route_can_drop_max_output_tokens() {
 }
 
 #[tokio::test]
+async fn native_responses_rejects_orphan_function_calls_before_backend() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({
+                "model": PUBLIC_MODEL,
+                "input": [
+                    {"role": "user", "content": "What time is it?"},
+                    {
+                        "type": "function_call",
+                        "call_id": "call_time",
+                        "name": "get_time",
+                        "arguments": "{}"
+                    },
+                    {"role": "user", "content": "Thanks!"}
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response_body = json_body(response).await;
+    assert_eq!(
+        response_body["error"]["message"],
+        "No tool output found for function call call_time."
+    );
+    assert_eq!(response_body["error"]["param"], "input");
+    assert_eq!(backend.hits(), 0);
+
+    backend.abort();
+}
+
+#[tokio::test]
 async fn tool_request_requires_tool_capable_route() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_chat_backend("backend-a", backend.base_url());
