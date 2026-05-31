@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 
-use crate::config::{ResolvedBackend, RoutingStrategy};
+use crate::config::{ResolvedBackend, RoutingStrategy, ToolSchemaMode};
 use crate::error::ApiError;
 use crate::openai::RequestMode;
 
@@ -14,6 +14,7 @@ pub struct SelectedRoute {
     pub public_model: Option<String>,
     pub backend_model: Option<String>,
     pub request_mode: RequestMode,
+    pub tool_schema_mode: ToolSchemaMode,
 }
 
 pub fn select_backend_candidates(
@@ -63,6 +64,7 @@ pub fn select_backend_candidates(
                         &backend.capabilities,
                         Some(&route.endpoints),
                     ),
+                    tool_schema_mode: route.tool_schema_mode,
                 });
             }
             continue;
@@ -80,6 +82,7 @@ pub fn select_backend_candidates(
             public_model: None,
             backend_model: None,
             request_mode: request_mode_for_backend(path, &backend.capabilities, None),
+            tool_schema_mode: backend.tool_schema_mode,
         });
     }
 
@@ -350,7 +353,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::time::Duration;
 
-    use crate::config::{ModelRoute, ResolvedBackend};
+    use crate::config::{ModelRoute, ResolvedBackend, ToolSchemaMode};
 
     use super::*;
 
@@ -412,10 +415,12 @@ mod tests {
             api_key: None,
             timeout: Duration::from_secs(5),
             capabilities: btree_set(["chat"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
                 context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
                 endpoints: btree_set(["chat"]),
             }],
         };
@@ -447,10 +452,12 @@ mod tests {
             api_key: None,
             timeout: Duration::from_secs(5),
             capabilities: btree_set(["responses", "chat"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
                 context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
                 endpoints: btree_set(["responses", "chat"]),
             }],
         };
@@ -479,10 +486,12 @@ mod tests {
             api_key: None,
             timeout: Duration::from_secs(5),
             capabilities: btree_set(["responses", "chat"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
                 context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
                 endpoints: btree_set(["chat"]),
             }],
         };
@@ -514,10 +523,12 @@ mod tests {
             api_key: None,
             timeout: Duration::from_secs(5),
             capabilities: btree_set(["responses", "chat"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "unsupported-private".to_owned(),
                 context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
                 endpoints: btree_set(["responses", "chat"]),
             }],
         };
@@ -527,10 +538,12 @@ mod tests {
             api_key: None,
             timeout: Duration::from_secs(5),
             capabilities: btree_set(["responses", "chat", "tools"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "supported-private".to_owned(),
                 context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
                 endpoints: btree_set(["responses", "chat", "tools"]),
             }],
         };
@@ -558,10 +571,12 @@ mod tests {
             api_key: None,
             timeout: Duration::from_secs(5),
             capabilities: btree_set(["responses", "chat"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "plain-private".to_owned(),
                 context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
                 endpoints: btree_set(["responses", "chat"]),
             }],
         };
@@ -590,10 +605,12 @@ mod tests {
             api_key: None,
             timeout: Duration::from_secs(5),
             capabilities: btree_set(["responses", "streaming"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: format!("{id}-private"),
                 context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
                 endpoints: btree_set(["responses"]),
             }],
         }

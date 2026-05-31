@@ -98,6 +98,7 @@ pub(crate) struct BackendSnapshot {
     pub(crate) base_url: String,
     pub(crate) api_key_configured: bool,
     pub(crate) timeout_ms: u64,
+    pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
     pub(crate) capabilities: Vec<String>,
     pub(crate) models: Vec<BackendModelSnapshot>,
 }
@@ -107,6 +108,7 @@ pub(crate) struct BackendModelSnapshot {
     pub(crate) public: String,
     pub(crate) backend: String,
     pub(crate) context_length: Option<u64>,
+    pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
     pub(crate) endpoints: Vec<String>,
 }
 
@@ -122,6 +124,7 @@ pub(crate) struct PublicModelSnapshot {
 pub(crate) struct ModelRouteSnapshot {
     pub(crate) backend: String,
     pub(crate) backend_model: String,
+    pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
     pub(crate) endpoints: Vec<String>,
 }
 
@@ -204,6 +207,7 @@ pub(crate) fn models_snapshot(config: &Config) -> OperatorModelsSnapshot {
                 public_model.routes.push(ModelRouteSnapshot {
                     backend: backend.id.clone(),
                     backend_model: model.backend.clone(),
+                    tool_schema_mode: model.tool_schema_mode,
                     endpoints: sorted_strings(&model.endpoints),
                 });
             }
@@ -305,6 +309,7 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
         base_url: backend.base_url.clone(),
         api_key_configured: backend.api_key.is_some(),
         timeout_ms: duration_millis(backend.timeout),
+        tool_schema_mode: backend.tool_schema_mode,
         capabilities: sorted_strings(&backend.capabilities),
         models: backend
             .models
@@ -313,6 +318,7 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
                 public: model.public.clone(),
                 backend: model.backend.clone(),
                 context_length: model.context_length,
+                tool_schema_mode: model.tool_schema_mode,
                 endpoints: sorted_strings(&model.endpoints),
             })
             .collect(),

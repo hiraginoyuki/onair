@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use notify::event::{AccessKind, AccessMode};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::task::JoinHandle;
@@ -355,6 +355,7 @@ pub struct BackendConfig {
     pub api_key_env: Option<String>,
     pub timeout_ms: u64,
     pub context_length: Option<u64>,
+    pub tool_schema_mode: ToolSchemaMode,
     #[serde(alias = "capability")]
     pub capabilities: BTreeSet<String>,
     #[serde(rename = "model")]
@@ -370,10 +371,19 @@ impl Default for BackendConfig {
             api_key_env: None,
             timeout_ms: 120_000,
             context_length: None,
+            tool_schema_mode: ToolSchemaMode::Preserve,
             capabilities: BTreeSet::new(),
             models: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSchemaMode {
+    #[default]
+    Preserve,
+    LlamacppCompat,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -383,6 +393,8 @@ pub struct ModelRouteConfig {
     pub backend: Option<String>,
     #[serde(default)]
     pub context_length: ContextLengthConfig,
+    #[serde(default)]
+    pub tool_schema_mode: Option<ToolSchemaMode>,
     #[serde(default)]
     pub endpoints: BTreeSet<String>,
 }
@@ -414,6 +426,7 @@ pub struct ResolvedBackend {
     pub api_key: Option<String>,
     pub timeout: Duration,
     pub capabilities: BTreeSet<String>,
+    pub tool_schema_mode: ToolSchemaMode,
     pub models: Vec<ModelRoute>,
 }
 
@@ -422,6 +435,7 @@ pub struct ModelRoute {
     pub public: String,
     pub backend: String,
     pub context_length: Option<u64>,
+    pub tool_schema_mode: ToolSchemaMode,
     pub endpoints: BTreeSet<String>,
 }
 
@@ -515,6 +529,9 @@ impl Config {
                         backend: model.backend.unwrap_or_else(|| model.public.clone()),
                         public: model.public,
                         context_length,
+                        tool_schema_mode: model
+                            .tool_schema_mode
+                            .unwrap_or(backend.tool_schema_mode),
                         endpoints: model.endpoints,
                     })
                 })
@@ -525,6 +542,7 @@ impl Config {
                 api_key,
                 timeout: Duration::from_millis(backend.timeout_ms),
                 capabilities: backend.capabilities,
+                tool_schema_mode: backend.tool_schema_mode,
                 models,
             });
         }
@@ -872,6 +890,45 @@ mod tests {
 
         let error = resolve_error(file);
         assert!(error.contains("uses context_length = 'inherit'"));
+    }
+
+    #[test]
+    fn tool_schema_mode_can_be_set_per_backend_and_model() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-inherit", "public-override"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["chat", "tools"]
+            tool_schema_mode = "llamacpp_compat"
+
+            [[backend.model]]
+            public = "public-inherit"
+            backend = "private-inherit"
+            endpoints = ["chat", "tools"]
+
+            [[backend.model]]
+            public = "public-override"
+            backend = "private-override"
+            endpoints = ["chat", "tools"]
+            tool_schema_mode = "preserve"
+            "#,
+        );
+
+        let backend = &config.backends[0];
+        assert_eq!(backend.tool_schema_mode, ToolSchemaMode::LlamacppCompat);
+        assert_eq!(
+            backend.models[0].tool_schema_mode,
+            ToolSchemaMode::LlamacppCompat
+        );
+        assert_eq!(backend.models[1].tool_schema_mode, ToolSchemaMode::Preserve);
     }
 
     #[test]

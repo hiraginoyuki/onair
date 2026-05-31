@@ -579,6 +579,7 @@ mod tests {
     use crate::config::{
         Config, DebugCaptureConfig, HealthConfig, InspectorConfig, ModelRoute, ResolvedBackend,
         ResolvedClient, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig,
+        ToolSchemaMode,
     };
 
     const CLIENT_KEY: &str = "sk-test";
@@ -680,6 +681,54 @@ mod tests {
         assert_eq!(captured[0]["tools"][0]["function"]["name"], "lookup");
         assert!(captured[0].get("input").is_none());
         assert!(captured[0].get("max_output_tokens").is_none());
+
+        backend.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_chat_compat_can_sanitize_tool_schema_for_backend() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let mut backend_config = test_chat_backend("backend-a", backend.base_url());
+        backend_config.tool_schema_mode = ToolSchemaMode::LlamacppCompat;
+        backend_config.models[0].tool_schema_mode = ToolSchemaMode::LlamacppCompat;
+        let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
+        let app = router(state);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello",
+                    "tools": [{
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "anyOf": [
+                                        {"type": "string"},
+                                        {"type": "null"}
+                                    ],
+                                    "default": null
+                                }
+                            }
+                        }
+                    }]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let captured = backend.requests();
+        assert_eq!(captured.len(), 1);
+        let query_schema =
+            &captured[0]["tools"][0]["function"]["parameters"]["properties"]["query"];
+        assert_eq!(query_schema["type"], "string");
+        assert!(query_schema.get("anyOf").is_none());
+        assert!(query_schema.get("default").is_none());
 
         backend.abort();
     }
@@ -1661,17 +1710,20 @@ mod tests {
                 api_key: None,
                 timeout: std::time::Duration::from_secs(5),
                 capabilities: btree_set(["responses"]),
+                tool_schema_mode: ToolSchemaMode::Preserve,
                 models: vec![
                     ModelRoute {
                         public: PUBLIC_MODEL.to_owned(),
                         backend: BACKEND_MODEL.to_owned(),
                         context_length: Some(131_072),
+                        tool_schema_mode: ToolSchemaMode::Preserve,
                         endpoints: btree_set(["responses"]),
                     },
                     ModelRoute {
                         public: "gpt-no-context".to_owned(),
                         backend: "backend-no-context".to_owned(),
                         context_length: None,
+                        tool_schema_mode: ToolSchemaMode::Preserve,
                         endpoints: btree_set(["responses"]),
                     },
                 ],
@@ -1860,10 +1912,12 @@ mod tests {
             api_key: None,
             timeout: std::time::Duration::from_secs(5),
             capabilities: btree_set(["responses", "streaming"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
             models: vec![ModelRoute {
                 public: PUBLIC_MODEL.to_owned(),
                 backend: BACKEND_MODEL.to_owned(),
                 context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
                 endpoints: btree_set(["responses"]),
             }],
         }
@@ -1876,10 +1930,12 @@ mod tests {
             api_key: None,
             timeout: std::time::Duration::from_secs(5),
             capabilities: btree_set(["chat", "streaming", "tools"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
             models: vec![ModelRoute {
                 public: PUBLIC_MODEL.to_owned(),
                 backend: BACKEND_MODEL.to_owned(),
                 context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
                 endpoints: btree_set(["chat", "tools"]),
             }],
         }

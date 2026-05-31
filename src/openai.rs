@@ -5,6 +5,8 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use url::form_urlencoded;
 
+use crate::config::ToolSchemaMode;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestMode {
     Native,
@@ -62,14 +64,20 @@ pub fn inspect_request(
     shape
 }
 
-pub fn rewrite_request_body_for_mode(
+pub fn rewrite_request_body_for_mode_with_tool_schema_mode(
     body: &[u8],
     content_type: Option<&str>,
     backend_model: Option<&str>,
     request_mode: RequestMode,
+    tool_schema_mode: ToolSchemaMode,
 ) -> Result<Vec<u8>, RequestRewriteError> {
     if request_mode == RequestMode::ResponsesViaChatCompletions {
-        return rewrite_responses_request_as_chat(body, content_type, backend_model);
+        return rewrite_responses_request_as_chat(
+            body,
+            content_type,
+            backend_model,
+            tool_schema_mode,
+        );
     }
 
     let Some(backend_model) = backend_model else {
@@ -142,6 +150,7 @@ fn rewrite_responses_request_as_chat(
     body: &[u8],
     content_type: Option<&str>,
     backend_model: Option<&str>,
+    tool_schema_mode: ToolSchemaMode,
 ) -> Result<Vec<u8>, RequestRewriteError> {
     if body.is_empty() {
         return Err(RequestRewriteError::new(
@@ -234,7 +243,7 @@ fn rewrite_responses_request_as_chat(
         chat.insert("response_format".to_owned(), format.clone());
     }
     if let Some(tools) = object.get("tools").filter(|value| !value.is_null()) {
-        let tools = responses_tools_to_chat_tools(tools)?;
+        let tools = responses_tools_to_chat_tools(tools, tool_schema_mode)?;
         if !tools.is_empty() {
             chat.insert("tools".to_owned(), Value::Array(tools));
         }
@@ -564,7 +573,10 @@ fn responses_tool_output_to_string(output: &Value) -> String {
     output.to_string()
 }
 
-fn responses_tools_to_chat_tools(tools: &Value) -> Result<Vec<Value>, RequestRewriteError> {
+fn responses_tools_to_chat_tools(
+    tools: &Value,
+    tool_schema_mode: ToolSchemaMode,
+) -> Result<Vec<Value>, RequestRewriteError> {
     let tools = tools.as_array().ok_or_else(|| {
         RequestRewriteError::new(
             "tools must be an array for responses-to-chat conversion.",
@@ -584,12 +596,100 @@ fn responses_tools_to_chat_tools(tools: &Value) -> Result<Vec<Value>, RequestRew
         }
         let mut function = object.clone();
         function.remove("type");
+        if tool_schema_mode == ToolSchemaMode::LlamacppCompat
+            && let Some(parameters) = function.get_mut("parameters")
+        {
+            sanitize_llamacpp_tool_schema(parameters);
+        }
         chat_tools.push(json!({
             "type": "function",
             "function": Value::Object(function),
         }));
     }
     Ok(chat_tools)
+}
+
+fn sanitize_llamacpp_tool_schema(schema: &mut Value) {
+    match schema {
+        Value::Object(object) => {
+            object.remove("default");
+            collapse_nullable_type_array(object);
+            collapse_nullable_schema_array(object, "anyOf");
+            collapse_nullable_schema_array(object, "oneOf");
+            for value in object.values_mut() {
+                sanitize_llamacpp_tool_schema(value);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                sanitize_llamacpp_tool_schema(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collapse_nullable_type_array(object: &mut Map<String, Value>) {
+    let Some(types) = object.get("type").and_then(Value::as_array) else {
+        return;
+    };
+
+    let mut saw_null = false;
+    let mut non_null = Vec::new();
+    for value in types {
+        let Some(type_name) = value.as_str() else {
+            return;
+        };
+        if type_name == "null" {
+            saw_null = true;
+        } else {
+            non_null.push(type_name);
+        }
+    }
+
+    if saw_null && non_null.len() == 1 {
+        object.insert("type".to_owned(), Value::String(non_null[0].to_owned()));
+    }
+}
+
+fn collapse_nullable_schema_array(object: &mut Map<String, Value>, key: &str) {
+    let Some(items) = object.get(key).and_then(Value::as_array) else {
+        return;
+    };
+
+    let mut saw_null = false;
+    let mut non_null = Vec::new();
+    for item in items {
+        if is_null_schema(item) {
+            saw_null = true;
+        } else {
+            non_null.push(item.clone());
+        }
+    }
+
+    if !saw_null || non_null.len() != 1 {
+        return;
+    }
+    if !matches!(non_null.first(), Some(Value::Object(_))) {
+        return;
+    }
+
+    object.remove(key);
+    if let Some(Value::Object(replacement)) = non_null.pop() {
+        for (replacement_key, replacement_value) in replacement {
+            object.entry(replacement_key).or_insert(replacement_value);
+        }
+    }
+}
+
+fn is_null_schema(value: &Value) -> bool {
+    match value.as_object().and_then(|object| object.get("type")) {
+        Some(Value::String(type_name)) => type_name == "null",
+        Some(Value::Array(types)) => types
+            .iter()
+            .all(|type_name| type_name.as_str() == Some("null")),
+        _ => false,
+    }
 }
 
 fn responses_tool_choice_to_chat(tool_choice: &Value) -> Value {
@@ -1881,11 +1981,12 @@ mod tests {
             "tool_choice": {"type": "function", "name": "lookup"}
         });
 
-        let rewritten = rewrite_request_body_for_mode(
+        let rewritten = rewrite_request_body_for_mode_with_tool_schema_mode(
             body.to_string().as_bytes(),
             Some("application/json"),
             Some("backend-model"),
             RequestMode::ResponsesViaChatCompletions,
+            ToolSchemaMode::Preserve,
         )
         .unwrap();
         let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -1939,11 +2040,12 @@ mod tests {
             ]
         });
 
-        let rewritten = rewrite_request_body_for_mode(
+        let rewritten = rewrite_request_body_for_mode_with_tool_schema_mode(
             body.to_string().as_bytes(),
             Some("application/json"),
             Some("backend-model"),
             RequestMode::ResponsesViaChatCompletions,
+            ToolSchemaMode::Preserve,
         )
         .unwrap();
         let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -1951,6 +2053,93 @@ mod tests {
         assert_eq!(rewritten["tools"][0]["function"]["strict"], true);
         assert_eq!(rewritten["tools"][1]["function"]["strict"], false);
         assert!(rewritten["tools"][2]["function"].get("strict").is_none());
+    }
+
+    #[test]
+    fn llama_cpp_tool_schema_mode_sanitizes_common_schema_fragments() {
+        let body = json!({
+            "model": "public-model",
+            "input": "hello",
+            "tools": [{
+                "type": "function",
+                "name": "lookup",
+                "description": "look up a value",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "description": "city name",
+                            "anyOf": [
+                                {"type": "string", "enum": ["Tokyo", "Osaka"]},
+                                {"type": "null"}
+                            ],
+                            "default": null
+                        },
+                        "limit": {
+                            "type": ["integer", "null"],
+                            "default": 10
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {
+                                "type": ["string", "null"],
+                                "default": "general"
+                            }
+                        }
+                    }
+                }
+            }]
+        });
+
+        let rewritten = rewrite_request_body_for_mode_with_tool_schema_mode(
+            body.to_string().as_bytes(),
+            Some("application/json"),
+            Some("backend-model"),
+            RequestMode::ResponsesViaChatCompletions,
+            ToolSchemaMode::LlamacppCompat,
+        )
+        .unwrap();
+        let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+        let function = &rewritten["tools"][0]["function"];
+
+        assert_eq!(function["strict"], false);
+        assert!(
+            function["parameters"]["properties"]["city"]
+                .get("anyOf")
+                .is_none()
+        );
+        assert!(
+            function["parameters"]["properties"]["city"]
+                .get("default")
+                .is_none()
+        );
+        assert_eq!(
+            function["parameters"]["properties"]["city"]["type"],
+            "string"
+        );
+        assert_eq!(
+            function["parameters"]["properties"]["city"]["enum"],
+            json!(["Tokyo", "Osaka"])
+        );
+        assert_eq!(
+            function["parameters"]["properties"]["limit"]["type"],
+            "integer"
+        );
+        assert!(
+            function["parameters"]["properties"]["limit"]
+                .get("default")
+                .is_none()
+        );
+        assert_eq!(
+            function["parameters"]["properties"]["tags"]["items"]["type"],
+            "string"
+        );
+        assert!(
+            function["parameters"]["properties"]["tags"]["items"]
+                .get("default")
+                .is_none()
+        );
     }
 
     #[test]
@@ -2000,11 +2189,12 @@ mod tests {
             "tools": null
         });
 
-        let rewritten = rewrite_request_body_for_mode(
+        let rewritten = rewrite_request_body_for_mode_with_tool_schema_mode(
             body.to_string().as_bytes(),
             Some("application/json"),
             Some("backend-model"),
             RequestMode::ResponsesViaChatCompletions,
+            ToolSchemaMode::Preserve,
         )
         .unwrap();
         let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -2038,11 +2228,12 @@ mod tests {
             }]
         });
 
-        let rewritten = rewrite_request_body_for_mode(
+        let rewritten = rewrite_request_body_for_mode_with_tool_schema_mode(
             body.to_string().as_bytes(),
             Some("application/json"),
             Some("backend-model"),
             RequestMode::ResponsesViaChatCompletions,
+            ToolSchemaMode::Preserve,
         )
         .unwrap();
         let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -2098,11 +2289,12 @@ mod tests {
             ]
         });
 
-        let rewritten = rewrite_request_body_for_mode(
+        let rewritten = rewrite_request_body_for_mode_with_tool_schema_mode(
             body.to_string().as_bytes(),
             Some("application/json"),
             Some("backend-model"),
             RequestMode::ResponsesViaChatCompletions,
+            ToolSchemaMode::Preserve,
         )
         .unwrap();
         let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();

@@ -56,6 +56,7 @@ context_length = 131072
 # Use ["all", "streaming"] for a backend that should receive any OpenAI-compatible /v1/* route it supports.
 # Chat-capable backends can also serve client /v1/responses through onair's Responses-to-Chat conversion.
 # Add "tools" here, and to a model route's endpoints when endpoints is non-empty, only if that backend/template supports function tools.
+# Optional: tool_schema_mode = "llamacpp_compat" can relax converted Responses tool schemas for llama.cpp chat templates.
 capabilities = ["chat", "responses", "streaming"]
 timeout_ms = 120000
 
@@ -73,3 +74,4 @@ public = "gpt-4o"
 backend = "llama-3.1-70b-instruct"
 endpoints = ["chat"]
 # endpoints = ["chat", "tools"] # if this chat-compat route supports function tools
+# tool_schema_mode = "llamacpp_compat" # optional per-model override for Responses-to-Chat tool schemas
