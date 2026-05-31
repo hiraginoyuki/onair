@@ -688,8 +688,8 @@ mod tests {
     async fn responses_native_capability_uses_native_backend_path() {
         let backend = TestBackend::spawn("backend-a").await;
         let mut backend_config = test_chat_backend("backend-a", backend.base_url());
-        backend_config.capabilities = btree_set(["responses", "chat", "streaming"]);
-        backend_config.models[0].endpoints = btree_set(["responses", "chat"]);
+        backend_config.capabilities = btree_set(["responses", "chat", "streaming", "tools"]);
+        backend_config.models[0].endpoints = btree_set(["responses", "chat", "tools"]);
         let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
         let app = router(state);
 
@@ -727,6 +727,43 @@ mod tests {
         assert_eq!(captured[0]["tools"][0]["type"], "function");
         assert!(captured[0].get("messages").is_none());
         assert!(captured[0].get("max_tokens").is_none());
+
+        backend.abort();
+    }
+
+    #[tokio::test]
+    async fn tool_request_requires_tool_capable_route() {
+        let backend = TestBackend::spawn("backend-a").await;
+        let mut backend_config = test_chat_backend("backend-a", backend.base_url());
+        backend_config.capabilities.remove("tools");
+        backend_config.models[0].endpoints.remove("tools");
+        let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
+        let app = router(state);
+
+        let response = app
+            .oneshot(json_request(
+                "/v1/responses",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello",
+                    "tools": [{
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object"}
+                    }]
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response_body = json_body(response).await;
+        assert_eq!(
+            response_body["error"]["message"],
+            "The selected model does not support tool calling."
+        );
+        assert_eq!(response_body["error"]["param"], "tools");
+        assert_eq!(backend.hits(), 0);
 
         backend.abort();
     }
@@ -1838,12 +1875,12 @@ mod tests {
             base_url,
             api_key: None,
             timeout: std::time::Duration::from_secs(5),
-            capabilities: btree_set(["chat", "streaming"]),
+            capabilities: btree_set(["chat", "streaming", "tools"]),
             models: vec![ModelRoute {
                 public: PUBLIC_MODEL.to_owned(),
                 backend: BACKEND_MODEL.to_owned(),
                 context_length: None,
-                endpoints: btree_set(["chat"]),
+                endpoints: btree_set(["chat", "tools"]),
             }],
         }
     }

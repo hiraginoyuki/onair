@@ -149,11 +149,12 @@ Repeated `Forwarded` or `X-Forwarded-For` header lines are treated as one chain 
 - `files` or `file` for `/v1/files/*`.
 - `batches`, `fine_tuning`, `assistants`, `threads`, `vector_stores`, `uploads`, and similar first path segments.
 - `streaming` for `stream: true` requests.
-- `all` as a broad marker for any `/v1/*` path.
+- `tools`, `tool_calls`, `function_calling`, or `functions` for requests with a non-empty `tools` array. If a model route has a non-empty `endpoints` list, that route must also include a tool marker before tool-bearing requests are forwarded.
+- `all` as a broad marker for any `/v1/*` path and optional feature marker.
 
 `[[backend.model]]` entries are optional for backends that only serve model-less endpoints. They are required for model-bearing requests, synthetic `/v1/models` output, and public-to-backend model rewrites.
 
-`[[backend.model]].endpoints` can further restrict a model route to endpoint keys such as `chat`, `chat_completions`, `responses`, `audio`, or `embeddings`. If omitted or empty, the model route is allowed for any endpoint supported by the backend. A route that allows `responses` serves client `/v1/responses` natively. A route that allows `chat` but not `responses` can serve client `/v1/responses` through the compatibility layer when the backend itself is chat-capable. Backend order is priority order when multiple compatible routes match, and also for model-less requests.
+`[[backend.model]].endpoints` can further restrict a model route to endpoint keys such as `chat`, `chat_completions`, `responses`, `audio`, or `embeddings`, plus feature markers such as `tools`. If omitted or empty, the model route is allowed for any endpoint and feature supported by the backend. A route that allows `responses` serves client `/v1/responses` natively. A route that allows `chat` but not `responses` can serve client `/v1/responses` through the compatibility layer when the backend itself is chat-capable. Backend order is priority order when multiple compatible routes match, and also for model-less requests.
 
 Set `[routing].strategy = "sticky"` when multiple backends serve the same public model and you want cache-heavy traffic to keep landing on the same backend. The sticky key is derived from identity, path, public model, and `prompt_cache_key` when provided. The router still forwards `prompt_cache_key` and `prompt_cache_retention` unchanged.
 

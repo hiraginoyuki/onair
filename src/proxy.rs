@@ -191,6 +191,7 @@ pub async fn proxy_v1(
         &path,
         request_shape.model.as_deref(),
         request_shape.stream,
+        request_shape.has_tools,
         Some(&sticky_key),
     ) {
         Ok(routes) => {

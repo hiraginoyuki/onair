@@ -22,10 +22,12 @@ pub fn select_backend_candidates(
     path: &str,
     model: Option<&str>,
     stream: bool,
+    tools: bool,
     sticky_key: Option<&str>,
 ) -> Result<Vec<SelectedRoute>, ApiError> {
     let path_candidates = path_capability_candidates(path);
     let mut candidates = Vec::new();
+    let mut tool_incompatible_candidates = false;
 
     for backend in backends {
         if stream && !has_capability(&backend.capabilities, "streaming") {
@@ -45,6 +47,10 @@ pub fn select_backend_candidates(
                 {
                     continue;
                 }
+                if tools && !supports_tools(&backend.capabilities, Some(&route.endpoints)) {
+                    tool_incompatible_candidates = true;
+                    continue;
+                }
                 candidates.push(SelectedRoute {
                     backend_id: backend.id.clone(),
                     base_url: backend.base_url.clone(),
@@ -62,6 +68,10 @@ pub fn select_backend_candidates(
             continue;
         }
 
+        if tools && !supports_tools(&backend.capabilities, None) {
+            tool_incompatible_candidates = true;
+            continue;
+        }
         candidates.push(SelectedRoute {
             backend_id: backend.id.clone(),
             base_url: backend.base_url.clone(),
@@ -74,6 +84,12 @@ pub fn select_backend_candidates(
     }
 
     if candidates.is_empty() {
+        if tools && tool_incompatible_candidates {
+            return Err(ApiError::bad_request(
+                "The selected model does not support tool calling.",
+                Some("tools".to_owned()),
+            ));
+        }
         if let Some(requested_model) = model {
             return Err(ApiError::model_not_found(requested_model));
         }
@@ -141,6 +157,24 @@ fn supports_chat_compat(capabilities: &BTreeSet<String>) -> bool {
     has_capability(capabilities, "chat")
         || has_capability(capabilities, "chat_completions")
         || has_capability(capabilities, "completions")
+}
+
+fn supports_tools(
+    backend_capabilities: &BTreeSet<String>,
+    route_endpoints: Option<&BTreeSet<String>>,
+) -> bool {
+    has_tool_capability(backend_capabilities) && route_supports_tools(route_endpoints)
+}
+
+fn route_supports_tools(route_endpoints: Option<&BTreeSet<String>>) -> bool {
+    route_endpoints.is_none_or(|endpoints| endpoints.is_empty() || has_tool_capability(endpoints))
+}
+
+fn has_tool_capability(capabilities: &BTreeSet<String>) -> bool {
+    has_capability(capabilities, "tools")
+        || has_capability(capabilities, "tool_calls")
+        || has_capability(capabilities, "function_calling")
+        || has_capability(capabilities, "functions")
 }
 
 #[derive(Default)]
@@ -340,6 +374,7 @@ mod tests {
             "/v1/responses",
             Some("public-model"),
             false,
+            false,
             Some(&sticky_key),
         )
         .unwrap();
@@ -348,6 +383,7 @@ mod tests {
             RoutingStrategy::Sticky,
             "/v1/responses",
             Some("public-model"),
+            false,
             false,
             Some(&sticky_key),
         )
@@ -390,6 +426,7 @@ mod tests {
             "/v1/responses",
             Some("public-model"),
             false,
+            false,
             None,
         )
         .unwrap();
@@ -424,6 +461,7 @@ mod tests {
             "/v1/responses",
             Some("public-model"),
             false,
+            false,
             None,
         )
         .unwrap();
@@ -455,6 +493,7 @@ mod tests {
             "/v1/responses",
             Some("public-model"),
             false,
+            false,
             None,
         )
         .unwrap();
@@ -465,6 +504,83 @@ mod tests {
             routes[0].request_mode,
             RequestMode::ResponsesViaChatCompletions
         );
+    }
+
+    #[test]
+    fn tool_requests_require_backend_and_route_capability() {
+        let unsupported = ResolvedBackend {
+            id: "unsupported-backend".to_owned(),
+            base_url: "http://unsupported-backend.example.invalid".to_owned(),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["responses", "chat"]),
+            models: vec![ModelRoute {
+                public: "public-model".to_owned(),
+                backend: "unsupported-private".to_owned(),
+                context_length: None,
+                endpoints: btree_set(["responses", "chat"]),
+            }],
+        };
+        let supported = ResolvedBackend {
+            id: "supported-backend".to_owned(),
+            base_url: "http://supported-backend.example.invalid".to_owned(),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["responses", "chat", "tools"]),
+            models: vec![ModelRoute {
+                public: "public-model".to_owned(),
+                backend: "supported-private".to_owned(),
+                context_length: None,
+                endpoints: btree_set(["responses", "chat", "tools"]),
+            }],
+        };
+
+        let routes = select_backend_candidates(
+            &[unsupported, supported],
+            RoutingStrategy::Priority,
+            "/v1/responses",
+            Some("public-model"),
+            false,
+            true,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].backend_id, "supported-backend");
+    }
+
+    #[test]
+    fn tool_requests_fail_when_only_endpoint_matches() {
+        let backend = ResolvedBackend {
+            id: "plain-backend".to_owned(),
+            base_url: "http://plain-backend.example.invalid".to_owned(),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["responses", "chat"]),
+            models: vec![ModelRoute {
+                public: "public-model".to_owned(),
+                backend: "plain-private".to_owned(),
+                context_length: None,
+                endpoints: btree_set(["responses", "chat"]),
+            }],
+        };
+
+        let error = match select_backend_candidates(
+            &[backend],
+            RoutingStrategy::Priority,
+            "/v1/responses",
+            Some("public-model"),
+            false,
+            true,
+            None,
+        ) {
+            Ok(_) => panic!("expected tool request routing to fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(error.param.as_deref(), Some("tools"));
     }
 
     fn backend(id: &str) -> ResolvedBackend {

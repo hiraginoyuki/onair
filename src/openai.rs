@@ -39,6 +39,7 @@ pub struct RequestShape {
     pub model: Option<String>,
     pub prompt_cache_key: Option<String>,
     pub stream: bool,
+    pub has_tools: bool,
 }
 
 pub fn inspect_request(
@@ -1556,6 +1557,7 @@ fn inspect_json_body(body: &[u8]) -> RequestShape {
             .get("stream")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        has_tools: json_has_tools(&value),
     }
 }
 
@@ -1572,6 +1574,14 @@ fn inspect_urlencoded_body(body: &[u8]) -> RequestShape {
         }
     }
     shape
+}
+
+fn json_has_tools(value: &Value) -> bool {
+    match value.get("tools") {
+        Some(Value::Array(tools)) => !tools.is_empty(),
+        Some(Value::Null) | None => false,
+        Some(_) => true,
+    }
 }
 
 fn inspect_multipart_body(body: &[u8], boundary: &str) -> RequestShape {
@@ -1941,6 +1951,39 @@ mod tests {
         assert_eq!(rewritten["tools"][0]["function"]["strict"], true);
         assert_eq!(rewritten["tools"][1]["function"]["strict"], false);
         assert!(rewritten["tools"][2]["function"].get("strict").is_none());
+    }
+
+    #[test]
+    fn request_inspection_detects_non_empty_tools() {
+        let with_tools = inspect_request(
+            json!({
+                "model": "public-model",
+                "input": "hello",
+                "tools": [{
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {"type": "object"}
+                }]
+            })
+            .to_string()
+            .as_bytes(),
+            Some("application/json"),
+            None,
+        );
+        let empty_tools = inspect_request(
+            br#"{"model":"public-model","tools":[]}"#,
+            Some("application/json"),
+            None,
+        );
+        let null_tools = inspect_request(
+            br#"{"model":"public-model","tools":null}"#,
+            Some("application/json"),
+            None,
+        );
+
+        assert!(with_tools.has_tools);
+        assert!(!empty_tools.has_tools);
+        assert!(!null_tools.has_tools);
     }
 
     #[test]

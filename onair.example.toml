@@ -55,6 +55,7 @@ base_url = "http://127.0.0.1:8000"
 context_length = 131072
 # Use ["all", "streaming"] for a backend that should receive any OpenAI-compatible /v1/* route it supports.
 # Chat-capable backends can also serve client /v1/responses through onair's Responses-to-Chat conversion.
+# Add "tools" here, and to a model route's endpoints when endpoints is non-empty, only if that backend/template supports function tools.
 capabilities = ["chat", "responses", "streaming"]
 timeout_ms = 120000
 
@@ -65,8 +66,10 @@ backend = "llama-3.1-8b-instruct"
 # Optional: "none" or omitted hides it, "inherit" uses backend.context_length, or use an integer.
 context_length = "inherit"
 endpoints = ["chat", "responses"]
+# endpoints = ["chat", "responses", "tools"] # if this model route supports function tools
 
 [[backend.model]]
 public = "gpt-4o"
 backend = "llama-3.1-70b-instruct"
 endpoints = ["chat"]
+# endpoints = ["chat", "tools"] # if this chat-compat route supports function tools
