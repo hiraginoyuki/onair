@@ -614,6 +614,7 @@ mod tests {
             response_body["usage"]["input_tokens_details"]["cached_tokens"],
             7
         );
+        assert_eq!(response_body["usage"]["total_tokens"], 16);
 
         let captured = backend.requests();
         assert_eq!(captured.len(), 1);
@@ -665,6 +666,7 @@ mod tests {
         assert_eq!(response_body["output_text"], "chat response");
         assert_eq!(response_body["usage"]["input_tokens"], 11);
         assert_eq!(response_body["usage"]["output_tokens"], 5);
+        assert_eq!(response_body["usage"]["total_tokens"], 16);
 
         let captured = backend.requests();
         assert_eq!(captured.len(), 1);

@@ -1911,6 +1911,7 @@ impl StreamMetrics {
         self.usage.input += usage.input;
         self.usage.cached_input += usage.cached_input;
         self.usage.output += usage.output;
+        self.usage.total += usage.total;
     }
 
     fn mark_stream_error(&mut self, error_kind: &'static str) {

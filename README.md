@@ -19,6 +19,7 @@ Planned work lives in [ROADMAP.md](ROADMAP.md). This README describes the curren
 - `POST /v1/chat/completion` is accepted as a typo-compatible alias and forwarded upstream as `/v1/chat/completions`.
 - `POST /v1/responses` can be served by chat-completions backends: onair translates common Responses API fields such as `input`, `instructions`, `max_output_tokens`, and function tools to `/v1/chat/completions`, then translates successful chat-completion responses back to Responses shape.
 - `stream: true` responses are proxied as server-sent events, with configured backend model names rewritten back to public model names in JSON/SSE responses.
+- OpenAI-compatible `usage.total_tokens` values are preserved; when a backend reports prompt/input and completion/output token counts without a total, onair adds the corresponding total to chat-completion and Responses JSON/SSE responses.
 - Backend errors are converted to generic OpenAI-style errors, and response headers are allowlisted before returning to the client.
 - OpenTelemetry metrics record request counts, status codes, latency, stream duration, backend usage, and token counters when an OpenAI-compatible `usage` object is present.
 - A disabled-by-default local inspector can retain recent request metadata and render live timing timelines and backend-attempt waterfalls in a browser without storing prompt or completion bodies.
@@ -235,7 +236,7 @@ Metric instruments:
 - `onair.backend.requests`: counter labeled by `route`, `identity`, `model`, `backend`, and `stream`.
 - `onair.request.duration`: histogram in seconds with the same labels as `onair.requests`.
 - `onair.stream.duration`: histogram in seconds for streaming response lifetime.
-- `onair.tokens`: counter labeled by `direction=input|cached_input|output` when backend responses include OpenAI-compatible usage data such as `prompt_tokens`, `completion_tokens`, `input_tokens`, `output_tokens`, or `cached_tokens`.
+- `onair.tokens`: counter labeled by `direction=input|cached_input|output` when backend responses include OpenAI-compatible usage data such as `prompt_tokens`, `completion_tokens`, `input_tokens`, `output_tokens`, or `cached_tokens`. Client-facing responses preserve or synthesize `usage.total_tokens` from the prompt/input and completion/output counts when possible.
 
 Prompt and response bodies are not logged by onair.
 

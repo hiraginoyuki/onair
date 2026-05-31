@@ -567,6 +567,7 @@ pub fn rewrite_response_body(
     if let (Some(backend_model), Some(public_model)) = (backend_model, public_model) {
         rewrite_response_models(&mut json, backend_model, public_model);
     }
+    ensure_usage_total_tokens(&mut json);
 
     if request_mode == RequestMode::ResponsesViaChatCompletions {
         json = chat_completion_to_response(json);
@@ -593,6 +594,44 @@ pub fn rewrite_response_models(value: &mut Value, backend_model: &str, public_mo
             }
         }
         _ => {}
+    }
+}
+
+fn ensure_usage_total_tokens(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if let Some(usage) = object.get_mut("usage").and_then(Value::as_object_mut) {
+                ensure_usage_object_total_tokens(usage);
+            }
+            for value in object.values_mut() {
+                ensure_usage_total_tokens(value);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                ensure_usage_total_tokens(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn ensure_usage_object_total_tokens(usage: &mut Map<String, Value>) {
+    if usage.get("total_tokens").and_then(Value::as_u64).is_some() {
+        return;
+    }
+
+    let input_tokens =
+        number_field(usage, "prompt_tokens").or_else(|| number_field(usage, "input_tokens"));
+    let output_tokens =
+        number_field(usage, "completion_tokens").or_else(|| number_field(usage, "output_tokens"));
+    if let (Some(input_tokens), Some(output_tokens)) = (input_tokens, output_tokens)
+        && let Some(total_tokens) = input_tokens.checked_add(output_tokens)
+    {
+        usage.insert(
+            "total_tokens".to_owned(),
+            Value::Number(total_tokens.into()),
+        );
     }
 }
 
@@ -749,11 +788,12 @@ pub struct UsageTotals {
     pub input: u64,
     pub cached_input: u64,
     pub output: u64,
+    pub total: u64,
 }
 
 impl UsageTotals {
     pub fn is_empty(self) -> bool {
-        self.input == 0 && self.cached_input == 0 && self.output == 0
+        self.input == 0 && self.cached_input == 0 && self.output == 0 && self.total == 0
     }
 }
 
@@ -783,13 +823,16 @@ fn collect_usage(value: &Value, totals: &mut UsageTotals) {
 }
 
 fn add_usage_object(object: &Map<String, Value>, totals: &mut UsageTotals) {
-    totals.input += number_field(object, "prompt_tokens").unwrap_or(0);
-    totals.input += number_field(object, "input_tokens").unwrap_or(0);
+    let input = number_field(object, "prompt_tokens").unwrap_or(0)
+        + number_field(object, "input_tokens").unwrap_or(0);
+    let output = number_field(object, "completion_tokens").unwrap_or(0)
+        + number_field(object, "output_tokens").unwrap_or(0);
+    totals.input += input;
     totals.cached_input += nested_number_field(object, "prompt_tokens_details", "cached_tokens")
         .or_else(|| nested_number_field(object, "input_tokens_details", "cached_tokens"))
         .unwrap_or(0);
-    totals.output += number_field(object, "completion_tokens").unwrap_or(0);
-    totals.output += number_field(object, "output_tokens").unwrap_or(0);
+    totals.output += output;
+    totals.total += number_field(object, "total_tokens").unwrap_or(input + output);
 }
 
 fn number_field(object: &Map<String, Value>, field: &str) -> Option<u64> {
@@ -872,10 +915,12 @@ impl SseNormalizer {
         self.usage.input += usage.input;
         self.usage.cached_input += usage.cached_input;
         self.usage.output += usage.output;
+        self.usage.total += usage.total;
         if let (Some(backend_model), Some(public_model)) = (&self.backend_model, &self.public_model)
         {
             rewrite_response_models(&mut json, backend_model, public_model);
         }
+        ensure_usage_total_tokens(&mut json);
 
         let normalized = serde_json::to_vec(&json).unwrap_or_else(|_| data.to_vec());
         let mut output = Vec::with_capacity(line.len() + normalized.len());
@@ -969,6 +1014,7 @@ impl ResponsesSseNormalizer {
         self.usage.input += usage.input;
         self.usage.cached_input += usage.cached_input;
         self.usage.output += usage.output;
+        self.usage.total += usage.total;
         if let (Some(backend_model), Some(public_model)) = (&self.backend_model, &self.public_model)
         {
             rewrite_response_models(&mut chunk, backend_model, public_model);
@@ -1241,14 +1287,18 @@ impl ResponsesSseNormalizer {
             "model": self.model.clone().unwrap_or_else(|| "unknown".to_owned()),
             "output": output,
             "output_text": self.output_text,
-            "usage": {
+        "usage": {
                 "input_tokens": self.usage.input,
                 "input_tokens_details": {
                     "cached_tokens": self.usage.cached_input,
                 },
                 "output_tokens": self.usage.output,
                 "output_tokens_details": {},
-                "total_tokens": self.usage.input + self.usage.output,
+                "total_tokens": if self.usage.total > 0 {
+                    self.usage.total
+                } else {
+                    self.usage.input + self.usage.output
+                },
             },
         })
     }
@@ -1790,9 +1840,85 @@ mod tests {
             4
         );
         assert_eq!(rewritten["usage"]["output_tokens"], 3);
+        assert_eq!(rewritten["usage"]["total_tokens"], 13);
         assert_eq!(usage.input, 10);
         assert_eq!(usage.cached_input, 4);
         assert_eq!(usage.output, 3);
+        assert_eq!(usage.total, 13);
+    }
+
+    #[test]
+    fn native_json_response_adds_missing_total_tokens() {
+        let responses_body = json!({
+            "id": "resp_1",
+            "object": "response",
+            "model": "backend-model",
+            "output": [],
+            "usage": {
+                "input_tokens": 8,
+                "output_tokens": 5
+            }
+        });
+        let (rewritten, usage) = rewrite_response_body(
+            responses_body.to_string().as_bytes(),
+            Some("application/json"),
+            Some("backend-model"),
+            Some("public-model"),
+            RequestMode::Native,
+        );
+        let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+        assert_eq!(rewritten["usage"]["input_tokens"], 8);
+        assert_eq!(rewritten["usage"]["output_tokens"], 5);
+        assert_eq!(rewritten["usage"]["total_tokens"], 13);
+        assert_eq!(usage.input, 8);
+        assert_eq!(usage.output, 5);
+        assert_eq!(usage.total, 13);
+
+        let chat_body = json!({
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "model": "backend-model",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 4
+            }
+        });
+        let (rewritten, usage) = rewrite_response_body(
+            chat_body.to_string().as_bytes(),
+            Some("application/json"),
+            Some("backend-model"),
+            Some("public-model"),
+            RequestMode::Native,
+        );
+        let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+        assert_eq!(rewritten["usage"]["prompt_tokens"], 3);
+        assert_eq!(rewritten["usage"]["completion_tokens"], 4);
+        assert_eq!(rewritten["usage"]["total_tokens"], 7);
+        assert_eq!(usage.input, 3);
+        assert_eq!(usage.output, 4);
+        assert_eq!(usage.total, 7);
+    }
+
+    #[test]
+    fn native_stream_response_adds_missing_total_tokens() {
+        let mut normalizer = SseNormalizer::new(None, None);
+        let chunk = json!({
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 6,
+                "completion_tokens": 2
+            }
+        });
+        let output = normalizer.push(format!("data: {chunk}\n\n").as_bytes());
+        let output = String::from_utf8(output).unwrap();
+
+        assert!(output.contains("\"total_tokens\":8"));
+        assert_eq!(normalizer.usage.input, 6);
+        assert_eq!(normalizer.usage.output, 2);
+        assert_eq!(normalizer.usage.total, 8);
     }
 
     #[test]
