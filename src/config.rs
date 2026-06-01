@@ -426,6 +426,7 @@ pub enum ChatStreamUsagePolicy {
     #[default]
     Preserve,
     Insert,
+    ForceTrue,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1097,7 +1098,7 @@ mod tests {
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
             capabilities = ["chat", "streaming"]
-            chat_stream_usage = "insert"
+            chat_stream_usage = "force_true"
 
             [[backend.model]]
             public = "public-inherit"
@@ -1113,10 +1114,10 @@ mod tests {
         );
 
         let backend = &config.backends[0];
-        assert_eq!(backend.chat_stream_usage, ChatStreamUsagePolicy::Insert);
+        assert_eq!(backend.chat_stream_usage, ChatStreamUsagePolicy::ForceTrue);
         assert_eq!(
             backend.models[0].chat_stream_usage,
-            ChatStreamUsagePolicy::Insert
+            ChatStreamUsagePolicy::ForceTrue
         );
         assert_eq!(
             backend.models[1].chat_stream_usage,

@@ -386,27 +386,39 @@ pub(super) fn apply_chat_stream_usage_policy(
     object: &mut Map<String, Value>,
     policy: ChatStreamUsagePolicy,
 ) {
-    if policy != ChatStreamUsagePolicy::Insert {
+    if policy == ChatStreamUsagePolicy::Preserve {
         return;
     }
     if object.get("stream").and_then(Value::as_bool) != Some(true) {
         return;
     }
 
+    let include_usage = Value::Bool(true);
     match object.get_mut("stream_options") {
-        Some(value) => {
-            if let Some(options) = value.as_object_mut() {
-                options
-                    .entry("include_usage".to_owned())
-                    .or_insert(Value::Bool(true));
+        Some(value) => match value.as_object_mut() {
+            Some(options) => {
+                if policy == ChatStreamUsagePolicy::Insert {
+                    options
+                        .entry("include_usage".to_owned())
+                        .or_insert(include_usage);
+                } else {
+                    options.insert("include_usage".to_owned(), include_usage);
+                }
             }
-        }
+            None if policy == ChatStreamUsagePolicy::ForceTrue => {
+                *value = Value::Object(Map::from_iter([(
+                    "include_usage".to_owned(),
+                    include_usage,
+                )]));
+            }
+            None => {}
+        },
         None => {
             object.insert(
                 "stream_options".to_owned(),
                 Value::Object(Map::from_iter([(
                     "include_usage".to_owned(),
-                    Value::Bool(true),
+                    include_usage,
                 )])),
             );
         }

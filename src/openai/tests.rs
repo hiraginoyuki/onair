@@ -345,6 +345,67 @@ fn chat_stream_usage_policy_preserves_client_stream_options() {
 }
 
 #[test]
+fn chat_stream_usage_policy_force_true_overrides_client_value() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": true,
+        "stream_options": {
+            "include_usage": false,
+            "extra": "kept"
+        }
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
+        },
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["stream_options"]["include_usage"], true);
+    assert_eq!(rewritten["stream_options"]["extra"], "kept");
+}
+
+#[test]
+fn chat_stream_usage_policy_force_true_replaces_non_object_stream_options() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": true,
+        "stream_options": "unexpected"
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
+        },
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["stream_options"]["include_usage"], true);
+    assert_eq!(rewritten["stream_options"].as_object().unwrap().len(), 1);
+}
+
+#[test]
 fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
     let body = json!({
         "model": "public-model",
@@ -362,7 +423,7 @@ fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Insert,
+            chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
         },
     )
     .unwrap();
