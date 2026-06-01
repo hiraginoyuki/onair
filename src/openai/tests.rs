@@ -1727,6 +1727,54 @@ fn responses_stream_incomplete_maps_to_length_finish_reason() {
 }
 
 #[test]
+fn responses_stream_failed_emits_sanitized_chat_error() {
+    let mut normalizer = ChatCompletionsSseNormalizer::new_with_usage_visibility(None, None, true);
+    let created = json!({
+        "type": "response.created",
+        "response": {
+            "id": "resp_1",
+            "created_at": 123,
+            "model": "public-model"
+        }
+    });
+    let failed = json!({
+        "type": "response.failed",
+        "response": {
+            "id": "resp_1",
+            "created_at": 123,
+            "model": "public-model",
+            "status": "failed",
+            "error": {
+                "message": "private backend failure detail",
+                "code": "backend_specific_failure"
+            }
+        }
+    });
+
+    let mut output = normalizer.push(format!("data: {created}\n\n").as_bytes());
+    output.extend(normalizer.push(format!("data: {failed}\n\n").as_bytes()));
+    output.extend(normalizer.finish());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("\"error\""), "body={output}");
+    assert!(output.contains("The selected model could not complete the request."));
+    assert!(output.contains("\"code\":\"upstream_error\""));
+    assert!(
+        !output.contains("private backend failure detail"),
+        "body={output}"
+    );
+    assert!(
+        !output.contains("backend_specific_failure"),
+        "body={output}"
+    );
+    assert!(
+        !output.contains("\"finish_reason\":\"stop\""),
+        "body={output}"
+    );
+    assert!(output.contains("data: [DONE]"));
+}
+
+#[test]
 fn responses_stream_converts_function_call_deltas_to_chat_completion_chunks() {
     let mut normalizer = ChatCompletionsSseNormalizer::new_with_usage_visibility(None, None, true);
     let created = json!({

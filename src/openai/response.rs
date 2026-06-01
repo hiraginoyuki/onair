@@ -1280,6 +1280,9 @@ impl ChatCompletionsSseNormalizer {
                 output.extend(self.finish_response(response));
                 output
             }
+            Some("response.failed") | Some("response.cancelled") | Some("error") => {
+                self.fail_response(event.get("response"))
+            }
             _ => Vec::new(),
         }
     }
@@ -1593,6 +1596,26 @@ impl ChatCompletionsSseNormalizer {
             .then(|| response.map(|response| responses_usage_to_chat_usage(response.get("usage"))))
             .flatten();
         self.chat_chunk(json!({}), Some(finish_reason), usage)
+    }
+
+    fn fail_response(&mut self, response: Option<&Value>) -> Vec<u8> {
+        if self.completed {
+            return Vec::new();
+        }
+        self.completed = true;
+        if let Some(response) = response {
+            self.set_response_metadata(response);
+        }
+        let mut output = sse_data(json!({
+            "error": {
+                "message": "The selected model could not complete the request.",
+                "type": "server_error",
+                "param": null,
+                "code": "upstream_error",
+            }
+        }));
+        output.extend(self.done_event());
+        output
     }
 
     fn chat_chunk(
