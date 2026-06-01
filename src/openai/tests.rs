@@ -1020,14 +1020,16 @@ fn native_stream_response_adds_missing_total_tokens() {
     let mut normalizer = SseNormalizer::new(None, None);
     let chunk = json!({
         "id": "chatcmpl-1",
-        "object": "chat.completion.chunk",
+        "object": "response",
+        "type": "response.completed",
         "choices": [],
         "usage": {
             "prompt_tokens": 6,
             "completion_tokens": 2
         }
     });
-    let output = normalizer.push(format!("data: {chunk}\n\n").as_bytes());
+    let output =
+        normalizer.push(format!("event: response.completed\ndata: {chunk}\n\n").as_bytes());
     let output = String::from_utf8(output).unwrap();
 
     assert!(output.contains("\"total_tokens\":8"));
@@ -1041,6 +1043,18 @@ fn native_stream_response_adds_missing_total_tokens() {
             .diagnostics
             .usage_keys
             .contains("completion_tokens")
+    );
+    assert!(
+        normalizer
+            .diagnostics
+            .event_names
+            .contains("response.completed")
+    );
+    assert!(
+        normalizer
+            .diagnostics
+            .usage_event_names
+            .contains("response.completed")
     );
 }
 

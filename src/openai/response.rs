@@ -273,17 +273,34 @@ impl UsageTotals {
 pub struct UsageDiagnostics {
     pub usage_object_count: u64,
     pub usage_keys: BTreeSet<String>,
+    pub event_names: BTreeSet<String>,
+    pub usage_event_names: BTreeSet<String>,
 }
 
 impl UsageDiagnostics {
     fn observe_object(&mut self, object: &Map<String, Value>) {
         self.usage_object_count += 1;
-        self.usage_keys.extend(object.keys().cloned());
+        self.usage_keys
+            .extend(object.keys().filter_map(|key| safe_diagnostic_label(key)));
+    }
+
+    fn observe_event_name(&mut self, event_name: &str) {
+        if let Some(event_name) = safe_diagnostic_label(event_name) {
+            self.event_names.insert(event_name);
+        }
+    }
+
+    fn observe_usage_event_name(&mut self, event_name: &str) {
+        if let Some(event_name) = safe_diagnostic_label(event_name) {
+            self.usage_event_names.insert(event_name);
+        }
     }
 
     pub fn merge(&mut self, other: UsageDiagnostics) {
         self.usage_object_count += other.usage_object_count;
         self.usage_keys.extend(other.usage_keys);
+        self.event_names.extend(other.event_names);
+        self.usage_event_names.extend(other.usage_event_names);
     }
 }
 
@@ -347,11 +364,49 @@ fn nested_number_field(object: &Map<String, Value>, parent: &str, field: &str) -
         .and_then(|object| number_field(object, field))
 }
 
+fn safe_diagnostic_label(value: &str) -> Option<String> {
+    let label = value
+        .chars()
+        .filter_map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':') {
+                Some(character)
+            } else if character.is_ascii_graphic() {
+                Some('_')
+            } else {
+                None
+            }
+        })
+        .take(80)
+        .collect::<String>();
+    (!label.is_empty()).then_some(label)
+}
+
+fn sse_field_value<'a>(line: &'a [u8], prefix: &[u8]) -> Option<&'a [u8]> {
+    let value = line.strip_prefix(prefix)?;
+    Some(value.strip_prefix(b" ").unwrap_or(value))
+}
+
+fn utf8_field_value(line: &[u8], prefix: &[u8]) -> Option<String> {
+    let value = sse_field_value(line, prefix)?;
+    std::str::from_utf8(value)
+        .ok()
+        .map(str::trim)
+        .and_then(safe_diagnostic_label)
+}
+
+fn json_event_type(value: &Value) -> Option<&str> {
+    value
+        .get("type")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("object").and_then(Value::as_str))
+}
+
 #[derive(Debug, Default)]
 pub struct SseNormalizer {
     pending: Vec<u8>,
     pub usage: UsageTotals,
     pub diagnostics: UsageDiagnostics,
+    pending_event_name: Option<String>,
     backend_model: Option<String>,
     public_model: Option<String>,
 }
@@ -401,19 +456,42 @@ impl SseNormalizer {
             b"".as_slice()
         };
 
-        let Some(data) = line_without_cr.strip_prefix(b"data:") else {
+        if let Some(event_name) = utf8_field_value(line_without_cr, b"event:") {
+            self.diagnostics.observe_event_name(&event_name);
+            self.pending_event_name = Some(event_name);
+            return line.to_vec();
+        }
+
+        let Some(data) = sse_field_value(line_without_cr, b"data:") else {
             return line.to_vec();
         };
-        let leading_space = data.starts_with(b" ");
-        let data = if leading_space { &data[1..] } else { data };
+        let leading_space = line_without_cr
+            .strip_prefix(b"data:")
+            .is_some_and(|data| data.starts_with(b" "));
         if data == b"[DONE]" {
+            self.pending_event_name = None;
             return line.to_vec();
         }
 
         let Ok(mut json) = serde_json::from_slice::<Value>(data) else {
+            self.pending_event_name = None;
             return line.to_vec();
         };
         let observation = extract_usage_observation(&json);
+        let usage_object_count = observation.diagnostics.usage_object_count;
+        let json_event_name = json_event_type(&json).and_then(safe_diagnostic_label);
+        if let Some(event_name) = &json_event_name {
+            self.diagnostics.observe_event_name(event_name);
+        }
+        if usage_object_count > 0 {
+            if let Some(event_name) = &self.pending_event_name {
+                self.diagnostics.observe_usage_event_name(event_name);
+            }
+            if let Some(event_name) = &json_event_name {
+                self.diagnostics.observe_usage_event_name(event_name);
+            }
+        }
+        self.pending_event_name = None;
         self.usage.input += observation.totals.input;
         self.usage.cached_input += observation.totals.cached_input;
         self.usage.output += observation.totals.output;
@@ -443,6 +521,7 @@ pub struct ResponsesSseNormalizer {
     pending: Vec<u8>,
     pub usage: UsageTotals,
     pub diagnostics: UsageDiagnostics,
+    pending_event_name: Option<String>,
     backend_model: Option<String>,
     public_model: Option<String>,
     response_id: Option<String>,
@@ -497,24 +576,43 @@ impl ResponsesSseNormalizer {
 
     fn normalize_line(&mut self, line: &[u8]) -> Vec<u8> {
         let line_without_newline = line.strip_suffix(b"\n").unwrap_or(line);
-        let Some(data) = line_without_newline
+        let line_without_cr = line_without_newline
             .strip_suffix(b"\r")
-            .unwrap_or(line_without_newline)
-            .strip_prefix(b"data:")
-        else {
+            .unwrap_or(line_without_newline);
+        if let Some(event_name) = utf8_field_value(line_without_cr, b"event:") {
+            self.diagnostics.observe_event_name(&event_name);
+            self.pending_event_name = Some(event_name);
+            return line.to_vec();
+        }
+        let Some(data) = sse_field_value(line_without_cr, b"data:") else {
             return line.to_vec();
         };
-        let data = data.strip_prefix(b" ").unwrap_or(data);
         if data == b"[DONE]" {
+            self.pending_event_name = None;
             let mut output = self.finish_response();
             output.extend_from_slice(line);
             return output;
         }
 
         let Ok(mut chunk) = serde_json::from_slice::<Value>(data) else {
+            self.pending_event_name = None;
             return line.to_vec();
         };
         let observation = extract_usage_observation(&chunk);
+        let usage_object_count = observation.diagnostics.usage_object_count;
+        let json_event_name = json_event_type(&chunk).and_then(safe_diagnostic_label);
+        if let Some(event_name) = &json_event_name {
+            self.diagnostics.observe_event_name(event_name);
+        }
+        if usage_object_count > 0 {
+            if let Some(event_name) = &self.pending_event_name {
+                self.diagnostics.observe_usage_event_name(event_name);
+            }
+            if let Some(event_name) = &json_event_name {
+                self.diagnostics.observe_usage_event_name(event_name);
+            }
+        }
+        self.pending_event_name = None;
         self.usage.input += observation.totals.input;
         self.usage.cached_input += observation.totals.cached_input;
         self.usage.output += observation.totals.output;

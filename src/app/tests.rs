@@ -856,6 +856,20 @@ async fn debug_capture_records_stream_usage_diagnostics() {
     assert!(usage_keys.iter().any(|key| key == "prompt_tokens"));
     assert!(usage_keys.iter().any(|key| key == "completion_tokens"));
     assert!(usage_keys.iter().any(|key| key == "total_tokens"));
+    let event_names = metadata["stream_usage"]["event_names"].as_array().unwrap();
+    assert!(
+        event_names
+            .iter()
+            .any(|event| event == "chat.completion.chunk")
+    );
+    let usage_event_names = metadata["stream_usage"]["usage_event_names"]
+        .as_array()
+        .unwrap();
+    assert!(
+        usage_event_names
+            .iter()
+            .any(|event| event == "chat.completion.chunk")
+    );
 
     backend.abort();
     std::fs::remove_dir_all(capture_dir).unwrap();

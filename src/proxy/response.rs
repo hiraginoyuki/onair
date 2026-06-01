@@ -606,6 +606,8 @@ impl Drop for StreamMetrics {
             total_tokens = self.usage.total,
             stream_usage_object_count = self.usage_diagnostics.usage_object_count,
             stream_usage_keys = ?self.usage_diagnostics.usage_keys,
+            stream_event_names = ?self.usage_diagnostics.event_names,
+            stream_usage_event_names = ?self.usage_diagnostics.usage_event_names,
             "streaming response completed"
         );
         let inspector_outcome = match self.stream_error_kind {
