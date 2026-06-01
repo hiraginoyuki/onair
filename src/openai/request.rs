@@ -3,7 +3,9 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 use url::form_urlencoded;
 
-use crate::config::{ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode};
+use crate::config::{
+    ChatStreamUsagePolicy, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode,
+};
 
 use super::{is_json_content_type, responses_compat::rewrite_responses_request_as_chat};
 
@@ -18,6 +20,7 @@ pub struct RequestRewritePolicies {
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
+    pub chat_stream_usage: ChatStreamUsagePolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +82,9 @@ pub fn rewrite_request_body_for_mode_with_policies(
     request_mode: RequestMode,
     policies: RequestRewritePolicies,
 ) -> Result<Vec<u8>, RequestRewriteError> {
-    let native_responses = path.trim_end_matches('/') == "/v1/responses";
+    let normalized_path = path.trim_end_matches('/');
+    let native_responses = normalized_path == "/v1/responses";
+    let chat_completions = normalized_path == "/v1/chat/completions";
     if native_responses && should_parse_json(content_type, body) {
         validate_responses_tool_history(body)?;
     }
@@ -90,6 +95,7 @@ pub fn rewrite_request_body_for_mode_with_policies(
             content_type,
             backend_model,
             policies.tool_schema_mode,
+            policies.chat_stream_usage,
         );
     }
 
@@ -105,8 +111,10 @@ pub fn rewrite_request_body_for_mode_with_policies(
             body,
             backend_model,
             native_responses,
+            chat_completions,
             policies.responses_store,
             policies.responses_max_output_tokens,
+            policies.chat_stream_usage,
         )
     {
         return Ok(rewritten);
@@ -325,8 +333,10 @@ fn rewrite_json_request_body(
     body: &[u8],
     backend_model: &str,
     native_responses: bool,
+    chat_completions: bool,
     responses_store: ResponsesStorePolicy,
     responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
+    chat_stream_usage: ChatStreamUsagePolicy,
 ) -> Option<Vec<u8>> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
     let object = value.as_object_mut()?;
@@ -342,6 +352,8 @@ fn rewrite_json_request_body(
     }
     if native_responses {
         rewrite_native_responses_max_output_tokens(object, responses_max_output_tokens);
+    } else if chat_completions {
+        apply_chat_stream_usage_policy(object, chat_stream_usage);
     }
     serde_json::to_vec(&value).ok()
 }
@@ -366,6 +378,37 @@ fn rewrite_native_responses_max_output_tokens(
                     .entry("max_completion_tokens".to_owned())
                     .or_insert(value);
             }
+        }
+    }
+}
+
+pub(super) fn apply_chat_stream_usage_policy(
+    object: &mut Map<String, Value>,
+    policy: ChatStreamUsagePolicy,
+) {
+    if policy != ChatStreamUsagePolicy::Insert {
+        return;
+    }
+    if object.get("stream").and_then(Value::as_bool) != Some(true) {
+        return;
+    }
+
+    match object.get_mut("stream_options") {
+        Some(value) => {
+            if let Some(options) = value.as_object_mut() {
+                options
+                    .entry("include_usage".to_owned())
+                    .or_insert(Value::Bool(true));
+            }
+        }
+        None => {
+            object.insert(
+                "stream_options".to_owned(),
+                Value::Object(Map::from_iter([(
+                    "include_usage".to_owned(),
+                    Value::Bool(true),
+                )])),
+            );
         }
     }
 }

@@ -368,6 +368,7 @@ pub struct BackendConfig {
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
+    pub chat_stream_usage: ChatStreamUsagePolicy,
     #[serde(alias = "capability")]
     pub capabilities: BTreeSet<String>,
     #[serde(rename = "model")]
@@ -386,6 +387,7 @@ impl Default for BackendConfig {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             capabilities: BTreeSet::new(),
             models: Vec::new(),
         }
@@ -418,6 +420,14 @@ pub enum ResponsesMaxOutputTokensPolicy {
     RenameToMaxCompletionTokens,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatStreamUsagePolicy {
+    #[default]
+    Preserve,
+    Insert,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelRouteConfig {
@@ -431,6 +441,8 @@ pub struct ModelRouteConfig {
     pub responses_store: Option<ResponsesStorePolicy>,
     #[serde(default)]
     pub responses_max_output_tokens: Option<ResponsesMaxOutputTokensPolicy>,
+    #[serde(default)]
+    pub chat_stream_usage: Option<ChatStreamUsagePolicy>,
     #[serde(default)]
     pub endpoints: BTreeSet<String>,
 }
@@ -465,6 +477,7 @@ pub struct ResolvedBackend {
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
+    pub chat_stream_usage: ChatStreamUsagePolicy,
     pub models: Vec<ModelRoute>,
 }
 
@@ -476,6 +489,7 @@ pub struct ModelRoute {
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
+    pub chat_stream_usage: ChatStreamUsagePolicy,
     pub endpoints: BTreeSet<String>,
 }
 
@@ -576,6 +590,9 @@ impl Config {
                         responses_max_output_tokens: model
                             .responses_max_output_tokens
                             .unwrap_or(backend.responses_max_output_tokens),
+                        chat_stream_usage: model
+                            .chat_stream_usage
+                            .unwrap_or(backend.chat_stream_usage),
                         endpoints: model.endpoints,
                     })
                 })
@@ -589,6 +606,7 @@ impl Config {
                 tool_schema_mode: backend.tool_schema_mode,
                 responses_store: backend.responses_store,
                 responses_max_output_tokens: backend.responses_max_output_tokens,
+                chat_stream_usage: backend.chat_stream_usage,
                 models,
             });
         }
@@ -1061,6 +1079,48 @@ mod tests {
         assert_eq!(
             backend.models[1].responses_max_output_tokens,
             ResponsesMaxOutputTokensPolicy::Drop
+        );
+    }
+
+    #[test]
+    fn chat_stream_usage_policy_can_be_set_per_backend_and_model() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-inherit", "public-override"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["chat", "streaming"]
+            chat_stream_usage = "insert"
+
+            [[backend.model]]
+            public = "public-inherit"
+            backend = "private-inherit"
+            endpoints = ["chat"]
+
+            [[backend.model]]
+            public = "public-override"
+            backend = "private-override"
+            chat_stream_usage = "preserve"
+            endpoints = ["chat"]
+            "#,
+        );
+
+        let backend = &config.backends[0];
+        assert_eq!(backend.chat_stream_usage, ChatStreamUsagePolicy::Insert);
+        assert_eq!(
+            backend.models[0].chat_stream_usage,
+            ChatStreamUsagePolicy::Insert
+        );
+        assert_eq!(
+            backend.models[1].chat_stream_usage,
+            ChatStreamUsagePolicy::Preserve
         );
     }
 

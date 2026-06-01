@@ -102,6 +102,7 @@ pub(crate) struct BackendSnapshot {
     pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
     pub(crate) responses_store: crate::config::ResponsesStorePolicy,
     pub(crate) responses_max_output_tokens: crate::config::ResponsesMaxOutputTokensPolicy,
+    pub(crate) chat_stream_usage: crate::config::ChatStreamUsagePolicy,
     pub(crate) capabilities: Vec<String>,
     pub(crate) models: Vec<BackendModelSnapshot>,
 }
@@ -114,6 +115,7 @@ pub(crate) struct BackendModelSnapshot {
     pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
     pub(crate) responses_store: crate::config::ResponsesStorePolicy,
     pub(crate) responses_max_output_tokens: crate::config::ResponsesMaxOutputTokensPolicy,
+    pub(crate) chat_stream_usage: crate::config::ChatStreamUsagePolicy,
     pub(crate) endpoints: Vec<String>,
 }
 
@@ -132,6 +134,7 @@ pub(crate) struct ModelRouteSnapshot {
     pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
     pub(crate) responses_store: crate::config::ResponsesStorePolicy,
     pub(crate) responses_max_output_tokens: crate::config::ResponsesMaxOutputTokensPolicy,
+    pub(crate) chat_stream_usage: crate::config::ChatStreamUsagePolicy,
     pub(crate) endpoints: Vec<String>,
 }
 
@@ -217,6 +220,7 @@ pub(crate) fn models_snapshot(config: &Config) -> OperatorModelsSnapshot {
                     tool_schema_mode: model.tool_schema_mode,
                     responses_store: model.responses_store,
                     responses_max_output_tokens: model.responses_max_output_tokens,
+                    chat_stream_usage: model.chat_stream_usage,
                     endpoints: sorted_strings(&model.endpoints),
                 });
             }
@@ -322,6 +326,7 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
         tool_schema_mode: backend.tool_schema_mode,
         responses_store: backend.responses_store,
         responses_max_output_tokens: backend.responses_max_output_tokens,
+        chat_stream_usage: backend.chat_stream_usage,
         capabilities: sorted_strings(&backend.capabilities),
         models: backend
             .models
@@ -333,6 +338,7 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
                 tool_schema_mode: model.tool_schema_mode,
                 responses_store: model.responses_store,
                 responses_max_output_tokens: model.responses_max_output_tokens,
+                chat_stream_usage: model.chat_stream_usage,
                 endpoints: sorted_strings(&model.endpoints),
             })
             .collect(),

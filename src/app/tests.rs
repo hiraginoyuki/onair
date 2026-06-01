@@ -16,9 +16,10 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::config::{
-    Config, DebugCaptureConfig, DebugCaptureMode, HealthConfig, InspectorConfig, ModelRoute,
-    ResolvedBackend, ResolvedClient, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy,
-    RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
+    ChatStreamUsagePolicy, Config, DebugCaptureConfig, DebugCaptureMode, HealthConfig,
+    InspectorConfig, ModelRoute, ResolvedBackend, ResolvedClient, ResponsesMaxOutputTokensPolicy,
+    ResponsesStorePolicy, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig,
+    ToolSchemaMode,
 };
 
 const CLIENT_KEY: &str = "sk-test";
@@ -120,6 +121,38 @@ async fn responses_translates_to_chat_completions_for_chat_backend() {
     assert_eq!(captured[0]["tools"][0]["function"]["name"], "lookup");
     assert!(captured[0].get("input").is_none());
     assert!(captured[0].get("max_output_tokens").is_none());
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn chat_stream_usage_policy_inserts_upstream_include_usage() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let mut backend_config = test_chat_backend("backend-a", backend.base_url());
+    backend_config.chat_stream_usage = ChatStreamUsagePolicy::Insert;
+    backend_config.models[0].chat_stream_usage = ChatStreamUsagePolicy::Insert;
+    let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+    assert_eq!(captured[0]["stream"], true);
+    assert_eq!(captured[0]["stream_options"]["include_usage"], true);
 
     backend.abort();
 }
@@ -1326,6 +1359,7 @@ async fn models_respect_context_length_output_policy() {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             models: vec![
                 ModelRoute {
                     public: PUBLIC_MODEL.to_owned(),
@@ -1334,6 +1368,7 @@ async fn models_respect_context_length_output_policy() {
                     tool_schema_mode: ToolSchemaMode::Preserve,
                     responses_store: ResponsesStorePolicy::Preserve,
                     responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                    chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                     endpoints: btree_set(["responses"]),
                 },
                 ModelRoute {
@@ -1343,6 +1378,7 @@ async fn models_respect_context_length_output_policy() {
                     tool_schema_mode: ToolSchemaMode::Preserve,
                     responses_store: ResponsesStorePolicy::Preserve,
                     responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                    chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                     endpoints: btree_set(["responses"]),
                 },
             ],
@@ -1534,6 +1570,7 @@ fn test_backend(id: &str, base_url: String) -> ResolvedBackend {
         tool_schema_mode: ToolSchemaMode::Preserve,
         responses_store: ResponsesStorePolicy::Preserve,
         responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+        chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         models: vec![ModelRoute {
             public: PUBLIC_MODEL.to_owned(),
             backend: BACKEND_MODEL.to_owned(),
@@ -1541,6 +1578,7 @@ fn test_backend(id: &str, base_url: String) -> ResolvedBackend {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             endpoints: btree_set(["responses"]),
         }],
     }
@@ -1556,6 +1594,7 @@ fn test_chat_backend(id: &str, base_url: String) -> ResolvedBackend {
         tool_schema_mode: ToolSchemaMode::Preserve,
         responses_store: ResponsesStorePolicy::Preserve,
         responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+        chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         models: vec![ModelRoute {
             public: PUBLIC_MODEL.to_owned(),
             backend: BACKEND_MODEL.to_owned(),
@@ -1563,6 +1602,7 @@ fn test_chat_backend(id: &str, base_url: String) -> ResolvedBackend {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             endpoints: btree_set(["chat", "tools"]),
         }],
     }

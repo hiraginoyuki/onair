@@ -21,7 +21,7 @@ Planned work lives in [ROADMAP.md](ROADMAP.md). This README describes the curren
 - `stream: true` responses are proxied as server-sent events, with configured backend model names rewritten back to public model names in JSON/SSE responses.
 - OpenAI-compatible `usage.total_tokens` values are preserved; when a backend reports prompt/input and completion/output token counts without a total, onair adds the corresponding total to chat-completion and Responses JSON/SSE responses.
 - Backend errors are converted to generic OpenAI-style errors, and response headers are allowlisted before returning to the client.
-- OpenTelemetry metrics record request counts, status codes, latency, stream duration, backend usage, and token counters when an OpenAI-compatible `usage` object is present.
+- OpenTelemetry metrics record request counts, status codes, latency, stream duration, backend usage, and token counters when an OpenAI-compatible `usage` object is present. For streaming Chat Completions-compatible upstreams, an opt-in route policy can request usage chunks when clients omit that request option.
 - A disabled-by-default local inspector can retain recent request metadata and render live timing timelines and backend-attempt waterfalls in a browser without storing prompt or completion bodies.
 
 ## Operation
@@ -162,6 +162,8 @@ Repeated `Forwarded` or `X-Forwarded-For` header lines are treated as one chain 
 
 `[[backend]].responses_max_output_tokens` controls only native `/v1/responses` forwarding. The default, `preserve`, forwards the client's `max_output_tokens` field unchanged. Use `drop` for a backend or wrapper that rejects the Responses field entirely, or use `rename_to_max_tokens` / `rename_to_max_completion_tokens` only if the backend explicitly expects one of those alternate names. A `[[backend.model]].responses_max_output_tokens` value overrides the backend default for that model route. This setting does not affect direct chat requests or Responses-to-Chat compatibility requests.
 
+`[[backend]].chat_stream_usage` controls only upstream Chat Completions-compatible JSON requests. The default, `preserve`, leaves the client's `stream_options` untouched. Use `insert` for a backend that honors Chat Completions `stream_options.include_usage`: when the forwarded request is `stream: true`, onair adds `"stream_options": {"include_usage": true}` only if the client omitted `stream_options.include_usage`. Existing client values, including explicit `false`, are preserved, and other `stream_options` fields are kept. A `[[backend.model]].chat_stream_usage` value overrides the backend default for that model route. This setting applies to direct `/v1/chat/completions` forwarding and to the Responses-to-Chat compatibility path because that path forwards upstream as Chat Completions; it does not apply to native `/v1/responses`.
+
 Onair also preflights client `/v1/responses` tool history before forwarding it. Every top-level `function_call` item in `input` must have a matching `function_call_output`; otherwise Onair returns a local `400` with a clear input error instead of sending malformed history to the backend and surfacing a generic upstream rejection.
 
 Set `[routing].strategy = "sticky"` when multiple backends serve the same public model and you want cache-heavy traffic to keep landing on the same backend. The sticky key is derived from identity, path, public model, and `prompt_cache_key` when provided. The router still forwards `prompt_cache_key` and `prompt_cache_retention` unchanged.
@@ -245,7 +247,7 @@ Metric instruments:
 - `onair.backend.requests`: counter labeled by `route`, `identity`, `model`, `backend`, and `stream`.
 - `onair.request.duration`: histogram in seconds with the same labels as `onair.requests`.
 - `onair.stream.duration`: histogram in seconds for streaming response lifetime.
-- `onair.tokens`: counter labeled by `direction=input|cached_input|output` when backend responses include OpenAI-compatible usage data such as `prompt_tokens`, `completion_tokens`, `input_tokens`, `output_tokens`, or `cached_tokens`. Client-facing responses preserve or synthesize `usage.total_tokens` from the prompt/input and completion/output counts when possible.
+- `onair.tokens`: counter labeled by `direction=input|cached_input|output` when backend responses include OpenAI-compatible usage data such as `prompt_tokens`, `completion_tokens`, `input_tokens`, `output_tokens`, or `cached_tokens`. Client-facing responses preserve or synthesize `usage.total_tokens` from the prompt/input and completion/output counts when possible. For streaming Chat Completions-compatible upstreams that require clients to opt into terminal usage chunks, set `chat_stream_usage = "insert"` on the relevant backend or model route; native Responses usage is parsed from Responses events/objects instead of Chat-style `stream_options.include_usage`.
 
 Prompt and response bodies are not logged by onair.
 

@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 
 use crate::config::{
-    ResolvedBackend, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RoutingStrategy,
-    ToolSchemaMode,
+    ChatStreamUsagePolicy, ResolvedBackend, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy,
+    RoutingStrategy, ToolSchemaMode,
 };
 use crate::error::ApiError;
 use crate::openai::RequestMode;
@@ -20,6 +20,7 @@ pub struct SelectedRoute {
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
+    pub chat_stream_usage: ChatStreamUsagePolicy,
 }
 
 pub fn select_backend_candidates(
@@ -72,6 +73,7 @@ pub fn select_backend_candidates(
                     tool_schema_mode: route.tool_schema_mode,
                     responses_store: route.responses_store,
                     responses_max_output_tokens: route.responses_max_output_tokens,
+                    chat_stream_usage: route.chat_stream_usage,
                 });
             }
             continue;
@@ -92,6 +94,7 @@ pub fn select_backend_candidates(
             tool_schema_mode: backend.tool_schema_mode,
             responses_store: backend.responses_store,
             responses_max_output_tokens: backend.responses_max_output_tokens,
+            chat_stream_usage: backend.chat_stream_usage,
         });
     }
 
@@ -430,6 +433,7 @@ mod tests {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
@@ -437,6 +441,7 @@ mod tests {
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 endpoints: btree_set(["chat"]),
             }],
         };
@@ -471,6 +476,7 @@ mod tests {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
@@ -478,6 +484,7 @@ mod tests {
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 endpoints: btree_set(["responses", "chat"]),
             }],
         };
@@ -509,6 +516,7 @@ mod tests {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
@@ -516,6 +524,7 @@ mod tests {
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 endpoints: btree_set(["chat"]),
             }],
         };
@@ -550,6 +559,7 @@ mod tests {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "unsupported-private".to_owned(),
@@ -557,6 +567,7 @@ mod tests {
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 endpoints: btree_set(["responses", "chat"]),
             }],
         };
@@ -569,6 +580,7 @@ mod tests {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "supported-private".to_owned(),
@@ -576,6 +588,7 @@ mod tests {
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 endpoints: btree_set(["responses", "chat", "tools"]),
             }],
         };
@@ -606,6 +619,7 @@ mod tests {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "plain-private".to_owned(),
@@ -613,6 +627,7 @@ mod tests {
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 endpoints: btree_set(["responses", "chat"]),
             }],
         };
@@ -644,6 +659,7 @@ mod tests {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: format!("{id}-private"),
@@ -651,6 +667,7 @@ mod tests {
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 endpoints: btree_set(["responses"]),
             }],
         }

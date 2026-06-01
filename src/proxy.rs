@@ -525,6 +525,7 @@ async fn do_proxy(
                 tool_schema_mode: context.route.tool_schema_mode,
                 responses_store: context.route.responses_store,
                 responses_max_output_tokens: context.route.responses_max_output_tokens,
+                chat_stream_usage: context.route.chat_stream_usage,
             },
         )
         .map_err(|error| ApiError::bad_request(error.message(), error.param()))?;

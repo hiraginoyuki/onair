@@ -1,4 +1,6 @@
-use crate::config::{ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode};
+use crate::config::{
+    ChatStreamUsagePolicy, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode,
+};
 use serde_json::{Value, json};
 
 use super::*;
@@ -22,6 +24,7 @@ fn rewrite_request_body_for_mode_with_tool_schema_mode(
             tool_schema_mode,
             responses_store,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
     )
 }
@@ -162,6 +165,7 @@ fn native_responses_can_rewrite_max_output_tokens_for_wrapper_quirks() {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
     )
     .unwrap();
@@ -179,6 +183,7 @@ fn native_responses_can_rewrite_max_output_tokens_for_wrapper_quirks() {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::RenameToMaxTokens,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
     )
     .unwrap();
@@ -206,6 +211,7 @@ fn native_responses_max_output_tokens_policy_preserves_other_paths_and_existing_
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens:
                 ResponsesMaxOutputTokensPolicy::RenameToMaxCompletionTokens,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
     )
     .unwrap();
@@ -228,11 +234,208 @@ fn native_responses_max_output_tokens_policy_preserves_other_paths_and_existing_
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
     )
     .unwrap();
     let rewritten_chat: Value = serde_json::from_slice(&rewritten_chat).unwrap();
     assert_eq!(rewritten_chat["max_output_tokens"], 32);
+}
+
+#[test]
+fn chat_stream_usage_policy_inserts_usage_request_for_chat_streams() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": true
+    });
+
+    let preserved = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+    )
+    .unwrap();
+    let preserved: Value = serde_json::from_slice(&preserved).unwrap();
+    assert!(preserved.get("stream_options").is_none());
+
+    let inserted = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Insert,
+        },
+    )
+    .unwrap();
+    let inserted: Value = serde_json::from_slice(&inserted).unwrap();
+    assert_eq!(inserted["stream_options"]["include_usage"], true);
+}
+
+#[test]
+fn chat_stream_usage_policy_preserves_client_stream_options() {
+    let with_extra = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": true,
+        "stream_options": {
+            "extra": "kept"
+        }
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        with_extra.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Insert,
+        },
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+    assert_eq!(rewritten["stream_options"]["include_usage"], true);
+    assert_eq!(rewritten["stream_options"]["extra"], "kept");
+
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": true,
+        "stream_options": {
+            "include_usage": false,
+            "extra": "kept"
+        }
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Insert,
+        },
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["stream_options"]["include_usage"], false);
+    assert_eq!(rewritten["stream_options"]["extra"], "kept");
+}
+
+#[test]
+fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
+    let body = json!({
+        "model": "public-model",
+        "input": "hello",
+        "stream": true
+    });
+
+    let responses = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/responses",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Insert,
+        },
+    )
+    .unwrap();
+    let responses: Value = serde_json::from_slice(&responses).unwrap();
+    assert!(responses.get("stream_options").is_none());
+
+    let embeddings = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/embeddings",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Insert,
+        },
+    )
+    .unwrap();
+    let embeddings: Value = serde_json::from_slice(&embeddings).unwrap();
+    assert!(embeddings.get("stream_options").is_none());
+
+    let non_stream_chat = rewrite_request_body_for_mode_with_policies(
+        json!({
+            "model": "public-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": false
+        })
+        .to_string()
+        .as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Insert,
+        },
+    )
+    .unwrap();
+    let non_stream_chat: Value = serde_json::from_slice(&non_stream_chat).unwrap();
+    assert!(non_stream_chat.get("stream_options").is_none());
+}
+
+#[test]
+fn chat_stream_usage_policy_applies_after_responses_to_chat_conversion() {
+    let body = json!({
+        "model": "public-model",
+        "input": "hello",
+        "stream": true
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/responses",
+        RequestMode::ResponsesViaChatCompletions,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Insert,
+        },
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["messages"][0]["role"], "user");
+    assert_eq!(rewritten["stream_options"]["include_usage"], true);
 }
 
 #[test]
@@ -585,6 +788,7 @@ fn native_responses_rejects_function_calls_without_matching_outputs() {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
     )
     .expect_err("expected missing tool output to be rejected");

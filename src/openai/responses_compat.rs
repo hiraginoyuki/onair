@@ -1,14 +1,15 @@
 use serde_json::{Map, Value, json};
 
-use crate::config::ToolSchemaMode;
+use crate::config::{ChatStreamUsagePolicy, ToolSchemaMode};
 
-use super::request::{RequestRewriteError, should_parse_json};
+use super::request::{RequestRewriteError, apply_chat_stream_usage_policy, should_parse_json};
 
 pub(super) fn rewrite_responses_request_as_chat(
     body: &[u8],
     content_type: Option<&str>,
     backend_model: Option<&str>,
     tool_schema_mode: ToolSchemaMode,
+    chat_stream_usage: ChatStreamUsagePolicy,
 ) -> Result<Vec<u8>, RequestRewriteError> {
     if body.is_empty() {
         return Err(RequestRewriteError::new(
@@ -112,6 +113,7 @@ pub(super) fn rewrite_responses_request_as_chat(
             responses_tool_choice_to_chat(tool_choice),
         );
     }
+    apply_chat_stream_usage_policy(&mut chat, chat_stream_usage);
 
     serde_json::to_vec(&Value::Object(chat)).map_err(|_| {
         RequestRewriteError::new(
