@@ -17,9 +17,10 @@ pub use request::{
 
 #[allow(unused_imports)]
 pub use response::{
-    ResponsesSseNormalizer, SseNormalizer, UsageDiagnostics, UsageObservation, UsageTotals,
-    extract_usage, extract_usage_observation, is_event_stream_content_type, is_json_content_type,
-    rewrite_response_body, rewrite_response_models,
+    ChatCompletionsSseNormalizer, ResponsesSseNormalizer, SseNormalizer, UsageDiagnostics,
+    UsageObservation, UsageTotals, extract_usage, extract_usage_observation,
+    is_event_stream_content_type, is_json_content_type, rewrite_response_body,
+    rewrite_response_models,
 };
 
 #[cfg(test)]

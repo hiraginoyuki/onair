@@ -316,10 +316,19 @@ pub(super) fn streaming_response(
         let mut chunks = upstream.bytes_stream();
 
         if normalize_sse {
-            let mut normalizer = if matches!(request_mode, openai::RequestMode::ResponsesViaChatCompletions) {
-                EitherNormalizer::Responses(openai::ResponsesSseNormalizer::new(backend_model, public_model))
-            } else {
-                EitherNormalizer::Native(SseNormalizer::new(backend_model, public_model))
+            let mut normalizer = match request_mode {
+                openai::RequestMode::ResponsesViaChatCompletions => {
+                    EitherNormalizer::Responses(openai::ResponsesSseNormalizer::new(backend_model, public_model))
+                }
+                openai::RequestMode::ChatCompletionsViaResponses => {
+                    EitherNormalizer::ChatCompletions(openai::ChatCompletionsSseNormalizer::new(
+                        backend_model,
+                        public_model,
+                    ))
+                }
+                openai::RequestMode::Native => {
+                    EitherNormalizer::Native(SseNormalizer::new(backend_model, public_model))
+                }
             };
             while let Some(chunk) = next_stream_chunk(&mut chunks, &mut shutdown).await {
                 let chunk = match chunk {
@@ -332,15 +341,15 @@ pub(super) fn streaming_response(
                     }
                 };
                 stream_metrics.mark_body_chunk();
-                    let normalized = normalizer.push(&chunk);
-                    if !normalized.is_empty() {
-                        stream_metrics.add_usage(normalizer.usage());
-                        stream_metrics.add_usage_diagnostics(normalizer.diagnostics());
-                        normalizer.clear_usage();
-                        normalizer.clear_diagnostics();
-                        yield Bytes::from(normalized);
-                    }
+                let normalized = normalizer.push(&chunk);
+                if !normalized.is_empty() {
+                    stream_metrics.add_usage(normalizer.usage());
+                    stream_metrics.add_usage_diagnostics(normalizer.diagnostics());
+                    normalizer.clear_usage();
+                    normalizer.clear_diagnostics();
+                    yield Bytes::from(normalized);
                 }
+            }
             stream_metrics.mark_body_complete();
             let tail = normalizer.finish();
             if !tail.is_empty() {
@@ -381,6 +390,7 @@ pub(super) fn streaming_response(
 enum EitherNormalizer {
     Native(SseNormalizer),
     Responses(openai::ResponsesSseNormalizer),
+    ChatCompletions(openai::ChatCompletionsSseNormalizer),
 }
 
 impl EitherNormalizer {
@@ -388,6 +398,7 @@ impl EitherNormalizer {
         match self {
             Self::Native(normalizer) => normalizer.push(chunk),
             Self::Responses(normalizer) => normalizer.push(chunk),
+            Self::ChatCompletions(normalizer) => normalizer.push(chunk),
         }
     }
 
@@ -395,6 +406,7 @@ impl EitherNormalizer {
         match self {
             Self::Native(normalizer) => normalizer.finish(),
             Self::Responses(normalizer) => normalizer.finish(),
+            Self::ChatCompletions(normalizer) => normalizer.finish(),
         }
     }
 
@@ -402,6 +414,7 @@ impl EitherNormalizer {
         match self {
             Self::Native(normalizer) => normalizer.usage,
             Self::Responses(normalizer) => normalizer.usage,
+            Self::ChatCompletions(normalizer) => normalizer.usage,
         }
     }
 
@@ -409,6 +422,7 @@ impl EitherNormalizer {
         match self {
             Self::Native(normalizer) => normalizer.diagnostics.clone(),
             Self::Responses(normalizer) => normalizer.diagnostics.clone(),
+            Self::ChatCompletions(normalizer) => normalizer.diagnostics.clone(),
         }
     }
 
@@ -416,6 +430,7 @@ impl EitherNormalizer {
         match self {
             Self::Native(normalizer) => normalizer.usage = UsageTotals::default(),
             Self::Responses(normalizer) => normalizer.usage = UsageTotals::default(),
+            Self::ChatCompletions(normalizer) => normalizer.usage = UsageTotals::default(),
         }
     }
 
@@ -423,6 +438,9 @@ impl EitherNormalizer {
         match self {
             Self::Native(normalizer) => normalizer.diagnostics = UsageDiagnostics::default(),
             Self::Responses(normalizer) => normalizer.diagnostics = UsageDiagnostics::default(),
+            Self::ChatCompletions(normalizer) => {
+                normalizer.diagnostics = UsageDiagnostics::default()
+            }
         }
     }
 }

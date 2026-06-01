@@ -1,8 +1,13 @@
 use serde_json::{Map, Value, json};
 
-use crate::config::{ChatStreamUsagePolicy, ToolSchemaMode};
+use crate::config::{
+    ChatStreamUsagePolicy, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode,
+};
 
-use super::request::{RequestRewriteError, apply_chat_stream_usage_policy, should_parse_json};
+use super::request::{
+    RequestRewriteError, apply_chat_stream_usage_policy,
+    rewrite_native_responses_max_output_tokens, should_parse_json,
+};
 
 pub(super) fn rewrite_responses_request_as_chat(
     body: &[u8],
@@ -121,6 +126,497 @@ pub(super) fn rewrite_responses_request_as_chat(
             None,
         )
     })
+}
+
+pub(super) fn rewrite_chat_request_as_responses(
+    body: &[u8],
+    content_type: Option<&str>,
+    backend_model: Option<&str>,
+    responses_store: ResponsesStorePolicy,
+    responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
+) -> Result<Vec<u8>, RequestRewriteError> {
+    if body.is_empty() {
+        return Err(RequestRewriteError::new(
+            "Missing required parameter: messages.",
+            Some("messages"),
+        ));
+    }
+    if !should_parse_json(content_type, body) {
+        return Err(RequestRewriteError::new(
+            "Chat-to-responses conversion requires a JSON request body.",
+            None,
+        ));
+    }
+
+    let value = serde_json::from_slice::<Value>(body).map_err(|_| {
+        RequestRewriteError::new("Chat-to-responses conversion requires valid JSON.", None)
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        RequestRewriteError::new("Chat request body must be a JSON object.", None)
+    })?;
+    validate_chat_to_responses_options(object)?;
+
+    let messages = object
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            RequestRewriteError::new("Missing required parameter: messages.", Some("messages"))
+        })?;
+
+    let mut instructions = Vec::new();
+    let mut input = Vec::new();
+    for message in messages {
+        append_chat_message_to_responses(message, &mut instructions, &mut input)?;
+    }
+
+    let mut responses = Map::new();
+    let model = backend_model
+        .map(str::to_owned)
+        .or_else(|| {
+            object
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| {
+            RequestRewriteError::new("Missing required parameter: model.", Some("model"))
+        })?;
+    responses.insert("model".to_owned(), Value::String(model));
+    if !instructions.is_empty() {
+        responses.insert(
+            "instructions".to_owned(),
+            Value::String(instructions.join("\n\n")),
+        );
+    }
+    responses.insert("input".to_owned(), Value::Array(input));
+
+    for key in [
+        "temperature",
+        "top_p",
+        "stream",
+        "store",
+        "metadata",
+        "parallel_tool_calls",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+    ] {
+        if let Some(value) = object.get(key) {
+            responses.insert(key.to_owned(), value.clone());
+        }
+    }
+
+    if let Some(value) = object
+        .get("max_completion_tokens")
+        .or_else(|| object.get("max_tokens"))
+    {
+        responses.insert("max_output_tokens".to_owned(), value.clone());
+    }
+    if let Some(response_format) = object.get("response_format") {
+        responses.insert(
+            "text".to_owned(),
+            json!({
+                "format": response_format,
+            }),
+        );
+    }
+    if let Some(tools) = object.get("tools").filter(|value| !value.is_null()) {
+        let tools = chat_tools_to_responses_tools(tools)?;
+        if !tools.is_empty() {
+            responses.insert("tools".to_owned(), Value::Array(tools));
+        }
+    }
+    if let Some(tool_choice) = object.get("tool_choice") {
+        responses.insert(
+            "tool_choice".to_owned(),
+            chat_tool_choice_to_responses(tool_choice)?,
+        );
+    }
+
+    if responses_store == ResponsesStorePolicy::ForceFalse && !responses.contains_key("store") {
+        responses.insert("store".to_owned(), Value::Bool(false));
+    }
+    rewrite_native_responses_max_output_tokens(&mut responses, responses_max_output_tokens);
+
+    serde_json::to_vec(&Value::Object(responses)).map_err(|_| {
+        RequestRewriteError::new(
+            "Chat-to-responses conversion failed to serialize JSON.",
+            None,
+        )
+    })
+}
+
+fn validate_chat_to_responses_options(
+    object: &Map<String, Value>,
+) -> Result<(), RequestRewriteError> {
+    if let Some(n) = object.get("n")
+        && !matches!(n.as_u64(), Some(1))
+    {
+        return Err(RequestRewriteError::new(
+            "n > 1 is not supported by the chat-to-responses compatibility path.",
+            Some("n"),
+        ));
+    }
+    if let Some(logprobs) = object.get("logprobs")
+        && !matches!(logprobs, Value::Bool(false) | Value::Null)
+    {
+        return Err(RequestRewriteError::new(
+            "logprobs is not supported by the chat-to-responses compatibility path.",
+            Some("logprobs"),
+        ));
+    }
+    if object.contains_key("top_logprobs") {
+        return Err(RequestRewriteError::new(
+            "top_logprobs is not supported by the chat-to-responses compatibility path.",
+            Some("top_logprobs"),
+        ));
+    }
+    Ok(())
+}
+
+fn append_chat_message_to_responses(
+    message: &Value,
+    instructions: &mut Vec<String>,
+    input: &mut Vec<Value>,
+) -> Result<(), RequestRewriteError> {
+    let object = message.as_object().ok_or_else(|| {
+        RequestRewriteError::new("Chat messages must be objects.", Some("messages"))
+    })?;
+    let role = object
+        .get("role")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RequestRewriteError::new("Chat messages require role.", Some("messages")))?;
+
+    match role {
+        "system" | "developer" => {
+            let content = object.get("content").ok_or_else(|| {
+                RequestRewriteError::new(
+                    "System and developer messages require content.",
+                    Some("messages"),
+                )
+            })?;
+            let text = chat_content_to_instruction_text(content)?;
+            if !text.trim().is_empty() {
+                instructions.push(text);
+            }
+        }
+        "user" | "assistant" => {
+            if let Some(content) = object.get("content")
+                && !content.is_null()
+            {
+                let content = chat_content_to_responses_content(content, role)?;
+                input.push(json!({
+                    "role": role,
+                    "content": content,
+                }));
+            }
+            if role == "assistant"
+                && let Some(tool_calls) = object.get("tool_calls")
+            {
+                append_chat_tool_calls_to_responses(tool_calls, input)?;
+            }
+        }
+        "tool" => {
+            let call_id = object
+                .get("tool_call_id")
+                .and_then(Value::as_str)
+                .filter(|call_id| !call_id.trim().is_empty())
+                .ok_or_else(|| {
+                    RequestRewriteError::new(
+                        "Tool messages require tool_call_id.",
+                        Some("messages"),
+                    )
+                })?;
+            let output = object.get("content").cloned().unwrap_or(Value::Null);
+            input.push(json!({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": chat_tool_output_to_string(&output),
+            }));
+        }
+        _ => {
+            return Err(RequestRewriteError::new(
+                "Chat message role is unsupported by the compatibility path.",
+                Some("messages"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn append_chat_tool_calls_to_responses(
+    tool_calls: &Value,
+    input: &mut Vec<Value>,
+) -> Result<(), RequestRewriteError> {
+    let tool_calls = tool_calls.as_array().ok_or_else(|| {
+        RequestRewriteError::new("assistant tool_calls must be an array.", Some("messages"))
+    })?;
+    for (index, tool_call) in tool_calls.iter().enumerate() {
+        let object = tool_call.as_object().ok_or_else(|| {
+            RequestRewriteError::new("assistant tool_calls must be objects.", Some("messages"))
+        })?;
+        if object
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|tool_type| tool_type != "function")
+        {
+            return Err(RequestRewriteError::new(
+                "Only function tool calls are supported by the chat-to-responses compatibility path.",
+                Some("messages"),
+            ));
+        }
+        let function = object
+            .get("function")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                RequestRewriteError::new(
+                    "assistant function tool calls require function.",
+                    Some("messages"),
+                )
+            })?;
+        let name = string_field(function, "name").ok_or_else(|| {
+            RequestRewriteError::new(
+                "assistant function tool calls require function.name.",
+                Some("messages"),
+            )
+        })?;
+        let arguments = string_field(function, "arguments").unwrap_or_else(|| "{}".to_owned());
+        let call_id = object
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("call_{index}"));
+        input.push(json!({
+            "type": "function_call",
+            "call_id": call_id,
+            "name": name,
+            "arguments": arguments,
+        }));
+    }
+    Ok(())
+}
+
+fn chat_content_to_instruction_text(content: &Value) -> Result<String, RequestRewriteError> {
+    match content {
+        Value::String(text) => Ok(text.to_owned()),
+        Value::Array(parts) => {
+            let mut text = String::new();
+            for part in parts {
+                let object = part.as_object().ok_or_else(|| {
+                    RequestRewriteError::new(
+                        "Chat content parts must be objects.",
+                        Some("messages"),
+                    )
+                })?;
+                match object.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(part_text) = object.get("text").and_then(Value::as_str) {
+                            text.push_str(part_text);
+                        }
+                    }
+                    _ => {
+                        return Err(RequestRewriteError::new(
+                            "System and developer messages only support text content.",
+                            Some("messages"),
+                        ));
+                    }
+                }
+            }
+            Ok(text)
+        }
+        Value::Null => Ok(String::new()),
+        _ => Err(RequestRewriteError::new(
+            "System and developer message content must be text.",
+            Some("messages"),
+        )),
+    }
+}
+
+fn chat_content_to_responses_content(
+    content: &Value,
+    role: &str,
+) -> Result<Value, RequestRewriteError> {
+    match content {
+        Value::String(_) => Ok(content.clone()),
+        Value::Array(parts) => {
+            let mut responses_parts = Vec::new();
+            let mut text_only = true;
+            for part in parts {
+                let object = part.as_object().ok_or_else(|| {
+                    RequestRewriteError::new(
+                        "Chat content parts must be objects.",
+                        Some("messages"),
+                    )
+                })?;
+                match object.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        let text = object.get("text").and_then(Value::as_str).ok_or_else(|| {
+                            RequestRewriteError::new(
+                                "Chat text content parts require text.",
+                                Some("messages"),
+                            )
+                        })?;
+                        responses_parts.push(json!({
+                            "type": if role == "assistant" {
+                                "output_text"
+                            } else {
+                                "input_text"
+                            },
+                            "text": text,
+                        }));
+                    }
+                    Some("image_url") if role == "user" => {
+                        text_only = false;
+                        responses_parts.push(chat_image_part_to_responses(object)?);
+                    }
+                    Some("refusal") if role == "assistant" => {
+                        let refusal = object
+                            .get("refusal")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        responses_parts.push(json!({
+                            "type": "output_text",
+                            "text": refusal,
+                        }));
+                    }
+                    _ => {
+                        return Err(RequestRewriteError::new(
+                            "Chat content part type is unsupported by the compatibility path.",
+                            Some("messages"),
+                        ));
+                    }
+                }
+            }
+
+            if text_only {
+                let text = responses_parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("");
+                Ok(Value::String(text))
+            } else {
+                Ok(Value::Array(responses_parts))
+            }
+        }
+        Value::Null => Ok(Value::String(String::new())),
+        _ => Ok(Value::String(content.to_string())),
+    }
+}
+
+fn chat_image_part_to_responses(object: &Map<String, Value>) -> Result<Value, RequestRewriteError> {
+    let image_url = object.get("image_url").ok_or_else(|| {
+        RequestRewriteError::new(
+            "Chat image_url content parts require image_url.",
+            Some("messages"),
+        )
+    })?;
+    match image_url {
+        Value::String(url) => Ok(json!({
+            "type": "input_image",
+            "image_url": url,
+        })),
+        Value::Object(image_url) => {
+            let url = image_url.get("url").ok_or_else(|| {
+                RequestRewriteError::new(
+                    "Chat image_url content parts require image_url.url.",
+                    Some("messages"),
+                )
+            })?;
+            let mut part = Map::new();
+            part.insert("type".to_owned(), Value::String("input_image".to_owned()));
+            part.insert("image_url".to_owned(), url.clone());
+            if let Some(detail) = image_url.get("detail") {
+                part.insert("detail".to_owned(), detail.clone());
+            }
+            Ok(Value::Object(part))
+        }
+        _ => Err(RequestRewriteError::new(
+            "Chat image_url content image_url must be a string or object.",
+            Some("messages"),
+        )),
+    }
+}
+
+fn chat_tool_output_to_string(output: &Value) -> String {
+    if let Some(text) = output.as_str() {
+        return text.to_owned();
+    }
+    if let Some(parts) = output.as_array() {
+        let text = parts
+            .iter()
+            .filter_map(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| part.get("refusal").and_then(Value::as_str))
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        if !text.is_empty() {
+            return text;
+        }
+    }
+    output.to_string()
+}
+
+fn chat_tools_to_responses_tools(tools: &Value) -> Result<Vec<Value>, RequestRewriteError> {
+    let tools = tools.as_array().ok_or_else(|| {
+        RequestRewriteError::new(
+            "tools must be an array for chat-to-responses conversion.",
+            Some("tools"),
+        )
+    })?;
+    let mut responses_tools = Vec::new();
+    for tool in tools {
+        let object = tool.as_object().ok_or_else(|| {
+            RequestRewriteError::new("tool definitions must be objects.", Some("tools"))
+        })?;
+        if object.get("type").and_then(Value::as_str) != Some("function") {
+            return Err(RequestRewriteError::new(
+                "Only function tools are supported by the chat-to-responses compatibility path.",
+                Some("tools"),
+            ));
+        }
+        let function = object
+            .get("function")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                RequestRewriteError::new("function tools require function.", Some("tools"))
+            })?;
+        let mut responses_tool = function.clone();
+        responses_tool.insert("type".to_owned(), Value::String("function".to_owned()));
+        responses_tools.push(Value::Object(responses_tool));
+    }
+    Ok(responses_tools)
+}
+
+fn chat_tool_choice_to_responses(tool_choice: &Value) -> Result<Value, RequestRewriteError> {
+    if let Some(object) = tool_choice.as_object() {
+        if object.get("type").and_then(Value::as_str) != Some("function") {
+            return Ok(tool_choice.clone());
+        }
+        let function = object
+            .get("function")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                RequestRewriteError::new(
+                    "function tool_choice requires function.",
+                    Some("tool_choice"),
+                )
+            })?;
+        let name = function.get("name").cloned().ok_or_else(|| {
+            RequestRewriteError::new(
+                "function tool_choice requires function.name.",
+                Some("tool_choice"),
+            )
+        })?;
+        return Ok(json!({
+            "type": "function",
+            "name": name,
+        }));
+    }
+    Ok(tool_choice.clone())
 }
 
 fn responses_input_to_chat_messages(input: &Value) -> Result<Vec<Value>, RequestRewriteError> {

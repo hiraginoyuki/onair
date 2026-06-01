@@ -7,12 +7,16 @@ use crate::config::{
     ChatStreamUsagePolicy, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode,
 };
 
-use super::{is_json_content_type, responses_compat::rewrite_responses_request_as_chat};
+use super::{
+    is_json_content_type,
+    responses_compat::{rewrite_chat_request_as_responses, rewrite_responses_request_as_chat},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestMode {
     Native,
     ResponsesViaChatCompletions,
+    ChatCompletionsViaResponses,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -96,6 +100,15 @@ pub fn rewrite_request_body_for_mode_with_policies(
             backend_model,
             policies.tool_schema_mode,
             policies.chat_stream_usage,
+        );
+    }
+    if request_mode == RequestMode::ChatCompletionsViaResponses {
+        return rewrite_chat_request_as_responses(
+            body,
+            content_type,
+            backend_model,
+            policies.responses_store,
+            policies.responses_max_output_tokens,
         );
     }
 
@@ -224,6 +237,11 @@ pub fn upstream_path_for_mode(path: &str, request_mode: RequestMode) -> &str {
             if path.trim_end_matches('/') == "/v1/responses" =>
         {
             "/v1/chat/completions"
+        }
+        RequestMode::ChatCompletionsViaResponses
+            if path.trim_end_matches('/') == "/v1/chat/completions" =>
+        {
+            "/v1/responses"
         }
         _ => path,
     }
@@ -358,7 +376,7 @@ fn rewrite_json_request_body(
     serde_json::to_vec(&value).ok()
 }
 
-fn rewrite_native_responses_max_output_tokens(
+pub(super) fn rewrite_native_responses_max_output_tokens(
     object: &mut Map<String, Value>,
     policy: ResponsesMaxOutputTokensPolicy,
 ) {

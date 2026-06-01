@@ -8,6 +8,9 @@ use crate::config::{
 use crate::error::ApiError;
 use crate::openai::RequestMode;
 
+const RESPONSES_VIA_CHAT_COMPLETIONS: &str = "responses_via_chat_completions";
+const CHAT_COMPLETIONS_VIA_RESPONSES: &str = "chat_completions_via_responses";
+
 #[derive(Clone)]
 pub struct SelectedRoute {
     pub backend_id: String,
@@ -40,20 +43,20 @@ pub fn select_backend_candidates(
         if stream && !has_capability(&backend.capabilities, "streaming") {
             continue;
         }
-        if !supports_candidates(&backend.capabilities, &path_candidates) {
-            continue;
-        }
 
         if let Some(requested_model) = model {
             for route in &backend.models {
                 if route.public != requested_model {
                     continue;
                 }
-                if !route.endpoints.is_empty()
-                    && !supports_candidates(&route.endpoints, &path_candidates)
-                {
+                let Some(request_mode) = request_mode_for_route(
+                    path,
+                    &path_candidates,
+                    &backend.capabilities,
+                    &route.endpoints,
+                ) else {
                     continue;
-                }
+                };
                 if tools && !supports_tools(&backend.capabilities, Some(&route.endpoints)) {
                     tool_incompatible_candidates = true;
                     continue;
@@ -65,11 +68,7 @@ pub fn select_backend_candidates(
                     timeout: backend.timeout,
                     public_model: Some(route.public.clone()),
                     backend_model: Some(route.backend.clone()),
-                    request_mode: request_mode_for_backend(
-                        path,
-                        &backend.capabilities,
-                        Some(&route.endpoints),
-                    ),
+                    request_mode,
                     tool_schema_mode: route.tool_schema_mode,
                     responses_store: route.responses_store,
                     responses_max_output_tokens: route.responses_max_output_tokens,
@@ -79,6 +78,11 @@ pub fn select_backend_candidates(
             continue;
         }
 
+        let Some(request_mode) =
+            request_mode_for_backend(path, &path_candidates, &backend.capabilities)
+        else {
+            continue;
+        };
         if tools && !supports_tools(&backend.capabilities, None) {
             tool_incompatible_candidates = true;
             continue;
@@ -90,7 +94,7 @@ pub fn select_backend_candidates(
             timeout: backend.timeout,
             public_model: None,
             backend_model: None,
-            request_mode: request_mode_for_backend(path, &backend.capabilities, None),
+            request_mode,
             tool_schema_mode: backend.tool_schema_mode,
             responses_store: backend.responses_store,
             responses_max_output_tokens: backend.responses_max_output_tokens,
@@ -134,22 +138,90 @@ fn sticky_index(key: &str, count: usize) -> usize {
     (hasher.finish() as usize) % count
 }
 
+fn request_mode_for_route(
+    path: &str,
+    path_candidates: &[String],
+    backend_capabilities: &BTreeSet<String>,
+    route_endpoints: &BTreeSet<String>,
+) -> Option<RequestMode> {
+    request_mode_for_path(
+        path,
+        path_candidates,
+        backend_capabilities,
+        Some(route_endpoints),
+    )
+}
+
 fn request_mode_for_backend(
     path: &str,
+    path_candidates: &[String],
+    backend_capabilities: &BTreeSet<String>,
+) -> Option<RequestMode> {
+    request_mode_for_path(path, path_candidates, backend_capabilities, None)
+}
+
+fn request_mode_for_path(
+    path: &str,
+    path_candidates: &[String],
     backend_capabilities: &BTreeSet<String>,
     route_endpoints: Option<&BTreeSet<String>>,
-) -> RequestMode {
-    if path.trim_end_matches('/') != "/v1/responses" {
-        return RequestMode::Native;
+) -> Option<RequestMode> {
+    match path.trim_end_matches('/') {
+        "/v1/responses" => request_mode_for_responses(backend_capabilities, route_endpoints),
+        "/v1/chat/completions" | "/v1/chat/completion" => {
+            request_mode_for_chat_completions(backend_capabilities, route_endpoints)
+        }
+        _ => {
+            if !supports_candidates(backend_capabilities, path_candidates) {
+                return None;
+            }
+            if let Some(endpoints) = route_endpoints
+                && !endpoints.is_empty()
+                && !supports_candidates(endpoints, path_candidates)
+            {
+                return None;
+            }
+            Some(RequestMode::Native)
+        }
     }
+}
+
+fn request_mode_for_responses(
+    backend_capabilities: &BTreeSet<String>,
+    route_endpoints: Option<&BTreeSet<String>>,
+) -> Option<RequestMode> {
     if supports_responses(backend_capabilities) && route_supports_responses(route_endpoints) {
-        return RequestMode::Native;
+        return Some(RequestMode::Native);
     }
+    if supports_chat_compat(backend_capabilities)
+        && route_supports_compat_marker(
+            backend_capabilities,
+            route_endpoints,
+            RESPONSES_VIA_CHAT_COMPLETIONS,
+        )
+    {
+        return Some(RequestMode::ResponsesViaChatCompletions);
+    }
+    None
+}
+
+fn request_mode_for_chat_completions(
+    backend_capabilities: &BTreeSet<String>,
+    route_endpoints: Option<&BTreeSet<String>>,
+) -> Option<RequestMode> {
     if supports_chat_compat(backend_capabilities) && route_supports_chat_compat(route_endpoints) {
-        RequestMode::ResponsesViaChatCompletions
-    } else {
-        RequestMode::Native
+        return Some(RequestMode::Native);
     }
+    if supports_responses(backend_capabilities)
+        && route_supports_compat_marker(
+            backend_capabilities,
+            route_endpoints,
+            CHAT_COMPLETIONS_VIA_RESPONSES,
+        )
+    {
+        return Some(RequestMode::ChatCompletionsViaResponses);
+    }
+    None
 }
 
 fn route_supports_responses(route_endpoints: Option<&BTreeSet<String>>) -> bool {
@@ -162,6 +234,17 @@ fn route_supports_responses(route_endpoints: Option<&BTreeSet<String>>) -> bool 
 
 fn route_supports_chat_compat(route_endpoints: Option<&BTreeSet<String>>) -> bool {
     route_endpoints.is_none_or(|endpoints| endpoints.is_empty() || supports_chat_compat(endpoints))
+}
+
+fn route_supports_compat_marker(
+    backend_capabilities: &BTreeSet<String>,
+    route_endpoints: Option<&BTreeSet<String>>,
+    marker: &str,
+) -> bool {
+    match route_endpoints {
+        Some(endpoints) if !endpoints.is_empty() => endpoints.contains(marker),
+        _ => backend_capabilities.contains(marker),
+    }
 }
 
 fn supports_responses(capabilities: &BTreeSet<String>) -> bool {
@@ -308,9 +391,7 @@ pub fn path_capability_candidates(path: &str) -> Vec<String> {
             push_unique(&mut candidates, "completions".to_owned());
         }
         "responses" => {
-            push_unique(&mut candidates, "chat".to_owned());
-            push_unique(&mut candidates, "chat_completions".to_owned());
-            push_unique(&mut candidates, "completions".to_owned());
+            push_unique(&mut candidates, RESPONSES_VIA_CHAT_COMPLETIONS.to_owned());
         }
         "images" => {
             push_unique(&mut candidates, "image".to_owned());
@@ -423,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn responses_can_route_to_chat_backend() {
+    fn responses_requires_explicit_chat_compat_marker() {
         let backend = ResolvedBackend {
             id: "chat-backend".to_owned(),
             base_url: "http://chat-backend.example.invalid".to_owned(),
@@ -443,6 +524,46 @@ mod tests {
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
                 chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 endpoints: btree_set(["chat"]),
+            }],
+        };
+
+        let error = match select_backend_candidates(
+            &[backend],
+            RoutingStrategy::Priority,
+            "/v1/responses",
+            Some("public-model"),
+            false,
+            false,
+            None,
+        ) {
+            Ok(_) => panic!("expected implicit chat compatibility to be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.status, axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn responses_can_route_to_explicit_chat_compat_backend() {
+        let backend = ResolvedBackend {
+            id: "chat-backend".to_owned(),
+            base_url: "http://chat-backend.example.invalid".to_owned(),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["chat"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            models: vec![ModelRoute {
+                public: "public-model".to_owned(),
+                backend: "backend-private".to_owned(),
+                context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                endpoints: btree_set([RESPONSES_VIA_CHAT_COMPLETIONS]),
             }],
         };
 
@@ -485,7 +606,7 @@ mod tests {
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
                 chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["responses", "chat"]),
+                endpoints: btree_set(["responses", "chat", RESPONSES_VIA_CHAT_COMPLETIONS]),
             }],
         };
 
@@ -506,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn route_endpoint_can_choose_chat_compat_without_responses() {
+    fn route_endpoint_can_force_chat_compat_without_responses() {
         let backend = ResolvedBackend {
             id: "mixed-backend".to_owned(),
             base_url: "http://mixed-backend.example.invalid".to_owned(),
@@ -525,7 +646,7 @@ mod tests {
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
                 chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["chat"]),
+                endpoints: btree_set([RESPONSES_VIA_CHAT_COMPLETIONS]),
             }],
         };
 
@@ -545,6 +666,132 @@ mod tests {
         assert_eq!(
             routes[0].request_mode,
             RequestMode::ResponsesViaChatCompletions
+        );
+    }
+
+    #[test]
+    fn chat_completions_can_route_to_explicit_responses_compat_backend() {
+        let backend = ResolvedBackend {
+            id: "responses-backend".to_owned(),
+            base_url: "http://responses-backend.example.invalid".to_owned(),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["responses"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            models: vec![ModelRoute {
+                public: "public-model".to_owned(),
+                backend: "backend-private".to_owned(),
+                context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                endpoints: btree_set([CHAT_COMPLETIONS_VIA_RESPONSES]),
+            }],
+        };
+
+        let routes = select_backend_candidates(
+            &[backend],
+            RoutingStrategy::Priority,
+            "/v1/chat/completions",
+            Some("public-model"),
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].backend_id, "responses-backend");
+        assert_eq!(
+            routes[0].request_mode,
+            RequestMode::ChatCompletionsViaResponses
+        );
+    }
+
+    #[test]
+    fn native_chat_capability_prevents_responses_compat_mode() {
+        let backend = ResolvedBackend {
+            id: "native-chat-backend".to_owned(),
+            base_url: "http://native-chat-backend.example.invalid".to_owned(),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["responses", "chat"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            models: vec![ModelRoute {
+                public: "public-model".to_owned(),
+                backend: "backend-private".to_owned(),
+                context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                endpoints: btree_set(["chat", CHAT_COMPLETIONS_VIA_RESPONSES]),
+            }],
+        };
+
+        let routes = select_backend_candidates(
+            &[backend],
+            RoutingStrategy::Priority,
+            "/v1/chat/completions",
+            Some("public-model"),
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].backend_id, "native-chat-backend");
+        assert_eq!(routes[0].request_mode, RequestMode::Native);
+    }
+
+    #[test]
+    fn route_endpoint_can_force_responses_compat_without_chat() {
+        let backend = ResolvedBackend {
+            id: "mixed-backend".to_owned(),
+            base_url: "http://mixed-backend.example.invalid".to_owned(),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["responses", "chat"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            models: vec![ModelRoute {
+                public: "public-model".to_owned(),
+                backend: "backend-private".to_owned(),
+                context_length: None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                endpoints: btree_set([CHAT_COMPLETIONS_VIA_RESPONSES]),
+            }],
+        };
+
+        let routes = select_backend_candidates(
+            &[backend],
+            RoutingStrategy::Priority,
+            "/v1/chat/completions",
+            Some("public-model"),
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].backend_id, "mixed-backend");
+        assert_eq!(
+            routes[0].request_mode,
+            RequestMode::ChatCompletionsViaResponses
         );
     }
 

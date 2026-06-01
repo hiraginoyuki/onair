@@ -41,8 +41,14 @@ pub fn rewrite_response_body(
     }
     ensure_usage_total_tokens(&mut json);
 
-    if request_mode == RequestMode::ResponsesViaChatCompletions {
-        json = chat_completion_to_response(json);
+    match request_mode {
+        RequestMode::Native => {}
+        RequestMode::ResponsesViaChatCompletions => {
+            json = chat_completion_to_response(json);
+        }
+        RequestMode::ChatCompletionsViaResponses => {
+            json = response_to_chat_completion(json);
+        }
     }
 
     let rewritten = serde_json::to_vec(&json).unwrap_or_else(|_| body.to_vec());
@@ -243,11 +249,176 @@ fn chat_usage_to_responses_usage(usage: Option<&Value>) -> Value {
     })
 }
 
+fn response_to_chat_completion(value: Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return value;
+    };
+    let response_id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_unknown");
+    let created = object
+        .get("created_at")
+        .or_else(|| object.get("created"))
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let model = object
+        .get("model")
+        .cloned()
+        .unwrap_or_else(|| Value::String("unknown".to_owned()));
+    let (content, tool_calls) = response_output_to_chat_message(object.get("output"));
+    let has_tool_calls = !tool_calls.is_empty();
+
+    let mut message = Map::new();
+    message.insert("role".to_owned(), Value::String("assistant".to_owned()));
+    message.insert("content".to_owned(), Value::String(content));
+    if has_tool_calls {
+        message.insert("tool_calls".to_owned(), Value::Array(tool_calls));
+    }
+
+    json!({
+        "id": chat_id_from_response(response_id),
+        "object": "chat.completion",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": Value::Object(message),
+            "finish_reason": response_finish_reason(object, has_tool_calls),
+        }],
+        "usage": responses_usage_to_chat_usage(object.get("usage")),
+    })
+}
+
+fn response_output_to_chat_message(output: Option<&Value>) -> (String, Vec<Value>) {
+    let mut content = String::new();
+    let mut tool_calls = Vec::new();
+    let Some(items) = output.and_then(Value::as_array) else {
+        return (content, tool_calls);
+    };
+
+    for (index, item) in items.iter().enumerate() {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        match object.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                if object
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .is_none_or(|role| role == "assistant")
+                    && let Some(message_content) = object.get("content")
+                {
+                    content.push_str(&responses_message_content_to_chat_text(message_content));
+                }
+            }
+            Some("function_call") => {
+                tool_calls.push(response_function_call_to_chat_tool_call(object, index));
+            }
+            _ => {}
+        }
+    }
+
+    (content, tool_calls)
+}
+
+fn responses_message_content_to_chat_text(content: &Value) -> String {
+    if let Some(text) = content.as_str() {
+        return text.to_owned();
+    }
+    if let Some(parts) = content.as_array() {
+        return parts
+            .iter()
+            .filter_map(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| part.get("refusal").and_then(Value::as_str))
+            })
+            .collect::<Vec<_>>()
+            .join("");
+    }
+    String::new()
+}
+
+fn response_function_call_to_chat_tool_call(object: &Map<String, Value>, index: usize) -> Value {
+    let call_id = object
+        .get("call_id")
+        .or_else(|| object.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("call_{index}"));
+    json!({
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": object
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            "arguments": object
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}"),
+        },
+    })
+}
+
+fn response_finish_reason(object: &Map<String, Value>, has_tool_calls: bool) -> &'static str {
+    if has_tool_calls {
+        return "tool_calls";
+    }
+    if object.get("status").and_then(Value::as_str) == Some("incomplete") {
+        return "length";
+    }
+    "stop"
+}
+
+fn responses_usage_to_chat_usage(usage: Option<&Value>) -> Value {
+    let usage = usage.and_then(Value::as_object);
+    let prompt_tokens = usage
+        .and_then(|usage| {
+            number_field(usage, "input_tokens").or_else(|| number_field(usage, "prompt_tokens"))
+        })
+        .unwrap_or(0);
+    let completion_tokens = usage
+        .and_then(|usage| {
+            number_field(usage, "output_tokens")
+                .or_else(|| number_field(usage, "completion_tokens"))
+        })
+        .unwrap_or(0);
+    let total_tokens = usage
+        .and_then(|usage| number_field(usage, "total_tokens"))
+        .unwrap_or(prompt_tokens + completion_tokens);
+    let cached_tokens = usage
+        .and_then(|usage| {
+            nested_number_field(usage, "input_tokens_details", "cached_tokens")
+                .or_else(|| nested_number_field(usage, "prompt_tokens_details", "cached_tokens"))
+        })
+        .unwrap_or(0);
+
+    json!({
+        "prompt_tokens": prompt_tokens,
+        "prompt_tokens_details": {
+            "cached_tokens": cached_tokens,
+        },
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    })
+}
+
 fn response_id_from_chat(chat_id: &str) -> String {
     if chat_id.starts_with("resp_") {
         chat_id.to_owned()
     } else {
         format!("resp_{chat_id}")
+    }
+}
+
+fn chat_id_from_response(response_id: &str) -> String {
+    if response_id.starts_with("chatcmpl") {
+        response_id.to_owned()
+    } else {
+        format!("chatcmpl_{response_id}")
     }
 }
 
@@ -944,6 +1115,508 @@ impl ResponsesSseNormalizer {
             .clone()
             .unwrap_or_else(|| message_id_from_response(&self.response_id(), 0))
     }
+}
+
+#[derive(Debug, Default)]
+pub struct ChatCompletionsSseNormalizer {
+    pending: Vec<u8>,
+    pub usage: UsageTotals,
+    pub diagnostics: UsageDiagnostics,
+    pending_event_name: Option<String>,
+    backend_model: Option<String>,
+    public_model: Option<String>,
+    response_id: Option<String>,
+    created_at: u64,
+    model: Option<String>,
+    role_sent: bool,
+    text_sent: bool,
+    tool_calls: BTreeMap<usize, ChatCompletionStreamToolCall>,
+    completed: bool,
+    done_sent: bool,
+}
+
+#[derive(Debug, Default)]
+struct ChatCompletionStreamToolCall {
+    call_id: Option<String>,
+    name: Option<String>,
+    arguments: String,
+    announced: bool,
+}
+
+impl ChatCompletionsSseNormalizer {
+    pub fn new(backend_model: Option<String>, public_model: Option<String>) -> Self {
+        Self {
+            backend_model,
+            public_model,
+            ..Self::default()
+        }
+    }
+
+    pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
+        self.pending.extend_from_slice(chunk);
+        let mut output = Vec::new();
+
+        while let Some(position) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line = self.pending.drain(..=position).collect::<Vec<_>>();
+            output.extend(self.normalize_line(&line));
+        }
+
+        output
+    }
+
+    pub fn finish(&mut self) -> Vec<u8> {
+        let mut output = Vec::new();
+        if !self.pending.is_empty() {
+            let line = std::mem::take(&mut self.pending);
+            output.extend(self.normalize_line(&line));
+        }
+        if !self.completed {
+            output.extend(self.finish_response(None));
+        }
+        output.extend(self.done_event());
+        output
+    }
+
+    fn normalize_line(&mut self, line: &[u8]) -> Vec<u8> {
+        let line_without_newline = line.strip_suffix(b"\n").unwrap_or(line);
+        let line_without_cr = line_without_newline
+            .strip_suffix(b"\r")
+            .unwrap_or(line_without_newline);
+        if let Some(event_name) = utf8_field_value(line_without_cr, b"event:") {
+            self.diagnostics.observe_event_name(&event_name);
+            self.pending_event_name = Some(event_name);
+            return Vec::new();
+        }
+        let Some(data) = sse_field_value(line_without_cr, b"data:") else {
+            return Vec::new();
+        };
+        if data == b"[DONE]" {
+            self.pending_event_name = None;
+            let mut output = Vec::new();
+            if !self.completed {
+                output.extend(self.finish_response(None));
+            }
+            output.extend(self.done_event());
+            return output;
+        }
+
+        let Ok(mut event) = serde_json::from_slice::<Value>(data) else {
+            self.pending_event_name = None;
+            return Vec::new();
+        };
+        let observation = extract_usage_observation(&event);
+        let usage_object_count = observation.diagnostics.usage_object_count;
+        let json_event_name = json_event_type(&event).and_then(safe_diagnostic_label);
+        if let Some(event_name) = &json_event_name {
+            self.diagnostics.observe_event_name(event_name);
+        }
+        if usage_object_count > 0 {
+            if let Some(event_name) = &self.pending_event_name {
+                self.diagnostics.observe_usage_event_name(event_name);
+            }
+            if let Some(event_name) = &json_event_name {
+                self.diagnostics.observe_usage_event_name(event_name);
+            }
+        }
+        self.pending_event_name = None;
+        self.usage.input += observation.totals.input;
+        self.usage.cached_input += observation.totals.cached_input;
+        self.usage.output += observation.totals.output;
+        self.usage.total += observation.totals.total;
+        self.diagnostics.merge(observation.diagnostics);
+        if let (Some(backend_model), Some(public_model)) = (&self.backend_model, &self.public_model)
+        {
+            rewrite_response_models(&mut event, backend_model, public_model);
+        }
+        ensure_usage_total_tokens(&mut event);
+
+        self.process_response_event(&event)
+    }
+
+    fn process_response_event(&mut self, event: &Value) -> Vec<u8> {
+        self.set_event_metadata(event);
+        match event.get("type").and_then(Value::as_str) {
+            Some("response.output_text.delta") => self.process_text_delta(event),
+            Some("response.function_call_arguments.delta") => {
+                self.process_function_arguments_delta(event)
+            }
+            Some("response.output_item.added") => self.process_output_item(event, false),
+            Some("response.output_item.done") => self.process_output_item(event, true),
+            Some("response.completed") => {
+                let response = event.get("response");
+                let mut output = self.emit_completed_output_if_needed(response);
+                output.extend(self.finish_response(response));
+                output
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn set_event_metadata(&mut self, event: &Value) {
+        if let Some(response) = event.get("response") {
+            self.set_response_metadata(response);
+        }
+        if self.response_id.is_none() {
+            self.response_id = event
+                .get("response_id")
+                .or_else(|| event.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+        if self.created_at == 0 {
+            self.created_at = event
+                .get("created_at")
+                .or_else(|| event.get("created"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+        }
+        if self.model.is_none() {
+            self.model = event
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+    }
+
+    fn set_response_metadata(&mut self, response: &Value) {
+        if self.response_id.is_none() {
+            self.response_id = response
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+        if self.created_at == 0 {
+            self.created_at = response
+                .get("created_at")
+                .or_else(|| response.get("created"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+        }
+        if self.model.is_none() {
+            self.model = response
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+    }
+
+    fn process_text_delta(&mut self, event: &Value) -> Vec<u8> {
+        let Some(delta) = event.get("delta").and_then(Value::as_str) else {
+            return Vec::new();
+        };
+        if delta.is_empty() {
+            return Vec::new();
+        }
+        self.text_sent = true;
+        let mut delta_object = Map::new();
+        if !self.role_sent {
+            self.role_sent = true;
+            delta_object.insert("role".to_owned(), Value::String("assistant".to_owned()));
+        }
+        delta_object.insert("content".to_owned(), Value::String(delta.to_owned()));
+        self.chat_chunk(Value::Object(delta_object), None, None)
+    }
+
+    fn process_function_arguments_delta(&mut self, event: &Value) -> Vec<u8> {
+        let index = event
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(self.tool_calls.len());
+        let delta = event
+            .get("delta")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let call_id = event
+            .get("call_id")
+            .or_else(|| event.get("item_id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+
+        let state = self.tool_calls.entry(index).or_default();
+        if let Some(call_id) = call_id {
+            state.call_id.get_or_insert(call_id);
+        }
+        if !delta.is_empty() {
+            state.arguments.push_str(&delta);
+        }
+
+        let mut output = Vec::new();
+        output.extend(self.announce_tool_call_if_ready(index));
+        if !delta.is_empty() {
+            output.extend(self.chat_chunk(
+                json!({
+                    "tool_calls": [{
+                        "index": index,
+                        "function": {
+                            "arguments": delta,
+                        },
+                    }],
+                }),
+                None,
+                None,
+            ));
+        }
+        output
+    }
+
+    fn process_output_item(&mut self, event: &Value, done: bool) -> Vec<u8> {
+        let Some(item) = event.get("item").and_then(Value::as_object) else {
+            return Vec::new();
+        };
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call") => self.process_function_item(event, item, done),
+            Some("message") if done && !self.text_sent => {
+                let Some(content) = item.get("content") else {
+                    return Vec::new();
+                };
+                let text = responses_message_content_to_chat_text(content);
+                if text.is_empty() {
+                    return Vec::new();
+                }
+                self.text_sent = true;
+                let mut delta_object = Map::new();
+                if !self.role_sent {
+                    self.role_sent = true;
+                    delta_object.insert("role".to_owned(), Value::String("assistant".to_owned()));
+                }
+                delta_object.insert("content".to_owned(), Value::String(text));
+                self.chat_chunk(Value::Object(delta_object), None, None)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn process_function_item(
+        &mut self,
+        event: &Value,
+        item: &Map<String, Value>,
+        done: bool,
+    ) -> Vec<u8> {
+        let index = event
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(self.tool_calls.len());
+        let call_id = item
+            .get("call_id")
+            .or_else(|| item.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let name = item.get("name").and_then(Value::as_str).map(str::to_owned);
+        let arguments = item
+            .get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+
+        let emit_arguments = {
+            let state = self.tool_calls.entry(index).or_default();
+            if let Some(call_id) = call_id {
+                state.call_id.get_or_insert(call_id);
+            }
+            if let Some(name) = name {
+                state.name.get_or_insert(name);
+            }
+            if done && !arguments.is_empty() && state.arguments.is_empty() {
+                state.arguments.push_str(&arguments);
+                Some(arguments)
+            } else {
+                None
+            }
+        };
+
+        let mut output = self.announce_tool_call_if_ready(index);
+        if let Some(arguments) = emit_arguments {
+            output.extend(self.chat_chunk(
+                json!({
+                    "tool_calls": [{
+                        "index": index,
+                        "function": {
+                            "arguments": arguments,
+                        },
+                    }],
+                }),
+                None,
+                None,
+            ));
+        }
+        output
+    }
+
+    fn announce_tool_call_if_ready(&mut self, index: usize) -> Vec<u8> {
+        let Some(state) = self.tool_calls.get_mut(&index) else {
+            return Vec::new();
+        };
+        if state.announced {
+            return Vec::new();
+        }
+        let Some(name) = state.name.clone() else {
+            return Vec::new();
+        };
+        state.announced = true;
+        let call_id = state
+            .call_id
+            .clone()
+            .unwrap_or_else(|| format!("call_{index}"));
+        let mut delta = Map::new();
+        if !self.role_sent {
+            self.role_sent = true;
+            delta.insert("role".to_owned(), Value::String("assistant".to_owned()));
+        }
+        delta.insert(
+            "tool_calls".to_owned(),
+            json!([{
+                "index": index,
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": "",
+                },
+            }]),
+        );
+        self.chat_chunk(Value::Object(delta), None, None)
+    }
+
+    fn emit_completed_output_if_needed(&mut self, response: Option<&Value>) -> Vec<u8> {
+        if self.text_sent || !self.tool_calls.is_empty() {
+            return Vec::new();
+        }
+        let Some(response) = response else {
+            return Vec::new();
+        };
+        let (content, tool_calls) = response_output_to_chat_message(response.get("output"));
+        let mut output = Vec::new();
+        if !content.is_empty() {
+            self.text_sent = true;
+            let mut delta = Map::new();
+            if !self.role_sent {
+                self.role_sent = true;
+                delta.insert("role".to_owned(), Value::String("assistant".to_owned()));
+            }
+            delta.insert("content".to_owned(), Value::String(content));
+            output.extend(self.chat_chunk(Value::Object(delta), None, None));
+        }
+        for (index, tool_call) in tool_calls.into_iter().enumerate() {
+            let call_id = tool_call
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let function = tool_call.get("function").and_then(Value::as_object);
+            let arguments = {
+                let state = self.tool_calls.entry(index).or_default();
+                state.call_id = call_id;
+                state.name = function
+                    .and_then(|function| function.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                state.arguments = function
+                    .and_then(|function| function.get("arguments"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                state.arguments.clone()
+            };
+            output.extend(self.announce_tool_call_if_ready(index));
+            if !arguments.is_empty() {
+                output.extend(self.chat_chunk(
+                    json!({
+                        "tool_calls": [{
+                            "index": index,
+                            "function": {
+                                "arguments": arguments,
+                            },
+                        }],
+                    }),
+                    None,
+                    None,
+                ));
+            }
+        }
+        output
+    }
+
+    fn finish_response(&mut self, response: Option<&Value>) -> Vec<u8> {
+        if self.completed {
+            return Vec::new();
+        }
+        self.completed = true;
+        if let Some(response) = response {
+            self.set_response_metadata(response);
+        }
+        let finish_reason = response
+            .and_then(Value::as_object)
+            .map(|object| response_finish_reason(object, !self.tool_calls.is_empty()))
+            .unwrap_or_else(|| {
+                if self.tool_calls.is_empty() {
+                    "stop"
+                } else {
+                    "tool_calls"
+                }
+            });
+        let usage = response.map(|response| responses_usage_to_chat_usage(response.get("usage")));
+        self.chat_chunk(json!({}), Some(finish_reason), usage)
+    }
+
+    fn chat_chunk(
+        &self,
+        delta: Value,
+        finish_reason: Option<&str>,
+        usage: Option<Value>,
+    ) -> Vec<u8> {
+        let mut chunk = Map::new();
+        chunk.insert(
+            "id".to_owned(),
+            Value::String(chat_id_from_response(&self.response_id())),
+        );
+        chunk.insert(
+            "object".to_owned(),
+            Value::String("chat.completion.chunk".to_owned()),
+        );
+        chunk.insert("created".to_owned(), Value::Number(self.created_at.into()));
+        chunk.insert("model".to_owned(), Value::String(self.model()));
+        chunk.insert(
+            "choices".to_owned(),
+            json!([{
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish_reason,
+            }]),
+        );
+        if let Some(usage) = usage {
+            chunk.insert("usage".to_owned(), usage);
+        }
+        sse_data(Value::Object(chunk))
+    }
+
+    fn done_event(&mut self) -> Vec<u8> {
+        if self.done_sent {
+            return Vec::new();
+        }
+        self.done_sent = true;
+        b"data: [DONE]\n\n".to_vec()
+    }
+
+    fn response_id(&self) -> String {
+        self.response_id
+            .clone()
+            .unwrap_or_else(|| "resp_unknown".to_owned())
+    }
+
+    fn model(&self) -> String {
+        self.model.clone().unwrap_or_else(|| "unknown".to_owned())
+    }
+}
+
+fn sse_data(data: Value) -> Vec<u8> {
+    let data = serde_json::to_vec(&data).unwrap_or_else(|_| b"{}".to_vec());
+    let mut output = Vec::with_capacity(data.len() + 8);
+    output.extend_from_slice(b"data: ");
+    output.extend_from_slice(&data);
+    output.extend_from_slice(b"\n\n");
+    output
 }
 
 fn sse_event(event: &str, data: Value) -> Vec<u8> {

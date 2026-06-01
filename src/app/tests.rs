@@ -132,7 +132,7 @@ async fn chat_stream_usage_policy_inserts_upstream_include_usage() {
     backend_config.chat_stream_usage = ChatStreamUsagePolicy::Insert;
     backend_config.models[0].chat_stream_usage = ChatStreamUsagePolicy::Insert;
     let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
-    let app = router(state);
+    let app = router(state.clone());
 
     let response = app
         .clone()
@@ -248,6 +248,112 @@ async fn responses_native_capability_uses_native_backend_path() {
     assert_eq!(captured[0]["tools"][0]["type"], "function");
     assert!(captured[0].get("messages").is_none());
     assert!(captured[0].get("max_tokens").is_none());
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn chat_completions_translates_to_responses_for_responses_backend() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let mut backend_config = test_backend("backend-a", backend.base_url());
+    backend_config.capabilities.insert("tools".to_owned());
+    backend_config.models[0].endpoints = btree_set(["chat_completions_via_responses", "tools"]);
+    let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [
+                    {"role": "system", "content": "answer briefly"},
+                    {"role": "user", "content": "hello"}
+                ],
+                "max_tokens": 16,
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {"type": "object"}
+                    }
+                }],
+                "tool_choice": {"type": "function", "function": {"name": "lookup"}}
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = json_body(response).await;
+    assert_eq!(response_body["object"], "chat.completion");
+    assert_eq!(response_body["model"], PUBLIC_MODEL);
+    assert_eq!(
+        response_body["choices"][0]["message"]["content"],
+        "responses response"
+    );
+    assert_eq!(response_body["usage"]["prompt_tokens"], 13);
+    assert_eq!(response_body["usage"]["completion_tokens"], 3);
+    assert_eq!(response_body["usage"]["total_tokens"], 16);
+
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+    assert_eq!(captured[0]["instructions"], "answer briefly");
+    assert_eq!(captured[0]["input"][0]["role"], "user");
+    assert_eq!(captured[0]["input"][0]["content"], "hello");
+    assert_eq!(captured[0]["max_output_tokens"], 16);
+    assert_eq!(captured[0]["tools"][0]["type"], "function");
+    assert_eq!(captured[0]["tools"][0]["name"], "lookup");
+    assert_eq!(
+        captured[0]["tool_choice"],
+        json!({"type": "function", "name": "lookup"})
+    );
+    assert!(captured[0].get("messages").is_none());
+    assert!(captured[0].get("max_tokens").is_none());
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn chat_completions_stream_translates_to_responses_stream_backend() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let mut backend_config = test_backend("backend-a", backend.base_url());
+    backend_config.models[0].endpoints = btree_set(["chat_completions_via_responses"]);
+    let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
+    let app = router(state.clone());
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(body.contains("\"object\":\"chat.completion.chunk\""));
+    assert!(body.contains("\"model\":\"gpt-public\""));
+    assert!(body.contains("\"content\":\"responses response\""));
+    assert!(body.contains("\"finish_reason\":\"stop\""));
+    assert!(body.contains("\"prompt_tokens\":13"));
+    assert!(body.contains("\"completion_tokens\":3"));
+    assert!(body.contains("\"total_tokens\":16"));
+    assert!(body.contains("data: [DONE]"));
+
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+    assert_eq!(captured[0]["stream"], true);
+    assert_eq!(captured[0]["input"][0]["role"], "user");
+    assert_eq!(captured[0]["input"][0]["content"], "hello");
+    assert!(captured[0].get("messages").is_none());
 
     backend.abort();
 }
@@ -1672,7 +1778,7 @@ fn test_chat_backend(id: &str, base_url: String) -> ResolvedBackend {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            endpoints: btree_set(["chat", "tools"]),
+            endpoints: btree_set(["chat", "responses_via_chat_completions", "tools"]),
         }],
     }
 }
@@ -1889,14 +1995,27 @@ impl RedirectBackend {
 async fn backend_responses(
     State(state): State<BackendState>,
     Json(payload): Json<Value>,
-) -> Json<Value> {
+) -> Response<Body> {
     state.hits.fetch_add(1, Ordering::SeqCst);
     state.requests.lock().unwrap().push(payload.clone());
-    Json(json!({
+    let response = json!({
         "id": format!("resp_{}", state.name),
         "object": "response",
         "model": payload["model"],
-        "output": [],
+        "created_at": 123,
+        "status": "completed",
+        "output": [{
+            "id": format!("msg_{}", state.name),
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": "responses response",
+                "annotations": []
+            }]
+        }],
+        "output_text": "responses response",
         "usage": {
             "input_tokens": 13,
             "input_tokens_details": {
@@ -1904,7 +2023,48 @@ async fn backend_responses(
             },
             "output_tokens": 3
         }
-    }))
+    });
+
+    if payload.get("stream").and_then(Value::as_bool) == Some(true) {
+        let mut body = String::new();
+        body.push_str(&format!(
+            "event: response.created\ndata: {}\n\n",
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": response["id"],
+                    "object": "response",
+                    "created_at": response["created_at"],
+                    "model": response["model"]
+                }
+            })
+        ));
+        body.push_str(&format!(
+            "event: response.output_text.delta\ndata: {}\n\n",
+            json!({
+                "type": "response.output_text.delta",
+                "delta": "responses response"
+            })
+        ));
+        body.push_str(&format!(
+            "event: response.completed\ndata: {}\n\n",
+            json!({
+                "type": "response.completed",
+                "response": response
+            })
+        ));
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(body))
+            .unwrap();
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(response.to_string()))
+        .unwrap()
 }
 
 async fn error_backend_responses(

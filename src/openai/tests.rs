@@ -87,6 +87,263 @@ fn responses_request_converts_to_chat_completions() {
 }
 
 #[test]
+fn chat_completions_request_converts_to_responses() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [
+            {"role": "system", "content": "system rules"},
+            {"role": "developer", "content": [{"type": "text", "text": "developer rules"}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,AAAA",
+                            "detail": "low"
+                        }
+                    }
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": "checking",
+                "tool_calls": [{
+                    "id": "call_lookup",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": "{\"query\":\"tokyo\"}"
+                    }
+                }]
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_lookup",
+                "content": "sunny"
+            }
+        ],
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "stream": true,
+        "store": true,
+        "metadata": {"tenant": "a"},
+        "parallel_tool_calls": false,
+        "prompt_cache_key": "tenant-a",
+        "prompt_cache_retention": "24h",
+        "max_completion_tokens": 42,
+        "response_format": {"type": "json_object"},
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "look up a value",
+                "strict": true,
+                "parameters": {"type": "object"}
+            }
+        }],
+        "tool_choice": {"type": "function", "function": {"name": "lookup"}}
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaResponses,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "backend-model");
+    assert_eq!(rewritten["instructions"], "system rules\n\ndeveloper rules");
+    assert_eq!(rewritten["input"][0]["role"], "user");
+    assert_eq!(
+        rewritten["input"][0]["content"][0],
+        json!({"type": "input_text", "text": "look"})
+    );
+    assert_eq!(
+        rewritten["input"][0]["content"][1],
+        json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,AAAA",
+            "detail": "low"
+        })
+    );
+    assert_eq!(rewritten["input"][1]["role"], "assistant");
+    assert_eq!(rewritten["input"][1]["content"], "checking");
+    assert_eq!(rewritten["input"][2]["type"], "function_call");
+    assert_eq!(rewritten["input"][2]["call_id"], "call_lookup");
+    assert_eq!(rewritten["input"][2]["name"], "lookup");
+    assert_eq!(rewritten["input"][2]["arguments"], "{\"query\":\"tokyo\"}");
+    assert_eq!(rewritten["input"][3]["type"], "function_call_output");
+    assert_eq!(rewritten["input"][3]["call_id"], "call_lookup");
+    assert_eq!(rewritten["input"][3]["output"], "sunny");
+    assert_eq!(rewritten["temperature"], 0.2);
+    assert_eq!(rewritten["top_p"], 0.9);
+    assert_eq!(rewritten["stream"], true);
+    assert_eq!(rewritten["store"], true);
+    assert_eq!(rewritten["metadata"]["tenant"], "a");
+    assert_eq!(rewritten["parallel_tool_calls"], false);
+    assert_eq!(rewritten["prompt_cache_key"], "tenant-a");
+    assert_eq!(rewritten["prompt_cache_retention"], "24h");
+    assert_eq!(rewritten["max_output_tokens"], 42);
+    assert_eq!(rewritten["text"]["format"]["type"], "json_object");
+    assert_eq!(rewritten["tools"][0]["type"], "function");
+    assert_eq!(rewritten["tools"][0]["name"], "lookup");
+    assert_eq!(rewritten["tools"][0]["strict"], true);
+    assert_eq!(
+        rewritten["tool_choice"],
+        json!({"type": "function", "name": "lookup"})
+    );
+    assert!(rewritten.get("messages").is_none());
+    assert!(rewritten.get("max_completion_tokens").is_none());
+    assert!(rewritten.get("max_tokens").is_none());
+}
+
+#[test]
+fn chat_completions_to_responses_applies_responses_policies() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 32
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaResponses,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::ForceFalse,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
+            chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
+        },
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "backend-model");
+    assert_eq!(rewritten["input"][0]["content"], "hello");
+    assert_eq!(rewritten["store"], false);
+    assert!(rewritten.get("max_output_tokens").is_none());
+    assert!(rewritten.get("stream_options").is_none());
+}
+
+#[test]
+fn chat_completions_to_responses_rejects_unsupported_options() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "n": 2
+    });
+    let error = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaResponses,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+    )
+    .expect_err("expected n > 1 to be rejected");
+    assert_eq!(error.param().as_deref(), Some("n"));
+
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "logprobs": true
+    });
+    let error = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaResponses,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+    )
+    .expect_err("expected logprobs to be rejected");
+    assert_eq!(error.param().as_deref(), Some("logprobs"));
+
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "top_logprobs": 1
+    });
+    let error = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaResponses,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+    )
+    .expect_err("expected top_logprobs to be rejected");
+    assert_eq!(error.param().as_deref(), Some("top_logprobs"));
+}
+
+#[test]
+fn chat_completions_to_responses_requires_json_and_messages() {
+    let error = rewrite_request_body_for_mode_with_policies(
+        b"model=public-model",
+        Some("application/x-www-form-urlencoded"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaResponses,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+    )
+    .expect_err("expected non-json request to be rejected");
+    assert_eq!(
+        error.message(),
+        "Chat-to-responses conversion requires a JSON request body."
+    );
+
+    let error = rewrite_request_body_for_mode_with_policies(
+        br#"{"model":"public-model"}"#,
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaResponses,
+        RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+    )
+    .expect_err("expected missing messages to be rejected");
+    assert_eq!(error.param().as_deref(), Some("messages"));
+}
+
+#[test]
 fn native_responses_can_force_store_false_when_omitted() {
     let body = json!({
         "model": "public-model",
@@ -913,6 +1170,107 @@ fn chat_completion_response_converts_to_responses_shape() {
 }
 
 #[test]
+fn responses_response_converts_to_chat_completion_shape() {
+    let body = json!({
+        "id": "resp_1",
+        "object": "response",
+        "created_at": 123,
+        "model": "backend-model",
+        "status": "completed",
+        "output": [
+            {
+                "id": "msg_1",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "hello"
+                }]
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_lookup",
+                "name": "lookup",
+                "arguments": "{\"query\":\"tokyo\"}"
+            }
+        ],
+        "usage": {
+            "input_tokens": 10,
+            "input_tokens_details": {"cached_tokens": 4},
+            "output_tokens": 3,
+            "total_tokens": 13
+        }
+    });
+
+    let (rewritten, usage) = rewrite_response_body(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        Some("public-model"),
+        RequestMode::ChatCompletionsViaResponses,
+    );
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["id"], "chatcmpl_resp_1");
+    assert_eq!(rewritten["object"], "chat.completion");
+    assert_eq!(rewritten["created"], 123);
+    assert_eq!(rewritten["model"], "public-model");
+    assert_eq!(rewritten["choices"][0]["message"]["role"], "assistant");
+    assert_eq!(rewritten["choices"][0]["message"]["content"], "hello");
+    assert_eq!(
+        rewritten["choices"][0]["message"]["tool_calls"][0],
+        json!({
+            "id": "call_lookup",
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "arguments": "{\"query\":\"tokyo\"}"
+            }
+        })
+    );
+    assert_eq!(rewritten["choices"][0]["finish_reason"], "tool_calls");
+    assert_eq!(rewritten["usage"]["prompt_tokens"], 10);
+    assert_eq!(
+        rewritten["usage"]["prompt_tokens_details"]["cached_tokens"],
+        4
+    );
+    assert_eq!(rewritten["usage"]["completion_tokens"], 3);
+    assert_eq!(rewritten["usage"]["total_tokens"], 13);
+    assert_eq!(usage.input, 10);
+    assert_eq!(usage.cached_input, 4);
+    assert_eq!(usage.output, 3);
+    assert_eq!(usage.total, 13);
+}
+
+#[test]
+fn responses_response_missing_usage_defaults_to_zero_chat_usage() {
+    let body = json!({
+        "id": "resp_1",
+        "object": "response",
+        "created_at": 123,
+        "model": "backend-model",
+        "output": []
+    });
+
+    let (rewritten, usage) = rewrite_response_body(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        Some("public-model"),
+        RequestMode::ChatCompletionsViaResponses,
+    );
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["usage"]["prompt_tokens"], 0);
+    assert_eq!(rewritten["usage"]["completion_tokens"], 0);
+    assert_eq!(rewritten["usage"]["total_tokens"], 0);
+    assert_eq!(usage.input, 0);
+    assert_eq!(usage.output, 0);
+    assert_eq!(usage.total, 0);
+}
+
+#[test]
 fn native_json_response_adds_missing_total_tokens() {
     let responses_body = json!({
         "id": "resp_1",
@@ -1133,4 +1491,129 @@ fn chat_completion_stream_converts_tool_call_events_to_responses_events() {
     assert!(output.contains("event: response.function_call_arguments.done"));
     assert!(output.contains("\"arguments\":\"{\\\"timezone\\\":\\\"Asia/Tokyo\\\"}\""));
     assert!(output.contains("event: response.completed"));
+}
+
+#[test]
+fn responses_stream_converts_text_deltas_to_chat_completion_chunks() {
+    let mut normalizer = ChatCompletionsSseNormalizer::new(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+    );
+    let created = json!({
+        "type": "response.created",
+        "response": {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 123,
+            "model": "backend-model"
+        }
+    });
+    let delta = json!({
+        "type": "response.output_text.delta",
+        "delta": "hello"
+    });
+    let completed = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 123,
+            "model": "backend-model",
+            "status": "completed",
+            "output": [],
+            "usage": {
+                "input_tokens": 8,
+                "input_tokens_details": {"cached_tokens": 2},
+                "output_tokens": 5,
+                "total_tokens": 13
+            }
+        }
+    });
+
+    let mut output =
+        normalizer.push(format!("event: response.created\ndata: {created}\n\n").as_bytes());
+    output.extend(normalizer.push(format!("data: {delta}\n\n").as_bytes()));
+    output.extend(normalizer.push(format!("data: {completed}\n\n").as_bytes()));
+    output.extend(normalizer.finish());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("\"object\":\"chat.completion.chunk\""));
+    assert!(output.contains("\"model\":\"public-model\""));
+    assert!(output.contains("\"role\":\"assistant\""));
+    assert!(output.contains("\"content\":\"hello\""));
+    assert!(output.contains("\"finish_reason\":\"stop\""));
+    assert!(output.contains("\"prompt_tokens\":8"));
+    assert!(output.contains("\"cached_tokens\":2"));
+    assert!(output.contains("\"completion_tokens\":5"));
+    assert!(output.contains("data: [DONE]"));
+    assert_eq!(normalizer.usage.input, 8);
+    assert_eq!(normalizer.usage.cached_input, 2);
+    assert_eq!(normalizer.usage.output, 5);
+    assert_eq!(normalizer.usage.total, 13);
+}
+
+#[test]
+fn responses_stream_converts_function_call_deltas_to_chat_completion_chunks() {
+    let mut normalizer = ChatCompletionsSseNormalizer::new(None, None);
+    let created = json!({
+        "type": "response.created",
+        "response": {
+            "id": "resp_1",
+            "created_at": 123,
+            "model": "public-model"
+        }
+    });
+    let added = json!({
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+            "id": "call_lookup",
+            "type": "function_call",
+            "call_id": "call_lookup",
+            "name": "lookup",
+            "arguments": ""
+        }
+    });
+    let arguments = json!({
+        "type": "response.function_call_arguments.delta",
+        "output_index": 0,
+        "item_id": "call_lookup",
+        "call_id": "call_lookup",
+        "delta": "{\"query\":\"tokyo\"}"
+    });
+    let completed = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_1",
+            "created_at": 123,
+            "model": "public-model",
+            "status": "completed",
+            "output": [{
+                "id": "call_lookup",
+                "type": "function_call",
+                "call_id": "call_lookup",
+                "name": "lookup",
+                "arguments": "{\"query\":\"tokyo\"}"
+            }],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 2
+            }
+        }
+    });
+
+    let mut output = normalizer.push(format!("data: {created}\n\n").as_bytes());
+    output.extend(normalizer.push(format!("data: {added}\n\n").as_bytes()));
+    output.extend(normalizer.push(format!("data: {arguments}\n\n").as_bytes()));
+    output.extend(normalizer.push(format!("data: {completed}\n\n").as_bytes()));
+    output.extend(normalizer.finish());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("\"tool_calls\""));
+    assert!(output.contains("\"id\":\"call_lookup\""));
+    assert!(output.contains("\"name\":\"lookup\""));
+    assert!(output.contains("\"arguments\":\"{\\\"query\\\":\\\"tokyo\\\"}\""));
+    assert!(output.contains("\"finish_reason\":\"tool_calls\""));
+    assert!(output.contains("\"total_tokens\":3"));
+    assert!(output.contains("data: [DONE]"));
 }

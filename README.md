@@ -17,7 +17,9 @@ Planned work lives in [ROADMAP.md](ROADMAP.md). This README describes the curren
 - Public model names are mapped to backend model names after access checks pass.
 - `/v1/*` requests that are not handled by onair itself can be forwarded to a compatible backend when backend capabilities allow it.
 - `POST /v1/chat/completion` is accepted as a typo-compatible alias and forwarded upstream as `/v1/chat/completions`.
-- `POST /v1/responses` uses native Responses backends when a matching backend/model route declares `responses`; chat-completions-only routes can serve Responses requests through a compatibility layer that translates common fields such as `input`, `instructions`, `max_output_tokens`, and function tools to `/v1/chat/completions`, then translates successful chat-completion responses back to Responses shape.
+- `POST /v1/responses` uses native Responses backends when a matching backend/model route declares `responses`. A route can instead declare `responses_via_chat_completions` to serve client Responses requests through an upstream `/v1/chat/completions` compatibility layer.
+- `POST /v1/chat/completions` uses native Chat Completions backends when a matching backend/model route declares `chat` or `chat_completions`. A route can instead declare `chat_completions_via_responses` to serve client Chat Completions requests through an upstream `/v1/responses` compatibility layer.
+- Native routing is preferred when a route declares the requested native endpoint. To force a compatibility path for a model route, omit the native endpoint marker and include the relevant compatibility marker.
 - `stream: true` responses are proxied as server-sent events, with configured backend model names rewritten back to public model names in JSON/SSE responses.
 - OpenAI-compatible `usage.total_tokens` values are preserved; when a backend reports prompt/input and completion/output token counts without a total, onair adds the corresponding total to chat-completion and Responses JSON/SSE responses.
 - Backend errors are converted to generic OpenAI-style errors, and response headers are allowlisted before returning to the client.
@@ -98,6 +100,20 @@ context_length = "inherit"
 endpoints = ["chat", "responses"]
 ```
 
+A Responses-native backend can also expose a public Chat Completions route by using the explicit compatibility endpoint marker:
+
+```toml
+[[backend]]
+id = "responses-wrapper"
+base_url = "http://127.0.0.1:8001"
+capabilities = ["responses", "streaming", "tools"]
+
+[[backend.model]]
+public = "gpt-4o"
+backend = "backend-responses-model"
+endpoints = ["chat_completions_via_responses", "tools"]
+```
+
 onair interprets the file as routing and visibility policy:
 
 - `[server]`, `[telemetry]`, `[debug_capture]`, `[inspector]`, and `[health]` configure process-level behavior.
@@ -141,8 +157,10 @@ Repeated `Forwarded` or `X-Forwarded-For` header lines are treated as one chain 
 
 `[[backend]].capabilities` is a marker list; `capability` is accepted as a TOML alias. Capability markers are matched against `/v1/*` path families and common aliases:
 
-- `chat` or `chat_completions` for `/v1/chat/completions`.
-- `responses` for native `/v1/responses`; `chat`/`chat_completions` backends can also serve `/v1/responses` through onair's Responses-to-Chat compatibility layer when the matching backend/model route does not declare native `responses`.
+- `chat` or `chat_completions` for native `/v1/chat/completions`.
+- `responses` for native `/v1/responses`.
+- `responses_via_chat_completions` for client `/v1/responses` routed through upstream `/v1/chat/completions`. The selected backend must still be Chat Completions-capable.
+- `chat_completions_via_responses` for client `/v1/chat/completions` routed through upstream `/v1/responses`. The selected backend must still be Responses-capable.
 - `embeddings` for `/v1/embeddings`.
 - `images` or `image` for `/v1/images/*`.
 - `audio` for `/v1/audio/*`.
@@ -150,19 +168,19 @@ Repeated `Forwarded` or `X-Forwarded-For` header lines are treated as one chain 
 - `batches`, `fine_tuning`, `assistants`, `threads`, `vector_stores`, `uploads`, and similar first path segments.
 - `streaming` for `stream: true` requests.
 - `tools`, `tool_calls`, `function_calling`, or `functions` for requests with a non-empty `tools` array. If a model route has a non-empty `endpoints` list, that route must also include a tool marker before tool-bearing requests are forwarded.
-- `all` as a broad marker for any `/v1/*` path and optional feature marker.
+- `all` as a broad marker for native `/v1/*` paths and optional feature markers. Compatibility paths still require an exact compatibility marker on the backend or model route.
 
 `[[backend.model]]` entries are optional for backends that only serve model-less endpoints. They are required for model-bearing requests, synthetic `/v1/models` output, and public-to-backend model rewrites.
 
-`[[backend.model]].endpoints` can further restrict a model route to endpoint keys such as `chat`, `chat_completions`, `responses`, `audio`, or `embeddings`, plus feature markers such as `tools`. If omitted or empty, the model route is allowed for any endpoint and feature supported by the backend. A route that allows `responses` serves client `/v1/responses` natively. A route that allows `chat` but not `responses` can serve client `/v1/responses` through the compatibility layer when the backend itself is chat-capable. Backend order is priority order when multiple compatible routes match, and also for model-less requests.
+`[[backend.model]].endpoints` can further restrict a model route to endpoint keys such as `chat`, `chat_completions`, `responses`, `responses_via_chat_completions`, `chat_completions_via_responses`, `audio`, or `embeddings`, plus feature markers such as `tools`. If omitted or empty, the model route is allowed for native endpoints and feature markers supported by the backend; compatibility still requires an exact compatibility marker at backend level. A route that allows `responses` serves client `/v1/responses` natively. A route that allows `responses_via_chat_completions` serves client `/v1/responses` by translating the request to upstream `/v1/chat/completions` and translating successful responses back to Responses shape. A route that allows `chat_completions_via_responses` serves client `/v1/chat/completions` by translating the request to upstream `/v1/responses` and translating successful responses back to Chat Completions shape. Backend order is priority order when multiple compatible routes match, and also for model-less requests.
 
 `[[backend]].tool_schema_mode` controls only the Responses-to-Chat compatibility conversion for function-tool schemas. The default, `preserve`, forwards the schema shape the client sent after wrapping Responses function tools into Chat Completions format. Use `llamacpp_compat` only for a llama.cpp-style chat backend/template that rejects common JSON Schema fragments: it recursively removes `default`, collapses simple nullable `type = ["...", "null"]`, and collapses simple nullable `anyOf`/`oneOf` pairs in converted tool `parameters`. A `[[backend.model]].tool_schema_mode` value overrides the backend default for that model route. Native `responses` routes and direct chat requests are not schema-sanitized by this setting.
 
-`[[backend]].responses_store` controls only native `/v1/responses` forwarding. The default, `preserve`, leaves the client's `store` field untouched. Use `force_false` for a backend or wrapper that requires explicit non-storage: onair adds `"store": false` only when forwarding native `/v1/responses` and only when the client omitted `store`; explicit client values are preserved. A `[[backend.model]].responses_store` value overrides the backend default for that model route. This setting does not affect direct chat requests or Responses-to-Chat compatibility requests.
+`[[backend]].responses_store` controls upstream Responses-compatible forwarding. The default, `preserve`, leaves the client's `store` field untouched. Use `force_false` for a backend or wrapper that requires explicit non-storage: onair adds `"store": false` when forwarding native `/v1/responses` or Chat-to-Responses compatibility requests and only when the client omitted `store`; explicit client values are preserved. A `[[backend.model]].responses_store` value overrides the backend default for that model route. This setting does not affect direct chat requests or Responses-to-Chat compatibility requests.
 
-`[[backend]].responses_max_output_tokens` controls only native `/v1/responses` forwarding. The default, `preserve`, forwards the client's `max_output_tokens` field unchanged. Use `drop` for a backend or wrapper that rejects the Responses field entirely, or use `rename_to_max_tokens` / `rename_to_max_completion_tokens` only if the backend explicitly expects one of those alternate names. A `[[backend.model]].responses_max_output_tokens` value overrides the backend default for that model route. This setting does not affect direct chat requests or Responses-to-Chat compatibility requests.
+`[[backend]].responses_max_output_tokens` controls upstream Responses-compatible forwarding. The default, `preserve`, forwards the generated or client-supplied `max_output_tokens` field unchanged. Use `drop` for a backend or wrapper that rejects the Responses field entirely, or use `rename_to_max_tokens` / `rename_to_max_completion_tokens` only if the backend explicitly expects one of those alternate names. A `[[backend.model]].responses_max_output_tokens` value overrides the backend default for that model route. This setting applies to native `/v1/responses` and Chat-to-Responses compatibility requests; it does not affect direct chat requests or Responses-to-Chat compatibility requests.
 
-`[[backend]].chat_stream_usage` controls only upstream Chat Completions-compatible JSON requests. The default, `preserve`, leaves the client's `stream_options` untouched. Use `insert` for a backend that honors Chat Completions `stream_options.include_usage`: when the forwarded request is `stream: true`, onair adds `"stream_options": {"include_usage": true}` only if the client omitted `stream_options.include_usage`; existing client values, including explicit `false`, are preserved. Use `force_true` only when operator telemetry should override client request fidelity: onair sets `include_usage = true`, preserves other `stream_options` object fields, and replaces a non-object `stream_options` value with an object containing only `include_usage`. A `[[backend.model]].chat_stream_usage` value overrides the backend default for that model route. This setting applies to direct `/v1/chat/completions` forwarding and to the Responses-to-Chat compatibility path because that path forwards upstream as Chat Completions; it does not apply to native `/v1/responses`.
+`[[backend]].chat_stream_usage` controls only upstream Chat Completions-compatible JSON requests. The default, `preserve`, leaves the client's `stream_options` untouched. Use `insert` for a backend that honors Chat Completions `stream_options.include_usage`: when the forwarded request is `stream: true`, onair adds `"stream_options": {"include_usage": true}` only if the client omitted `stream_options.include_usage`; existing client values, including explicit `false`, are preserved. Use `force_true` only when operator telemetry should override client request fidelity: onair sets `include_usage = true`, preserves other `stream_options` object fields, and replaces a non-object `stream_options` value with an object containing only `include_usage`. A `[[backend.model]].chat_stream_usage` value overrides the backend default for that model route. This setting applies to direct `/v1/chat/completions` forwarding and to the Responses-to-Chat compatibility path because that path forwards upstream as Chat Completions; it does not apply to native `/v1/responses` or Chat-to-Responses compatibility requests.
 
 Onair also preflights client `/v1/responses` tool history before forwarding it. Every top-level `function_call` item in `input` must have a matching `function_call_output`; otherwise Onair returns a local `400` with a clear input error instead of sending malformed history to the backend and surfacing a generic upstream rejection.
 
