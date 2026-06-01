@@ -584,10 +584,6 @@ pub struct SseNormalizer {
 }
 
 impl SseNormalizer {
-    pub fn new(backend_model: Option<String>, public_model: Option<String>) -> Self {
-        Self::new_with_usage_visibility(backend_model, public_model, true)
-    }
-
     pub fn new_with_usage_visibility(
         backend_model: Option<String>,
         public_model: Option<String>,
@@ -1175,10 +1171,6 @@ struct ChatCompletionStreamToolCall {
 }
 
 impl ChatCompletionsSseNormalizer {
-    pub fn new(backend_model: Option<String>, public_model: Option<String>) -> Self {
-        Self::new_with_usage_visibility(backend_model, public_model, true)
-    }
-
     pub fn new_with_usage_visibility(
         backend_model: Option<String>,
         public_model: Option<String>,

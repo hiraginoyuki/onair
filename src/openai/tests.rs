@@ -1398,7 +1398,7 @@ fn extract_usage_observation_collects_usage_keys() {
 
 #[test]
 fn native_stream_response_adds_missing_total_tokens() {
-    let mut normalizer = SseNormalizer::new(None, None);
+    let mut normalizer = SseNormalizer::new_with_usage_visibility(None, None, true);
     let chunk = json!({
         "id": "chatcmpl-1",
         "object": "response",
@@ -1553,9 +1553,10 @@ fn chat_completion_stream_converts_tool_call_events_to_responses_events() {
 
 #[test]
 fn responses_stream_converts_text_deltas_to_chat_completion_chunks() {
-    let mut normalizer = ChatCompletionsSseNormalizer::new(
+    let mut normalizer = ChatCompletionsSseNormalizer::new_with_usage_visibility(
         Some("backend-model".to_owned()),
         Some("public-model".to_owned()),
+        true,
     );
     let created = json!({
         "type": "response.created",
@@ -1677,7 +1678,7 @@ fn responses_stream_usage_filter_collects_metrics_without_forwarding_chat_usage(
 
 #[test]
 fn responses_stream_converts_function_call_deltas_to_chat_completion_chunks() {
-    let mut normalizer = ChatCompletionsSseNormalizer::new(None, None);
+    let mut normalizer = ChatCompletionsSseNormalizer::new_with_usage_visibility(None, None, true);
     let created = json!({
         "type": "response.created",
         "response": {
