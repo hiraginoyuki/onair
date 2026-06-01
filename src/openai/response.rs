@@ -1349,7 +1349,7 @@ impl ChatCompletionsSseNormalizer {
             delta_object.insert("role".to_owned(), Value::String("assistant".to_owned()));
         }
         delta_object.insert("content".to_owned(), Value::String(delta.to_owned()));
-        self.chat_chunk(Value::Object(delta_object), None, None)
+        self.chat_chunk(Value::Object(delta_object), None)
     }
 
     fn process_function_arguments_delta(&mut self, event: &Value) -> Vec<u8> {
@@ -1390,7 +1390,6 @@ impl ChatCompletionsSseNormalizer {
                     }],
                 }),
                 None,
-                None,
             ));
         }
         output
@@ -1417,7 +1416,7 @@ impl ChatCompletionsSseNormalizer {
                     delta_object.insert("role".to_owned(), Value::String("assistant".to_owned()));
                 }
                 delta_object.insert("content".to_owned(), Value::String(text));
-                self.chat_chunk(Value::Object(delta_object), None, None)
+                self.chat_chunk(Value::Object(delta_object), None)
             }
             _ => Vec::new(),
         }
@@ -1474,7 +1473,6 @@ impl ChatCompletionsSseNormalizer {
                     }],
                 }),
                 None,
-                None,
             ));
         }
         output
@@ -1512,7 +1510,7 @@ impl ChatCompletionsSseNormalizer {
                 },
             }]),
         );
-        self.chat_chunk(Value::Object(delta), None, None)
+        self.chat_chunk(Value::Object(delta), None)
     }
 
     fn emit_completed_output_if_needed(&mut self, response: Option<&Value>) -> Vec<u8> {
@@ -1532,7 +1530,7 @@ impl ChatCompletionsSseNormalizer {
                 delta.insert("role".to_owned(), Value::String("assistant".to_owned()));
             }
             delta.insert("content".to_owned(), Value::String(content));
-            output.extend(self.chat_chunk(Value::Object(delta), None, None));
+            output.extend(self.chat_chunk(Value::Object(delta), None));
         }
         for (index, tool_call) in tool_calls.into_iter().enumerate() {
             let call_id = tool_call
@@ -1566,7 +1564,6 @@ impl ChatCompletionsSseNormalizer {
                         }],
                     }),
                     None,
-                    None,
                 ));
             }
         }
@@ -1591,11 +1588,15 @@ impl ChatCompletionsSseNormalizer {
                     "tool_calls"
                 }
             });
-        let usage = self
-            .emit_usage_to_client
-            .then(|| response.map(|response| responses_usage_to_chat_usage(response.get("usage"))))
-            .flatten();
-        self.chat_chunk(json!({}), Some(finish_reason), usage)
+        let mut output = self.chat_chunk(json!({}), Some(finish_reason));
+        if self.emit_usage_to_client
+            && let Some(usage) = response
+                .and_then(|response| response.get("usage"))
+                .filter(|usage| usage.as_object().is_some())
+        {
+            output.extend(self.chat_usage_chunk(responses_usage_to_chat_usage(Some(usage))));
+        }
+        output
     }
 
     fn fail_response(&mut self, response: Option<&Value>) -> Vec<u8> {
@@ -1618,12 +1619,7 @@ impl ChatCompletionsSseNormalizer {
         output
     }
 
-    fn chat_chunk(
-        &self,
-        delta: Value,
-        finish_reason: Option<&str>,
-        usage: Option<Value>,
-    ) -> Vec<u8> {
+    fn chat_chunk(&self, delta: Value, finish_reason: Option<&str>) -> Vec<u8> {
         let mut chunk = Map::new();
         chunk.insert(
             "id".to_owned(),
@@ -1643,10 +1639,21 @@ impl ChatCompletionsSseNormalizer {
                 "finish_reason": finish_reason,
             }]),
         );
-        if let Some(usage) = usage {
-            chunk.insert("usage".to_owned(), usage);
+        if self.emit_usage_to_client {
+            chunk.insert("usage".to_owned(), Value::Null);
         }
         sse_data(Value::Object(chunk))
+    }
+
+    fn chat_usage_chunk(&self, usage: Value) -> Vec<u8> {
+        sse_data(json!({
+            "id": chat_id_from_response(&self.response_id()),
+            "object": "chat.completion.chunk",
+            "created": self.created_at,
+            "model": self.model(),
+            "choices": [],
+            "usage": usage,
+        }))
     }
 
     fn done_event(&mut self) -> Vec<u8> {

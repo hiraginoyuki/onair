@@ -1601,6 +1601,8 @@ fn responses_stream_converts_text_deltas_to_chat_completion_chunks() {
     assert!(output.contains("\"role\":\"assistant\""));
     assert!(output.contains("\"content\":\"hello\""));
     assert!(output.contains("\"finish_reason\":\"stop\""));
+    assert!(output.contains("\"usage\":null"));
+    assert!(output.contains("\"choices\":[]"));
     assert!(output.contains("\"prompt_tokens\":8"));
     assert!(output.contains("\"cached_tokens\":2"));
     assert!(output.contains("\"completion_tokens\":5"));
