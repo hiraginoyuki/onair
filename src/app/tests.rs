@@ -404,6 +404,56 @@ async fn chat_completions_stream_translates_to_responses_stream_backend() {
 }
 
 #[tokio::test]
+async fn chat_completions_stream_translates_mislabeled_responses_stream() {
+    let backend = TestBackend::spawn_json_labeled_stream("backend-a").await;
+    let mut backend_config = test_backend("backend-a", backend.base_url());
+    backend_config.models[0].endpoints = btree_set(["chat_completions_via_responses"]);
+    let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
+    let app = router(state.clone());
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("text/event-stream"))
+    );
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    drop(state);
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(body.contains("\"object\":\"chat.completion.chunk\""));
+    assert!(body.contains("\"choices\""));
+    assert!(body.contains("\"content\":\"responses response\""));
+    assert!(body.contains("\"finish_reason\":\"stop\""));
+    assert!(
+        !body.contains("\"type\":\"response.created\""),
+        "body={body}"
+    );
+    assert!(!body.contains("event: response.created"), "body={body}");
+    assert!(body.contains("data: [DONE]"));
+
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["stream"], true);
+    assert!(captured[0].get("messages").is_none());
+
+    backend.abort();
+}
+
+#[tokio::test]
 async fn native_responses_route_can_force_store_false() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_backend("backend-a", backend.base_url());
@@ -1934,6 +1984,29 @@ impl TestBackend {
         }
     }
 
+    async fn spawn_json_labeled_stream(name: &str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let state = BackendState {
+            name: name.to_owned(),
+            requests: Arc::new(Mutex::new(Vec::new())),
+            hits: Arc::new(AtomicUsize::new(0)),
+        };
+        let app = Router::new()
+            .route("/v1/models", get(backend_models))
+            .route("/v1/responses", post(json_labeled_stream_responses))
+            .with_state(state.clone());
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        Self {
+            address,
+            state,
+            handle,
+        }
+    }
+
     async fn spawn_error(name: &str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -2101,6 +2174,79 @@ async fn backend_responses(
         return Response::builder()
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(body))
+            .unwrap();
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(response.to_string()))
+        .unwrap()
+}
+
+async fn json_labeled_stream_responses(
+    State(state): State<BackendState>,
+    Json(payload): Json<Value>,
+) -> Response<Body> {
+    state.hits.fetch_add(1, Ordering::SeqCst);
+    state.requests.lock().unwrap().push(payload.clone());
+    let response = json!({
+        "id": format!("resp_{}", state.name),
+        "object": "response",
+        "model": payload["model"],
+        "created_at": 123,
+        "status": "completed",
+        "output": [{
+            "id": format!("msg_{}", state.name),
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": "responses response",
+                "annotations": []
+            }]
+        }],
+        "output_text": "responses response",
+        "usage": {
+            "input_tokens": 13,
+            "output_tokens": 3,
+            "total_tokens": 16
+        }
+    });
+
+    if payload.get("stream").and_then(Value::as_bool) == Some(true) {
+        let mut body = String::new();
+        body.push_str(&format!(
+            "event: response.created\ndata: {}\n\n",
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": response["id"],
+                    "object": "response",
+                    "created_at": response["created_at"],
+                    "model": response["model"]
+                }
+            })
+        ));
+        body.push_str(&format!(
+            "event: response.output_text.delta\ndata: {}\n\n",
+            json!({
+                "type": "response.output_text.delta",
+                "delta": "responses response"
+            })
+        ));
+        body.push_str(&format!(
+            "event: response.completed\ndata: {}\n\n",
+            json!({
+                "type": "response.completed",
+                "response": response
+            })
+        ));
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/json")
             .body(Body::from(body))
             .unwrap();
     }

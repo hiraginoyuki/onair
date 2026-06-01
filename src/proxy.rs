@@ -910,7 +910,12 @@ fn response_builder(
         .status(status)
         .header(CACHE_CONTROL, "no-cache");
 
-    if let Some(content_type) = upstream_headers
+    if streaming {
+        builder = builder.header(
+            CONTENT_TYPE,
+            fallback_content_type.unwrap_or("text/event-stream"),
+        );
+    } else if let Some(content_type) = upstream_headers
         .get(CONTENT_TYPE)
         .and_then(valid_header_value)
         .cloned()

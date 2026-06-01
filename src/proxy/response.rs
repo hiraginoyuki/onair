@@ -261,7 +261,8 @@ pub(super) fn streaming_response(
     let upstream_status = upstream.status();
     let upstream_headers = upstream.headers().clone();
     let content_type = header_str(&upstream_headers, &CONTENT_TYPE).map(str::to_owned);
-    let normalize_sse = openai::is_event_stream_content_type(content_type.as_deref());
+    let normalize_sse =
+        labels.stream || openai::is_event_stream_content_type(content_type.as_deref());
 
     state
         .metrics
@@ -388,7 +389,7 @@ pub(super) fn streaming_response(
         upstream_status,
         &client_headers,
         &upstream_headers,
-        content_type.as_deref().or(Some("text/event-stream")),
+        Some("text/event-stream"),
         true,
     )
     .body(Body::from_stream(stream))
