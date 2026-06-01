@@ -580,13 +580,23 @@ pub struct SseNormalizer {
     pending_event_name: Option<String>,
     backend_model: Option<String>,
     public_model: Option<String>,
+    emit_usage_to_client: bool,
 }
 
 impl SseNormalizer {
     pub fn new(backend_model: Option<String>, public_model: Option<String>) -> Self {
+        Self::new_with_usage_visibility(backend_model, public_model, true)
+    }
+
+    pub fn new_with_usage_visibility(
+        backend_model: Option<String>,
+        public_model: Option<String>,
+        emit_usage_to_client: bool,
+    ) -> Self {
         Self {
             backend_model,
             public_model,
+            emit_usage_to_client,
             ..Self::default()
         }
     }
@@ -673,6 +683,12 @@ impl SseNormalizer {
             rewrite_response_models(&mut json, backend_model, public_model);
         }
         ensure_usage_total_tokens(&mut json);
+        if !self.emit_usage_to_client && usage_object_count > 0 {
+            if chat_usage_only_chunk(&json) {
+                return Vec::new();
+            }
+            remove_usage_field(&mut json);
+        }
 
         let normalized = serde_json::to_vec(&json).unwrap_or_else(|_| data.to_vec());
         let mut output = Vec::with_capacity(line.len() + normalized.len());
@@ -684,6 +700,20 @@ impl SseNormalizer {
         output.extend_from_slice(cr);
         output.extend_from_slice(line_ending);
         output
+    }
+}
+
+fn chat_usage_only_chunk(value: &Value) -> bool {
+    value.get("usage").is_some()
+        && value
+            .get("choices")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+}
+
+fn remove_usage_field(value: &mut Value) {
+    if let Some(object) = value.as_object_mut() {
+        object.remove("usage");
     }
 }
 
@@ -1125,6 +1155,7 @@ pub struct ChatCompletionsSseNormalizer {
     pending_event_name: Option<String>,
     backend_model: Option<String>,
     public_model: Option<String>,
+    emit_usage_to_client: bool,
     response_id: Option<String>,
     created_at: u64,
     model: Option<String>,
@@ -1145,9 +1176,18 @@ struct ChatCompletionStreamToolCall {
 
 impl ChatCompletionsSseNormalizer {
     pub fn new(backend_model: Option<String>, public_model: Option<String>) -> Self {
+        Self::new_with_usage_visibility(backend_model, public_model, true)
+    }
+
+    pub fn new_with_usage_visibility(
+        backend_model: Option<String>,
+        public_model: Option<String>,
+        emit_usage_to_client: bool,
+    ) -> Self {
         Self {
             backend_model,
             public_model,
+            emit_usage_to_client,
             ..Self::default()
         }
     }
@@ -1556,7 +1596,10 @@ impl ChatCompletionsSseNormalizer {
                     "tool_calls"
                 }
             });
-        let usage = response.map(|response| responses_usage_to_chat_usage(response.get("usage")));
+        let usage = self
+            .emit_usage_to_client
+            .then(|| response.map(|response| responses_usage_to_chat_usage(response.get("usage"))))
+            .flatten();
         self.chat_chunk(json!({}), Some(finish_reason), usage)
     }
 

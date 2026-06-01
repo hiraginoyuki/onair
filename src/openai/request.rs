@@ -55,6 +55,7 @@ pub struct RequestShape {
     pub model: Option<String>,
     pub prompt_cache_key: Option<String>,
     pub stream: bool,
+    pub stream_usage_requested: bool,
     pub has_tools: bool,
 }
 
@@ -287,6 +288,10 @@ fn inspect_json_body(body: &[u8]) -> RequestShape {
             .map(str::to_owned),
         stream: value
             .get("stream")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        stream_usage_requested: value
+            .pointer("/stream_options/include_usage")
             .and_then(Value::as_bool)
             .unwrap_or(false),
         has_tools: json_has_tools(&value),

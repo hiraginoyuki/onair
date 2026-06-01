@@ -148,11 +148,56 @@ async fn chat_stream_usage_policy_inserts_upstream_include_usage() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let response_body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(response_body.contains("\"content\":\"chat response\""));
+    assert!(!response_body.contains("\"usage\""), "body={response_body}");
 
     let captured = backend.requests();
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0]["model"], BACKEND_MODEL);
     assert_eq!(captured[0]["stream"], true);
+    assert_eq!(captured[0]["stream_options"]["include_usage"], true);
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn chat_stream_usage_requested_by_client_is_forwarded_to_client() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![test_chat_backend("backend-a", backend.base_url())],
+    );
+    let app = router(state.clone());
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true,
+                "stream_options": {
+                    "include_usage": true
+                }
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    drop(state);
+    let response_body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(response_body.contains("\"usage\""), "body={response_body}");
+    assert!(response_body.contains("\"prompt_tokens\":11"));
+    assert!(response_body.contains("\"completion_tokens\":5"));
+    assert!(response_body.contains("\"total_tokens\":16"));
+
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
     assert_eq!(captured[0]["stream_options"]["include_usage"], true);
 
     backend.abort();
@@ -342,9 +387,9 @@ async fn chat_completions_stream_translates_to_responses_stream_backend() {
     assert!(body.contains("\"model\":\"gpt-public\""));
     assert!(body.contains("\"content\":\"responses response\""));
     assert!(body.contains("\"finish_reason\":\"stop\""));
-    assert!(body.contains("\"prompt_tokens\":13"));
-    assert!(body.contains("\"completion_tokens\":3"));
-    assert!(body.contains("\"total_tokens\":16"));
+    assert!(!body.contains("\"usage\""), "body={body}");
+    assert!(!body.contains("\"prompt_tokens\""), "body={body}");
+    assert!(!body.contains("\"completion_tokens\""), "body={body}");
     assert!(body.contains("data: [DONE]"));
 
     let captured = backend.requests();
@@ -947,7 +992,7 @@ async fn debug_capture_records_stream_usage_diagnostics() {
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     drop(state);
     let response_body = String::from_utf8(bytes.to_vec()).unwrap();
-    assert!(response_body.contains("\"usage\""), "body={response_body}");
+    assert!(!response_body.contains("\"usage\""), "body={response_body}");
 
     let capture_path = only_capture_path(&capture_dir);
     let metadata: Value =

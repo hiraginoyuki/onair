@@ -50,6 +50,7 @@ pub(super) async fn buffered_response(
         labels,
         model_log_fields,
         requested_model: _,
+        client_stream_usage_requested: _,
         request_body_bytes,
         request_timer,
         mut timeline,
@@ -247,6 +248,7 @@ pub(super) fn streaming_response(
         labels,
         model_log_fields,
         requested_model: _,
+        client_stream_usage_requested,
         request_body_bytes,
         request_timer,
         mut timeline,
@@ -311,6 +313,7 @@ pub(super) fn streaming_response(
     let request_mode = route.request_mode;
     let backend_model = route.backend_model;
     let public_model = route.public_model;
+    let emit_usage_to_client = labels.route != "chat_completions" || client_stream_usage_requested;
     let stream = try_stream! {
         let mut stream_metrics = stream_metrics;
         let mut chunks = upstream.bytes_stream();
@@ -321,13 +324,18 @@ pub(super) fn streaming_response(
                     EitherNormalizer::Responses(openai::ResponsesSseNormalizer::new(backend_model, public_model))
                 }
                 openai::RequestMode::ChatCompletionsViaResponses => {
-                    EitherNormalizer::ChatCompletions(openai::ChatCompletionsSseNormalizer::new(
+                    EitherNormalizer::ChatCompletions(openai::ChatCompletionsSseNormalizer::new_with_usage_visibility(
                         backend_model,
                         public_model,
+                        emit_usage_to_client,
                     ))
                 }
                 openai::RequestMode::Native => {
-                    EitherNormalizer::Native(SseNormalizer::new(backend_model, public_model))
+                    EitherNormalizer::Native(SseNormalizer::new_with_usage_visibility(
+                        backend_model,
+                        public_model,
+                        emit_usage_to_client,
+                    ))
                 }
             };
             while let Some(chunk) = next_stream_chunk(&mut chunks, &mut shutdown).await {

@@ -63,8 +63,8 @@ context_length = 131072
 # Optional: tool_schema_mode = "llamacpp_compat" can relax converted Responses tool schemas for llama.cpp chat templates.
 # Optional: responses_store = "force_false" adds store=false to upstream Responses requests when clients omit it.
 # Optional: responses_max_output_tokens = "drop" removes upstream Responses max_output_tokens for wrappers that reject it.
-# Optional: chat_stream_usage = "insert" asks Chat Completions backends for streaming usage chunks when clients omitted it.
-# Use "force_true" only if operator telemetry should override explicit client include_usage=false.
+# Optional: chat_stream_usage = "insert" asks Chat Completions backends for streaming usage chunks for metrics; injected usage chunks are filtered unless the client requested include_usage.
+# Use "force_true" only if operator telemetry should override explicit client include_usage=false upstream; client responses still honor the original opt-in.
 capabilities = ["chat", "responses", "streaming"]
 timeout_ms = 120000
 

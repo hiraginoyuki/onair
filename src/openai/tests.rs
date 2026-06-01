@@ -925,6 +925,29 @@ fn request_inspection_detects_non_empty_tools() {
 }
 
 #[test]
+fn request_inspection_detects_stream_usage_request() {
+    let requested = inspect_request(
+        br#"{"model":"public-model","stream":true,"stream_options":{"include_usage":true}}"#,
+        Some("application/json"),
+        None,
+    );
+    let omitted = inspect_request(
+        br#"{"model":"public-model","stream":true}"#,
+        Some("application/json"),
+        None,
+    );
+    let explicit_false = inspect_request(
+        br#"{"model":"public-model","stream":true,"stream_options":{"include_usage":false}}"#,
+        Some("application/json"),
+        None,
+    );
+
+    assert!(requested.stream_usage_requested);
+    assert!(!omitted.stream_usage_requested);
+    assert!(!explicit_false.stream_usage_requested);
+}
+
+#[test]
 fn responses_request_ignores_null_tools_and_collapses_text_parts() {
     let body = json!({
         "model": "public-model",
@@ -1417,6 +1440,41 @@ fn native_stream_response_adds_missing_total_tokens() {
 }
 
 #[test]
+fn chat_stream_usage_filter_collects_metrics_without_forwarding_usage_chunk() {
+    let mut normalizer = SseNormalizer::new_with_usage_visibility(None, None, false);
+    let chunk = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "model": "public-model",
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 6,
+            "prompt_tokens_details": {
+                "cached_tokens": 1
+            },
+            "completion_tokens": 2,
+            "total_tokens": 8
+        }
+    });
+    let output = normalizer.push(format!("data: {chunk}\n\n").as_bytes());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(!output.contains("\"usage\""), "body={output}");
+    assert!(!output.contains("\"prompt_tokens\""), "body={output}");
+    assert_eq!(normalizer.usage.input, 6);
+    assert_eq!(normalizer.usage.cached_input, 1);
+    assert_eq!(normalizer.usage.output, 2);
+    assert_eq!(normalizer.usage.total, 8);
+    assert_eq!(normalizer.diagnostics.usage_object_count, 1);
+    assert!(
+        normalizer
+            .diagnostics
+            .usage_event_names
+            .contains("chat.completion.chunk")
+    );
+}
+
+#[test]
 fn chat_completion_stream_converts_to_responses_events() {
     let mut normalizer = ResponsesSseNormalizer::new(
         Some("backend-model".to_owned()),
@@ -1550,6 +1608,71 @@ fn responses_stream_converts_text_deltas_to_chat_completion_chunks() {
     assert_eq!(normalizer.usage.cached_input, 2);
     assert_eq!(normalizer.usage.output, 5);
     assert_eq!(normalizer.usage.total, 13);
+}
+
+#[test]
+fn responses_stream_usage_filter_collects_metrics_without_forwarding_chat_usage() {
+    let mut normalizer = ChatCompletionsSseNormalizer::new_with_usage_visibility(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        false,
+    );
+    let created = json!({
+        "type": "response.created",
+        "response": {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 123,
+            "model": "backend-model"
+        }
+    });
+    let delta = json!({
+        "type": "response.output_text.delta",
+        "delta": "hello"
+    });
+    let completed = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 123,
+            "model": "backend-model",
+            "status": "completed",
+            "output": [],
+            "usage": {
+                "input_tokens": 8,
+                "input_tokens_details": {"cached_tokens": 2},
+                "output_tokens": 5,
+                "total_tokens": 13
+            }
+        }
+    });
+
+    let mut output =
+        normalizer.push(format!("event: response.created\ndata: {created}\n\n").as_bytes());
+    output.extend(normalizer.push(format!("data: {delta}\n\n").as_bytes()));
+    output.extend(normalizer.push(format!("data: {completed}\n\n").as_bytes()));
+    output.extend(normalizer.finish());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("\"object\":\"chat.completion.chunk\""));
+    assert!(output.contains("\"model\":\"public-model\""));
+    assert!(output.contains("\"content\":\"hello\""));
+    assert!(output.contains("\"finish_reason\":\"stop\""));
+    assert!(!output.contains("\"usage\""), "body={output}");
+    assert!(!output.contains("\"prompt_tokens\""), "body={output}");
+    assert!(output.contains("data: [DONE]"));
+    assert_eq!(normalizer.usage.input, 8);
+    assert_eq!(normalizer.usage.cached_input, 2);
+    assert_eq!(normalizer.usage.output, 5);
+    assert_eq!(normalizer.usage.total, 13);
+    assert_eq!(normalizer.diagnostics.usage_object_count, 1);
+    assert!(
+        normalizer
+            .diagnostics
+            .usage_event_names
+            .contains("response.completed")
+    );
 }
 
 #[test]
