@@ -1274,7 +1274,7 @@ impl ChatCompletionsSseNormalizer {
             }
             Some("response.output_item.added") => self.process_output_item(event, false),
             Some("response.output_item.done") => self.process_output_item(event, true),
-            Some("response.completed") => {
+            Some("response.completed") | Some("response.incomplete") => {
                 let response = event.get("response");
                 let mut output = self.emit_completed_output_if_needed(response);
                 output.extend(self.finish_response(response));

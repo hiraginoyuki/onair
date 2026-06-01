@@ -1677,6 +1677,56 @@ fn responses_stream_usage_filter_collects_metrics_without_forwarding_chat_usage(
 }
 
 #[test]
+fn responses_stream_incomplete_maps_to_length_finish_reason() {
+    let mut normalizer = ChatCompletionsSseNormalizer::new_with_usage_visibility(None, None, true);
+    let created = json!({
+        "type": "response.created",
+        "response": {
+            "id": "resp_1",
+            "created_at": 123,
+            "model": "public-model"
+        }
+    });
+    let delta = json!({
+        "type": "response.output_text.delta",
+        "delta": "partial"
+    });
+    let incomplete = json!({
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_1",
+            "created_at": 123,
+            "model": "public-model",
+            "status": "incomplete",
+            "incomplete_details": {
+                "reason": "max_output_tokens"
+            },
+            "output": [],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "total_tokens": 3
+            }
+        }
+    });
+
+    let mut output = normalizer.push(format!("data: {created}\n\n").as_bytes());
+    output.extend(normalizer.push(format!("data: {delta}\n\n").as_bytes()));
+    output.extend(normalizer.push(format!("data: {incomplete}\n\n").as_bytes()));
+    output.extend(normalizer.finish());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("\"content\":\"partial\""));
+    assert!(output.contains("\"finish_reason\":\"length\""));
+    assert!(
+        !output.contains("\"finish_reason\":\"stop\""),
+        "body={output}"
+    );
+    assert!(output.contains("\"total_tokens\":3"));
+    assert!(output.contains("data: [DONE]"));
+}
+
+#[test]
 fn responses_stream_converts_function_call_deltas_to_chat_completion_chunks() {
     let mut normalizer = ChatCompletionsSseNormalizer::new_with_usage_visibility(None, None, true);
     let created = json!({
