@@ -16,7 +16,7 @@ use crate::observe::{
     BackendHealthStore, ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
     InspectorStore, InspectorTokenCounts, RequestTimeline, TimelineEvent,
 };
-use crate::openai::{self, SseNormalizer, UsageTotals};
+use crate::openai::{self, SseNormalizer, UsageDiagnostics, UsageTotals};
 
 use super::attempt::InspectorAttemptBuilder;
 use super::inspector::{InspectorRecord, inspector_tokens, record_inspector_request};
@@ -332,17 +332,20 @@ pub(super) fn streaming_response(
                     }
                 };
                 stream_metrics.mark_body_chunk();
-                let normalized = normalizer.push(&chunk);
-                if !normalized.is_empty() {
-                    stream_metrics.add_usage(normalizer.usage());
-                    normalizer.clear_usage();
-                    yield Bytes::from(normalized);
+                    let normalized = normalizer.push(&chunk);
+                    if !normalized.is_empty() {
+                        stream_metrics.add_usage(normalizer.usage());
+                        stream_metrics.add_usage_diagnostics(normalizer.diagnostics());
+                        normalizer.clear_usage();
+                        normalizer.clear_diagnostics();
+                        yield Bytes::from(normalized);
+                    }
                 }
-            }
             stream_metrics.mark_body_complete();
             let tail = normalizer.finish();
             if !tail.is_empty() {
                 stream_metrics.add_usage(normalizer.usage());
+                stream_metrics.add_usage_diagnostics(normalizer.diagnostics());
                 yield Bytes::from(tail);
             }
         } else {
@@ -402,10 +405,24 @@ impl EitherNormalizer {
         }
     }
 
+    fn diagnostics(&self) -> UsageDiagnostics {
+        match self {
+            Self::Native(normalizer) => normalizer.diagnostics.clone(),
+            Self::Responses(normalizer) => normalizer.diagnostics.clone(),
+        }
+    }
+
     fn clear_usage(&mut self) {
         match self {
             Self::Native(normalizer) => normalizer.usage = UsageTotals::default(),
             Self::Responses(normalizer) => normalizer.usage = UsageTotals::default(),
+        }
+    }
+
+    fn clear_diagnostics(&mut self) {
+        match self {
+            Self::Native(normalizer) => normalizer.diagnostics = UsageDiagnostics::default(),
+            Self::Responses(normalizer) => normalizer.diagnostics = UsageDiagnostics::default(),
         }
     }
 }
@@ -435,6 +452,7 @@ struct StreamMetrics {
     current_attempt: Option<InspectorAttemptBuilder>,
     started: Instant,
     usage: UsageTotals,
+    usage_diagnostics: UsageDiagnostics,
     body_complete: bool,
     stream_error_kind: Option<&'static str>,
 }
@@ -491,6 +509,7 @@ impl StreamMetrics {
             current_attempt: init.current_attempt,
             started: Instant::now(),
             usage: UsageTotals::default(),
+            usage_diagnostics: UsageDiagnostics::default(),
             body_complete: false,
             stream_error_kind: None,
         }
@@ -516,6 +535,10 @@ impl StreamMetrics {
         self.usage.cached_input += usage.cached_input;
         self.usage.output += usage.output;
         self.usage.total += usage.total;
+    }
+
+    fn add_usage_diagnostics(&mut self, diagnostics: UsageDiagnostics) {
+        self.usage_diagnostics.merge(diagnostics);
     }
 
     fn mark_stream_error(&mut self, error_kind: &'static str) {
@@ -580,6 +603,9 @@ impl Drop for StreamMetrics {
             input_tokens = self.usage.input,
             cached_input_tokens = self.usage.cached_input,
             output_tokens = self.usage.output,
+            total_tokens = self.usage.total,
+            stream_usage_object_count = self.usage_diagnostics.usage_object_count,
+            stream_usage_keys = ?self.usage_diagnostics.usage_keys,
             "streaming response completed"
         );
         let inspector_outcome = match self.stream_error_kind {
@@ -599,6 +625,7 @@ impl Drop for StreamMetrics {
                 .record_success(&self.labels.backend, duration, self.status_code);
         }
         if let Some(capture) = &mut self.debug_capture {
+            capture.record_stream_usage(self.usage_diagnostics.clone());
             let capture_outcome = match self.stream_error_kind {
                 Some(error_kind) => CaptureOutcome::UpstreamStreamFailed {
                     upstream_status: self.status_code,

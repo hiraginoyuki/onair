@@ -966,6 +966,56 @@ fn native_json_response_adds_missing_total_tokens() {
 }
 
 #[test]
+fn extract_usage_observation_collects_usage_keys() {
+    let observation = extract_usage_observation(&json!({
+        "outer": {
+            "usage": {
+                "prompt_tokens": 4,
+                "prompt_tokens_details": {
+                    "cached_tokens": 1
+                },
+                "completion_tokens": 2,
+                "total_tokens": 6
+            }
+        },
+        "inner": [
+            {
+                "usage": {
+                    "input_tokens": 3,
+                    "input_tokens_details": {
+                        "cached_tokens": 2
+                    },
+                    "output_tokens": 5
+                }
+            }
+        ]
+    }));
+
+    assert_eq!(observation.diagnostics.usage_object_count, 2);
+    assert!(observation.diagnostics.usage_keys.contains("prompt_tokens"));
+    assert!(observation.diagnostics.usage_keys.contains("input_tokens"));
+    assert!(
+        observation
+            .diagnostics
+            .usage_keys
+            .contains("completion_tokens")
+    );
+    assert!(observation.diagnostics.usage_keys.contains("output_tokens"));
+    assert!(
+        observation
+            .diagnostics
+            .usage_keys
+            .contains("prompt_tokens_details")
+    );
+    assert!(
+        observation
+            .diagnostics
+            .usage_keys
+            .contains("input_tokens_details")
+    );
+}
+
+#[test]
 fn native_stream_response_adds_missing_total_tokens() {
     let mut normalizer = SseNormalizer::new(None, None);
     let chunk = json!({
@@ -984,6 +1034,14 @@ fn native_stream_response_adds_missing_total_tokens() {
     assert_eq!(normalizer.usage.input, 6);
     assert_eq!(normalizer.usage.output, 2);
     assert_eq!(normalizer.usage.total, 8);
+    assert_eq!(normalizer.diagnostics.usage_object_count, 1);
+    assert!(normalizer.diagnostics.usage_keys.contains("prompt_tokens"));
+    assert!(
+        normalizer
+            .diagnostics
+            .usage_keys
+            .contains("completion_tokens")
+    );
 }
 
 #[test]

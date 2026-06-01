@@ -13,6 +13,7 @@ use tracing::warn;
 
 use crate::config::{DebugCaptureConfig, DebugCaptureMode};
 use crate::metrics::MetricLabels;
+use crate::openai::UsageDiagnostics;
 
 const INBOUND_BODY_FILE: &str = "inbound.body";
 const UPSTREAM_BODY_FILE: &str = "upstream.body";
@@ -78,6 +79,18 @@ impl RequestCapture {
         }
     }
 
+    pub fn record_stream_usage(&mut self, diagnostics: UsageDiagnostics) {
+        self.metadata.stream_usage = diagnostics;
+        if let Err(error) = self.write_metadata() {
+            warn!(
+                capture_id = %self.metadata.id,
+                directory = %self.directory.display(),
+                ?error,
+                "failed to update debug capture stream usage metadata"
+            );
+        }
+    }
+
     fn write_upstream_error_response(
         &mut self,
         upstream_status: u16,
@@ -133,6 +146,7 @@ struct CaptureMetadata {
     upstream_error_body_bytes: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     upstream_error_body_truncated: Option<bool>,
+    stream_usage: UsageDiagnostics,
     files: CaptureFiles,
     outcome: CaptureOutcome,
 }
@@ -292,6 +306,7 @@ fn create_capture(
         upstream_error_content_type: None,
         upstream_error_body_bytes: None,
         upstream_error_body_truncated: None,
+        stream_usage: UsageDiagnostics::default(),
         files: CaptureFiles {
             inbound_body: INBOUND_BODY_FILE,
             upstream_body: UPSTREAM_BODY_FILE,

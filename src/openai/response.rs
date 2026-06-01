@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use super::request::{RequestMode, looks_like_json};
@@ -268,25 +269,54 @@ impl UsageTotals {
     }
 }
 
-pub fn extract_usage(value: &Value) -> UsageTotals {
-    let mut totals = UsageTotals::default();
-    collect_usage(value, &mut totals);
-    totals
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct UsageDiagnostics {
+    pub usage_object_count: u64,
+    pub usage_keys: BTreeSet<String>,
 }
 
-fn collect_usage(value: &Value, totals: &mut UsageTotals) {
+impl UsageDiagnostics {
+    fn observe_object(&mut self, object: &Map<String, Value>) {
+        self.usage_object_count += 1;
+        self.usage_keys.extend(object.keys().cloned());
+    }
+
+    pub fn merge(&mut self, other: UsageDiagnostics) {
+        self.usage_object_count += other.usage_object_count;
+        self.usage_keys.extend(other.usage_keys);
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct UsageObservation {
+    pub totals: UsageTotals,
+    pub diagnostics: UsageDiagnostics,
+}
+
+pub fn extract_usage(value: &Value) -> UsageTotals {
+    extract_usage_observation(value).totals
+}
+
+pub fn extract_usage_observation(value: &Value) -> UsageObservation {
+    let mut observation = UsageObservation::default();
+    collect_usage(value, &mut observation);
+    observation
+}
+
+fn collect_usage(value: &Value, observation: &mut UsageObservation) {
     match value {
         Value::Object(object) => {
             if let Some(usage) = object.get("usage").and_then(Value::as_object) {
-                add_usage_object(usage, totals);
+                observation.diagnostics.observe_object(usage);
+                add_usage_object(usage, &mut observation.totals);
             }
             for value in object.values() {
-                collect_usage(value, totals);
+                collect_usage(value, observation);
             }
         }
         Value::Array(values) => {
             for value in values {
-                collect_usage(value, totals);
+                collect_usage(value, observation);
             }
         }
         _ => {}
@@ -321,6 +351,7 @@ fn nested_number_field(object: &Map<String, Value>, parent: &str, field: &str) -
 pub struct SseNormalizer {
     pending: Vec<u8>,
     pub usage: UsageTotals,
+    pub diagnostics: UsageDiagnostics,
     backend_model: Option<String>,
     public_model: Option<String>,
 }
@@ -382,11 +413,12 @@ impl SseNormalizer {
         let Ok(mut json) = serde_json::from_slice::<Value>(data) else {
             return line.to_vec();
         };
-        let usage = extract_usage(&json);
-        self.usage.input += usage.input;
-        self.usage.cached_input += usage.cached_input;
-        self.usage.output += usage.output;
-        self.usage.total += usage.total;
+        let observation = extract_usage_observation(&json);
+        self.usage.input += observation.totals.input;
+        self.usage.cached_input += observation.totals.cached_input;
+        self.usage.output += observation.totals.output;
+        self.usage.total += observation.totals.total;
+        self.diagnostics.merge(observation.diagnostics);
         if let (Some(backend_model), Some(public_model)) = (&self.backend_model, &self.public_model)
         {
             rewrite_response_models(&mut json, backend_model, public_model);
@@ -410,6 +442,7 @@ impl SseNormalizer {
 pub struct ResponsesSseNormalizer {
     pending: Vec<u8>,
     pub usage: UsageTotals,
+    pub diagnostics: UsageDiagnostics,
     backend_model: Option<String>,
     public_model: Option<String>,
     response_id: Option<String>,
@@ -481,11 +514,12 @@ impl ResponsesSseNormalizer {
         let Ok(mut chunk) = serde_json::from_slice::<Value>(data) else {
             return line.to_vec();
         };
-        let usage = extract_usage(&chunk);
-        self.usage.input += usage.input;
-        self.usage.cached_input += usage.cached_input;
-        self.usage.output += usage.output;
-        self.usage.total += usage.total;
+        let observation = extract_usage_observation(&chunk);
+        self.usage.input += observation.totals.input;
+        self.usage.cached_input += observation.totals.cached_input;
+        self.usage.output += observation.totals.output;
+        self.usage.total += observation.totals.total;
+        self.diagnostics.merge(observation.diagnostics);
         if let (Some(backend_model), Some(public_model)) = (&self.backend_model, &self.public_model)
         {
             rewrite_response_models(&mut chunk, backend_model, public_model);

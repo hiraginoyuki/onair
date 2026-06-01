@@ -135,6 +135,7 @@ async fn chat_stream_usage_policy_inserts_upstream_include_usage() {
     let app = router(state);
 
     let response = app
+        .clone()
         .oneshot(json_request(
             "/v1/chat/completions",
             json!({
@@ -803,6 +804,60 @@ async fn debug_capture_failures_mode_skips_success_and_captures_upstream_error()
     assert!(metadata["id"].as_str().unwrap().len() > 10);
 
     error_backend.abort();
+    std::fs::remove_dir_all(capture_dir).unwrap();
+}
+
+#[tokio::test]
+async fn debug_capture_records_stream_usage_diagnostics() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let capture_dir = temp_capture_dir("stream-usage");
+    let mut backend_config = test_chat_backend("backend-a", backend.base_url());
+    backend_config.chat_stream_usage = ChatStreamUsagePolicy::Insert;
+    backend_config.models[0].chat_stream_usage = ChatStreamUsagePolicy::Insert;
+    let state = test_state_with_debug_capture(
+        RoutingStrategy::Priority,
+        vec![backend_config],
+        DebugCaptureConfig {
+            enabled: true,
+            mode: DebugCaptureMode::All,
+            directory: capture_dir.clone(),
+        },
+    );
+    let app = router(state.clone());
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    drop(state);
+    let response_body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(response_body.contains("\"usage\""), "body={response_body}");
+
+    let capture_path = only_capture_path(&capture_dir);
+    let metadata: Value =
+        serde_json::from_slice(&std::fs::read(capture_path.join("metadata.json")).unwrap())
+            .unwrap();
+    assert_eq!(metadata["outcome"]["kind"], "stream_completed");
+    assert_eq!(metadata["outcome"]["input_tokens"], 11);
+    assert_eq!(metadata["outcome"]["cached_input_tokens"], 2);
+    assert_eq!(metadata["outcome"]["output_tokens"], 5);
+    assert_eq!(metadata["stream_usage"]["usage_object_count"], 1);
+    let usage_keys = metadata["stream_usage"]["usage_keys"].as_array().unwrap();
+    assert!(usage_keys.iter().any(|key| key == "prompt_tokens"));
+    assert!(usage_keys.iter().any(|key| key == "completion_tokens"));
+    assert!(usage_keys.iter().any(|key| key == "total_tokens"));
+
+    backend.abort();
     std::fs::remove_dir_all(capture_dir).unwrap();
 }
 
@@ -1877,31 +1932,89 @@ async fn slow_backend_responses(
 async fn backend_chat_completions(
     State(state): State<BackendState>,
     Json(payload): Json<Value>,
-) -> Json<Value> {
+) -> Response<Body> {
     state.hits.fetch_add(1, Ordering::SeqCst);
     state.requests.lock().unwrap().push(payload.clone());
-    Json(json!({
-        "id": format!("chatcmpl_{}", state.name),
-        "object": "chat.completion",
-        "created": 123,
-        "model": payload["model"],
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": "chat response"
-            },
-            "finish_reason": "stop"
-        }],
-        "usage": {
-            "prompt_tokens": 11,
-            "prompt_tokens_details": {
-                "cached_tokens": 2
-            },
-            "completion_tokens": 5,
-            "total_tokens": 16
+
+    if payload.get("stream").and_then(Value::as_bool) == Some(true) {
+        let model = payload
+            .get("model")
+            .cloned()
+            .unwrap_or_else(|| Value::String("unknown".to_owned()));
+        let mut body = String::new();
+        body.push_str(&format!(
+            "data: {}\n\n",
+            json!({
+                "id": format!("chatcmpl_{}", state.name),
+                "object": "chat.completion.chunk",
+                "created": 123,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "content": "chat response"
+                    },
+                    "finish_reason": null
+                }]
+            })
+        ));
+        if payload.pointer("/stream_options/include_usage") == Some(&Value::Bool(true)) {
+            body.push_str(&format!(
+                "data: {}\n\n",
+                json!({
+                    "id": format!("chatcmpl_{}", state.name),
+                    "object": "chat.completion.chunk",
+                    "created": 123,
+                    "model": payload["model"],
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 11,
+                        "prompt_tokens_details": {
+                            "cached_tokens": 2
+                        },
+                        "completion_tokens": 5,
+                        "total_tokens": 16
+                    }
+                })
+            ));
         }
-    }))
+        body.push_str("data: [DONE]\n\n");
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(body))
+            .unwrap();
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+            "id": format!("chatcmpl_{}", state.name),
+            "object": "chat.completion",
+            "created": 123,
+            "model": payload["model"],
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "chat response"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 11,
+                "prompt_tokens_details": {
+                    "cached_tokens": 2
+                },
+                "completion_tokens": 5,
+                "total_tokens": 16
+            }
+                })
+            .to_string(),
+        ))
+        .unwrap()
 }
 
 async fn redirect_responses() -> Response<Body> {
