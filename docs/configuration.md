@@ -1,0 +1,200 @@
+# Configuration
+
+Configuration is TOML. Start from the example:
+
+```sh
+cp onair.example.toml onair.toml
+cargo run -- --config onair.toml
+```
+
+The config path comes from `--config`, `-c`, or `ONAIR_CONFIG`. If none is
+provided, onair reads `onair.toml` from the current directory.
+
+## Core Sections
+
+```toml
+[server]
+bind = "127.0.0.1:8080"
+request_body_limit_bytes = 2097152
+# Only trust Forwarded/X-Forwarded-For/X-Real-IP from these immediate peer CIDRs.
+trusted_proxy_cidrs = []
+
+[telemetry]
+service_name = "onair"
+exporter = "none" # or "otlp"
+otlp_endpoint = "http://127.0.0.1:4317"
+export_interval_ms = 30000
+
+[debug_capture]
+# Dangerous: captures exact prompt/request bodies to local files. Enable only while reproducing.
+enabled = false
+directory = "onair-debug-captures"
+
+[inspector]
+# Disabled by default. Serves /_onair/inspector when enabled.
+enabled = false
+retention_requests = 10000
+allow_remote = false
+
+[health]
+# Disabled by default because probes send requests to configured backends.
+active = false
+interval_ms = 30000
+timeout_ms = 2000
+path = "/v1/models"
+
+[routing]
+# "priority" chooses the first matching backend. "sticky" hashes identity/path/model/prompt_cache_key
+# across all matching backends, improving prompt-cache locality when several backends serve a model.
+# fallback_attempts tries extra compatible backends after a pre-response connect/send/timeout failure.
+strategy = "priority"
+fallback_attempts = 1
+
+[access]
+default_models = ["gpt-4o-mini"]
+
+[[client]]
+id = "dev"
+api_key_env = "ONAIR_DEV_API_KEY"
+
+[[backend]]
+id = "local-vllm"
+base_url = "http://127.0.0.1:8000"
+api_key_env = "LOCAL_VLLM_API_KEY"
+context_length = 131072
+capabilities = ["chat", "responses", "streaming", "tools"]
+timeout_ms = 120000
+
+[[backend.model]]
+public = "gpt-4o-mini"
+backend = "llama-3.1-8b-instruct"
+context_length = "inherit"
+endpoints = ["chat", "responses"]
+```
+
+onair interprets the file as routing and visibility policy:
+
+- `[server]`, `[telemetry]`, `[debug_capture]`, `[inspector]`, and `[health]`
+  configure process-level behavior.
+- `[access].default_models` grants public models to every configured client.
+- Each `[[client]]` adds one authenticated identity and may extend that
+  identity's model whitelist.
+- Each `[[backend]]` defines one upstream OpenAI-compatible service plus
+  capability markers that decide which `/v1/*` request families it can
+  receive.
+- Each `[[backend.model]]` maps one public model name to the backend model name
+  that upstream should receive.
+- `[routing]` chooses how to select among multiple compatible backend routes
+  and how many fallback attempts to allow before response commitment.
+
+See [routing.md](routing.md) for capability and endpoint marker semantics.
+See [observability.md](observability.md) for telemetry, debug capture,
+inspector, and health details.
+
+## Hot Reload
+
+onair watches the config file's parent directory and reloads the config when
+the file changes. Save bursts and atomic replacement writes are debounced
+before loading. Reloads are validated before they are applied, and invalid TOML
+or invalid model/client/backend rules keep the previous config active.
+
+Reloaded immediately:
+
+- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`,
+  `[routing]`, `[debug_capture]`, `[inspector]`, `[health]`,
+  `[server].trusted_proxy_cidrs`, backend auth, model mappings, capabilities,
+  timeouts, context metadata, client-address trust policy, debug capture
+  settings, inspector settings, and health probe settings.
+
+Restart required:
+
+- `[server].bind`, `[server].request_body_limit_bytes`, and `[telemetry]`
+  exporter settings.
+
+## Access Rules
+
+- Every `[[client]]` must have `api_key` or `api_key_env`.
+- A client's effective model whitelist is `[access].default_models` union
+  `[[client]].models`.
+- `/v1/models` only lists the authenticated client's effective whitelist
+  intersected with configured backend routes.
+- `/v1/models/{model}` only returns model objects for authenticated clients
+  that can access that configured public model.
+- Requests for models outside the effective whitelist return `404`,
+  intentionally indistinguishable from a missing model.
+- Requests for whitelisted models with no compatible backend route also return
+  `404`.
+- For model-bearing requests, onair detects `model` in JSON bodies,
+  URL-encoded forms, multipart form fields, and query strings.
+- Public model IDs are rewritten to backend model IDs in JSON bodies,
+  URL-encoded forms, multipart form fields, and query strings before
+  forwarding.
+
+## Client Address Logging
+
+onair logs the immediate socket peer address for proxied requests. If onair is
+behind a trusted reverse proxy, set `[server].trusted_proxy_cidrs` to the proxy
+source CIDRs to allow `Forwarded`, `X-Forwarded-For`, or `X-Real-IP` to
+populate `effective_client_addr` in logs. Forwarded headers are ignored by
+default and are also ignored when the immediate peer is not trusted.
+
+For appended `Forwarded` or `X-Forwarded-For` chains, onair uses the closest
+valid IP/socket hop instead of the leftmost value so client-supplied spoofed
+entries are not treated as authoritative. Configure the trusted proxy to
+overwrite forwarded headers if logs should show the original external client
+rather than the client seen by that proxy.
+
+Repeated `Forwarded` or `X-Forwarded-For` header lines are treated as one
+chain and resolved the same way: the closest valid hop wins.
+
+## Context Length
+
+- `[[backend]].context_length` sets a backend-level default context length for
+  inheritance.
+- `[[backend.model]].context_length = "inherit"` copies the backend-level
+  value into llama.cpp-style public metadata.
+- `[[backend.model]].context_length = <integer>` returns a specific value for
+  that public model.
+- `[[backend.model]].context_length = "none"` or omitting the field entirely
+  hides the value, which is the default OpenAI-compatible behavior.
+- If you use `"inherit"` without a backend-level `context_length`, config
+  loading fails.
+- When visible, `/v1/models` and `/v1/models/{model}` expose the value as
+  `meta.n_ctx` and `meta.n_ctx_train`, matching llama.cpp's OpenAI-compatible
+  model object shape.
+- `/props?model=<public-model>` and `/v1/props?model=<public-model>` expose
+  the runtime context as `default_generation_settings.n_ctx`, matching
+  llama.cpp's props endpoint shape.
+
+## API Keys
+
+Clients authenticate with OpenAI-style bearer tokens:
+
+```http
+Authorization: Bearer <generated-onair-client-key>
+```
+
+The recommended onair key shape is:
+
+```text
+sk-ona-<fixed-ed25519-style-prefix><43 base64url characters>
+```
+
+The fixed `AAAAC3NzaC1lZDI1NTE5AAAAI` prefix mimics the start of the SSH
+`ssh-ed25519` public-key wire blob: length-prefixed algorithm name plus the
+length prefix for a 32-byte public key. The 43-character suffix should encode
+32 random bytes using unpadded base64url, matching the random portion length
+of an Ed25519 public key blob. That gives `2^256` possible suffix values,
+approximately `1.16e77`, before accounting for any generator mistakes or
+operational leakage.
+
+Example generator:
+
+```sh
+python3 - <<'PY'
+import base64, secrets
+prefix = "sk-ona-" + "AAAAC3NzaC1lZDI1NTE5AAAAI"
+suffix = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+print(prefix + suffix)
+PY
+```
