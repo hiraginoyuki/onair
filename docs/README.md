@@ -10,8 +10,9 @@ Planned work belongs in [../ROADMAP.md](../ROADMAP.md).
   path, hot reload, access rules, client address handling, context metadata,
   and API key guidance.
 - [routing.md](routing.md): endpoint/capability markers, compatibility
-  routing, route policies, sticky routing, fallback attempts, prompt caching,
-  and request conversion policy.
+  routing, route policies, sticky / round-robin / weighted-random
+  strategies, fallback attempts, prompt caching, and request conversion
+  policy.
 - [observability.md](observability.md): metrics, debug capture,
   inspector/operator endpoints, health probes, and logging.
 - [security.md](security.md): backend anonymity boundary, sanitized

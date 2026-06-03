@@ -80,6 +80,14 @@ restore the latest retained records after process restart when
 audit log. Store the database at a private, ignored local path and treat the
 database, `-wal`, and `-shm` sidecar files as sensitive local artifacts.
 
+The persistence writer tightens the database file to mode `0o600` only when
+it creates the file for the first time. The `-wal` and `-shm` sidecar files
+that SQLite creates next to the database inherit the process umask and are
+not separately restricted. The example path `.local/inspector.sqlite` keeps
+the sidecars private as long as the `.local/` directory itself is mode
+`0o700`. Operators choosing a different path should ensure the parent
+directory is not world-readable or world-writable.
+
 Increase `retention_requests` only as much as needed; config loading rejects
 values above `100000` to avoid accidental unbounded memory growth or persisted
 metadata growth.

@@ -13,12 +13,13 @@ These items are ordered roughly by dependency and operator value, not by impleme
 - Opt-in debug capture with private filesystem permissions for exact request-body troubleshooting.
 - Backend health snapshots from proxied traffic and optional active probes.
 - Conservative retry/fallback before response commitment for pre-response connect/send/timeout failures.
+- Default-off SQLite persistence for the latest retained inspector records, with restart recovery and per-process writer-thread panic logging. Bodies are still excluded from inspector records.
+- Round-robin and weighted-random routing strategies for spreading traffic across multiple backends that serve the same public model.
 
 ## Priority 1
 
 - Capability-aware health probes beyond the generic configured health path.
 - Health-aware routing, circuit breakers, and richer retry policies such as status-code-specific fallback.
-- Weighted backend selection for compatible routes.
 
 ## Priority 2
 

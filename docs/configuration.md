@@ -51,6 +51,8 @@ path = "/v1/models"
 [routing]
 # "priority" chooses the first matching backend. "sticky" hashes identity/path/model/prompt_cache_key
 # across all matching backends, improving prompt-cache locality when several backends serve a model.
+# "round_robin" cycles the primary backend per model across compatible backends. "weighted_random" uses
+# [[backend]].weight to bias primary selection. See docs/routing.md for the full strategy matrix.
 # fallback_attempts tries extra compatible backends after a pre-response connect/send/timeout failure.
 strategy = "priority"
 fallback_attempts = 1

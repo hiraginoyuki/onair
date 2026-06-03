@@ -55,7 +55,9 @@ current behavior and points to detailed operator/contributor references under
   can request usage chunks when clients omit that request option.
 - A disabled-by-default local inspector can retain recent request metadata
   and render live timing timelines and backend-attempt waterfalls in a
-  browser without storing prompt or completion bodies.
+  browser without storing prompt or completion bodies. Optional
+  default-off SQLite persistence restores the latest retained records
+  after a process restart.
 
 ## Quick Start
 
@@ -124,8 +126,9 @@ endpoints = ["chat_completions_via_responses", "tools"]
 ```
 
 See [docs/routing.md](docs/routing.md) for capability markers, native
-preference, compatibility conversions, route-level policies, sticky routing,
-fallback attempts, prompt caching, and tool-call constraints.
+preference, compatibility conversions, route-level policies, sticky /
+round-robin / weighted-random strategies, fallback attempts, prompt caching,
+and tool-call constraints.
 
 ## Documentation
 
@@ -133,8 +136,9 @@ fallback attempts, prompt caching, and tool-call constraints.
   startup config path, hot reload, access rules, client address handling,
   context metadata, and API key guidance.
 - [docs/routing.md](docs/routing.md): endpoint/capability markers,
-  compatibility routing, route policies, sticky routing, fallback attempts,
-  prompt caching, and request conversion policy.
+  compatibility routing, route policies, sticky / round-robin /
+  weighted-random strategies, fallback attempts, prompt caching, and
+  request conversion policy.
 - [docs/observability.md](docs/observability.md): metrics, debug capture,
   inspector/operator endpoints, health probes, and logging.
 - [docs/security.md](docs/security.md): backend anonymity boundary, sanitized
