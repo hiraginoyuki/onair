@@ -1700,6 +1700,7 @@ async fn models_respect_context_length_output_policy() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![
                 ModelRoute {
                     public: PUBLIC_MODEL.to_owned(),
@@ -1911,6 +1912,7 @@ fn test_backend(id: &str, base_url: String) -> ResolvedBackend {
         responses_store: ResponsesStorePolicy::Preserve,
         responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
         chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        weight: 1,
         models: vec![ModelRoute {
             public: PUBLIC_MODEL.to_owned(),
             backend: BACKEND_MODEL.to_owned(),
@@ -1935,6 +1937,7 @@ fn test_chat_backend(id: &str, base_url: String) -> ResolvedBackend {
         responses_store: ResponsesStorePolicy::Preserve,
         responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
         chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        weight: 1,
         models: vec![ModelRoute {
             public: PUBLIC_MODEL.to_owned(),
             backend: BACKEND_MODEL.to_owned(),

@@ -382,6 +382,8 @@ pub struct BackendConfig {
     pub capabilities: BTreeSet<String>,
     #[serde(rename = "model")]
     pub models: Vec<ModelRouteConfig>,
+    #[serde(default = "one_u32")]
+    pub weight: u32,
 }
 
 impl Default for BackendConfig {
@@ -399,8 +401,13 @@ impl Default for BackendConfig {
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             capabilities: BTreeSet::new(),
             models: Vec::new(),
+            weight: 1,
         }
     }
+}
+
+fn one_u32() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -489,6 +496,7 @@ pub struct ResolvedBackend {
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub chat_stream_usage: ChatStreamUsagePolicy,
     pub models: Vec<ModelRoute>,
+    pub weight: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -570,6 +578,12 @@ impl Config {
                     backend.id
                 )));
             }
+            if backend.weight == 0 {
+                return Err(Error::Config(format!(
+                    "backend '{}' weight must be greater than zero",
+                    backend.id
+                )));
+            }
             let base_url = normalize_backend_base_url(&backend.base_url, &backend.id)?;
             let api_key = resolve_optional_secret(backend.api_key, backend.api_key_env)?;
             let models = backend
@@ -618,6 +632,7 @@ impl Config {
                 responses_max_output_tokens: backend.responses_max_output_tokens,
                 chat_stream_usage: backend.chat_stream_usage,
                 models,
+                weight: backend.weight,
             });
         }
 

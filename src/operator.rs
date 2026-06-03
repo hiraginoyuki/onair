@@ -104,6 +104,7 @@ pub(crate) struct BackendSnapshot {
     pub(crate) responses_max_output_tokens: crate::config::ResponsesMaxOutputTokensPolicy,
     pub(crate) chat_stream_usage: crate::config::ChatStreamUsagePolicy,
     pub(crate) capabilities: Vec<String>,
+    pub(crate) weight: u32,
     pub(crate) models: Vec<BackendModelSnapshot>,
 }
 
@@ -328,6 +329,7 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
         responses_max_output_tokens: backend.responses_max_output_tokens,
         chat_stream_usage: backend.chat_stream_usage,
         capabilities: sorted_strings(&backend.capabilities),
+        weight: backend.weight,
         models: backend
             .models
             .iter()

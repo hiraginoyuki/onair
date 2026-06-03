@@ -515,6 +515,7 @@ mod tests {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
@@ -555,6 +556,7 @@ mod tests {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
@@ -598,6 +600,7 @@ mod tests {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
@@ -638,6 +641,7 @@ mod tests {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
@@ -681,6 +685,7 @@ mod tests {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
@@ -724,6 +729,7 @@ mod tests {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
@@ -764,6 +770,7 @@ mod tests {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
@@ -807,6 +814,7 @@ mod tests {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "unsupported-private".to_owned(),
@@ -828,6 +836,7 @@ mod tests {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "supported-private".to_owned(),
@@ -867,6 +876,7 @@ mod tests {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "plain-private".to_owned(),
@@ -917,6 +927,7 @@ mod tests {
                 chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 endpoints: btree_set(["responses"]),
             }],
+            weight: 1,
         }
     }
 
