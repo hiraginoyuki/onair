@@ -40,7 +40,9 @@ timeout_ms = 2000
 path = "/v1/models"
 
 [routing]
-# Use "sticky" when multiple matching backends should share load while preserving prompt-cache affinity.
+# Use "sticky" to keep prompt-cache-affinity on one backend per key.
+# Use "round_robin" to cycle the primary backend per model across matching backends.
+# Use "weighted_random" to bias primary selection with [[backend]].weight values.
 strategy = "priority"
 # Extra compatible backends to try after a pre-response connect/send/timeout failure. Set 0 to disable.
 fallback_attempts = 1
@@ -61,6 +63,8 @@ base_url = "http://127.0.0.1:8000"
 # api_key_env = "LOCAL_VLLM_API_KEY"
 # Optional backend-level value for model routes that use context_length = "inherit".
 context_length = 131072
+# Optional: weight biases selection under strategy = "weighted_random". Default is 1; must be > 0.
+# weight = 1
 # Use ["all", "streaming"] for a backend that should receive any native OpenAI-compatible /v1/* route it supports.
 # Compatibility routes require explicit markers:
 # - "responses_via_chat_completions" for client /v1/responses -> upstream /v1/chat/completions.

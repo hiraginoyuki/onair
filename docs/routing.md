@@ -120,6 +120,14 @@ serve client `/v1/chat/completions` through compatibility.
 
 ## Route Policies
 
+`[[backend]].weight` biases backend selection under
+`[routing].strategy = "weighted_random"`. The default is `1`, and
+`weight = 0` is rejected at config load. Weights are only consulted when
+the strategy is `weighted_random`; `priority`, `sticky`, and
+`round_robin` treat every backend as equally eligible. Weights are
+integers; higher weight means higher probability of selection, and equal
+weights produce uniform random selection.
+
 `[[backend]].tool_schema_mode` controls only the Responses-to-Chat
 compatibility conversion for function-tool schemas. The default, `preserve`,
 forwards the schema shape the client sent after wrapping Responses function
@@ -185,6 +193,33 @@ public model and you want cache-heavy traffic to keep landing on the same
 backend. The sticky key is derived from identity, path, public model, and
 `prompt_cache_key` when provided. The router still forwards
 `prompt_cache_key` and `prompt_cache_retention` unchanged.
+
+### Round-Robin Strategy
+
+Set `[routing].strategy = "round_robin"` to cycle the primary backend
+across the compatible candidates for each request. The router keeps an
+in-process counter per public model (or per request path for model-less
+endpoints such as `/v1/embeddings`), so a busy model does not advance
+another model's pointer. Counters are not shared between onair
+instances; each process cycles its candidates independently. Counter
+entries are created lazily and persist for the process lifetime; they
+are not freed when a model is removed from config.
+
+The rotated ordering means the fallback list also rotates. The same
+set of compatible backends remains reachable as fallbacks, but their
+order changes per request.
+
+### Weighted-Random Strategy
+
+Set `[routing].strategy = "weighted_random"` to pick a primary backend
+per request using each candidate's `[[backend]].weight` value. Weights
+are summed, and a uniformly random integer in `[0, total)` selects the
+primary. Higher `weight` raises the probability of selection. `weight =
+0` is rejected at config load; equal weights produce uniform random
+selection. The rotated ordering means the fallback list also rotates in
+the same way as the other strategies.
+
+### Fallback
 
 `[routing].fallback_attempts` adds a limited number of extra backend tries
 after a pre-response connect/send/timeout failure.
