@@ -16,7 +16,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::error::{Error, Result};
-use crate::observe::{IpCidr, debug_capture, inspector};
+use crate::observe::{ContextSizeCache, IpCidr, debug_capture, inspector};
 
 const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
@@ -375,7 +375,6 @@ pub struct BackendConfig {
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
     pub timeout_ms: u64,
-    pub context_length: Option<u64>,
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
@@ -396,7 +395,6 @@ impl Default for BackendConfig {
             api_key: None,
             api_key_env: None,
             timeout_ms: 120_000,
-            context_length: None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -483,7 +481,18 @@ impl Default for ContextLengthConfig {
 #[serde(rename_all = "snake_case")]
 pub enum ContextLengthMode {
     None,
-    Inherit,
+    Upstream,
+}
+
+#[derive(Debug, Clone)]
+pub enum ContextLengthPolicy {
+    None,
+    Static(u64),
+    #[allow(dead_code)]
+    Upstream {
+        backend_id: String,
+        backend_model: String,
+    },
 }
 
 #[derive(Clone)]
@@ -505,7 +514,7 @@ pub struct ResolvedBackend {
 pub struct ModelRoute {
     pub public: String,
     pub backend: String,
-    pub context_length: Option<u64>,
+    pub context_length: ContextLengthPolicy,
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
@@ -599,11 +608,14 @@ impl Config {
                         )));
                     }
                     public_models.insert(model.public.clone());
-                    let context_length = resolve_context_length(
+                    let backend_model = model
+                        .backend
+                        .clone()
+                        .unwrap_or_else(|| model.public.clone());
+                    let context_length = resolve_context_length_policy(
                         &model.context_length,
-                        backend.context_length,
                         &backend.id,
-                        &model.public,
+                        &backend_model,
                     )?;
                     Ok(ModelRoute {
                         backend: model.backend.unwrap_or_else(|| model.public.clone()),
@@ -662,9 +674,31 @@ impl Config {
         let mut models = BTreeMap::new();
         for backend in &self.backends {
             for model in &backend.models {
-                models
-                    .entry(model.public.clone())
-                    .or_insert(model.context_length);
+                let value = match &model.context_length {
+                    ContextLengthPolicy::None => None,
+                    ContextLengthPolicy::Static(value) => Some(*value),
+                    ContextLengthPolicy::Upstream { .. } => None,
+                };
+                models.entry(model.public.clone()).or_insert(value);
+            }
+        }
+        models
+    }
+
+    #[allow(dead_code)]
+    pub fn public_model_context_lengths_with_cache(
+        &self,
+        cache: &ContextSizeCache,
+    ) -> BTreeMap<String, Option<u64>> {
+        let mut models = BTreeMap::new();
+        for backend in &self.backends {
+            for model in &backend.models {
+                let value = match &model.context_length {
+                    ContextLengthPolicy::None => None,
+                    ContextLengthPolicy::Static(value) => Some(*value),
+                    ContextLengthPolicy::Upstream { .. } => cache.lookup(&model.public),
+                };
+                models.entry(model.public.clone()).or_insert(value);
             }
         }
         models
@@ -759,23 +793,20 @@ fn validate_routing_config(config: &RoutingConfig) -> Result<()> {
     Ok(())
 }
 
-fn resolve_context_length(
+fn resolve_context_length_policy(
     config: &ContextLengthConfig,
-    backend_context_length: Option<u64>,
     backend_id: &str,
-    public_model: &str,
-) -> Result<Option<u64>> {
+    backend_model: &str,
+) -> Result<ContextLengthPolicy> {
     match config {
-        ContextLengthConfig::Value(value) => Ok(Some(*value)),
-        ContextLengthConfig::Mode(ContextLengthMode::None) => Ok(None),
-        ContextLengthConfig::Mode(ContextLengthMode::Inherit) => backend_context_length
-            .map(Some)
-            .ok_or_else(|| {
-                Error::Config(format!(
-                    "backend '{}' model '{}' uses context_length = 'inherit' but backend context_length is not set",
-                    backend_id, public_model
-                ))
-            }),
+        ContextLengthConfig::Value(value) => Ok(ContextLengthPolicy::Static(*value)),
+        ContextLengthConfig::Mode(ContextLengthMode::None) => Ok(ContextLengthPolicy::None),
+        ContextLengthConfig::Mode(ContextLengthMode::Upstream) => {
+            Ok(ContextLengthPolicy::Upstream {
+                backend_id: backend_id.to_owned(),
+                backend_model: backend_model.to_owned(),
+            })
+        }
     }
 }
 
@@ -925,7 +956,7 @@ mod tests {
         let config = parse_config(
             r#"
             [access]
-            default_models = ["public-inherit", "public-specific", "public-none"]
+            default_models = ["public-upstream", "public-specific", "public-none"]
 
             [[client]]
             id = "dev"
@@ -934,13 +965,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            context_length = 131072
             capabilities = ["responses"]
 
             [[backend.model]]
-            public = "public-inherit"
-            backend = "private-inherit"
-            context_length = "inherit"
+            public = "public-upstream"
+            backend = "private-upstream"
+            context_length = "upstream"
 
             [[backend.model]]
             public = "public-specific"
@@ -954,18 +984,19 @@ mod tests {
             "#,
         );
 
-        let models = config.public_model_context_lengths();
-        assert_eq!(models.get("public-inherit"), Some(&Some(131_072)));
+        let cache = crate::observe::ContextSizeCache::new();
+        let models = config.public_model_context_lengths_with_cache(&cache);
+        assert_eq!(models.get("public-upstream"), Some(&None));
         assert_eq!(models.get("public-specific"), Some(&Some(8_192)));
         assert_eq!(models.get("public-none"), Some(&None));
     }
 
     #[test]
-    fn inherited_context_length_requires_backend_context_length() {
-        let file: ConfigFile = toml::from_str(
+    fn upstream_context_length_resolves_without_backend_default() {
+        let config = parse_config(
             r#"
             [access]
-            default_models = ["public-inherit"]
+            default_models = ["public-upstream"]
 
             [[client]]
             id = "dev"
@@ -977,15 +1008,55 @@ mod tests {
             capabilities = ["responses"]
 
             [[backend.model]]
-            public = "public-inherit"
-            backend = "private-inherit"
-            context_length = "inherit"
+            public = "public-upstream"
+            backend = "private-upstream"
+            context_length = "upstream"
             "#,
-        )
-        .unwrap();
+        );
 
-        let error = resolve_error(file);
-        assert!(error.contains("uses context_length = 'inherit'"));
+        let route = &config.backends[0].models[0];
+        match &route.context_length {
+            ContextLengthPolicy::Upstream {
+                backend_id,
+                backend_model,
+            } => {
+                assert_eq!(backend_id, "backend-a");
+                assert_eq!(backend_model, "private-upstream");
+            }
+            other => panic!("expected Upstream policy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn backend_context_length_field_is_rejected() {
+        let result: std::result::Result<ConfigFile, _> = toml::from_str(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            context_length = 131072
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+        let error = match result {
+            Ok(_) => panic!("expected backend context_length to be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("context_length"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

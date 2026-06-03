@@ -4,8 +4,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::config::{
-    Config, DebugCaptureConfig, HealthConfig, InspectorConfig, ResolvedBackend, ResolvedClient,
-    RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig, TelemetryExporter,
+    Config, ContextLengthPolicy, DebugCaptureConfig, HealthConfig, InspectorConfig,
+    ResolvedBackend, ResolvedClient, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig,
+    TelemetryExporter,
 };
 use crate::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 
@@ -338,7 +339,7 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
             .map(|model| BackendModelSnapshot {
                 public: model.public.clone(),
                 backend: model.backend.clone(),
-                context_length: model.context_length,
+                context_length: static_context_length(&model.context_length),
                 tool_schema_mode: model.tool_schema_mode,
                 responses_store: model.responses_store,
                 responses_max_output_tokens: model.responses_max_output_tokens,
@@ -379,6 +380,14 @@ fn telemetry_exporter(exporter: TelemetryExporter) -> &'static str {
 
 fn sorted_strings(values: &std::collections::BTreeSet<String>) -> Vec<String> {
     values.iter().cloned().collect()
+}
+
+fn static_context_length(policy: &ContextLengthPolicy) -> Option<u64> {
+    match policy {
+        ContextLengthPolicy::None => None,
+        ContextLengthPolicy::Static(value) => Some(*value),
+        ContextLengthPolicy::Upstream { .. } => None,
+    }
 }
 
 fn unix_millis() -> u64 {

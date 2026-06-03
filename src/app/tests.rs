@@ -18,10 +18,10 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::config::{
-    ChatStreamUsagePolicy, Config, DebugCaptureConfig, DebugCaptureMode, HealthConfig,
-    InspectorConfig, InspectorPersistenceConfig, ModelRoute, ResolvedBackend, ResolvedClient,
-    ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RoutingConfig, RoutingStrategy,
-    ServerConfig, TelemetryConfig, ToolSchemaMode,
+    ChatStreamUsagePolicy, Config, ContextLengthPolicy, DebugCaptureConfig, DebugCaptureMode,
+    HealthConfig, InspectorConfig, InspectorPersistenceConfig, ModelRoute, ResolvedBackend,
+    ResolvedClient, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RoutingConfig,
+    RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
 use crate::observe::inspector_persisted_count;
 
@@ -1705,7 +1705,7 @@ async fn models_respect_context_length_output_policy() {
                 ModelRoute {
                     public: PUBLIC_MODEL.to_owned(),
                     backend: BACKEND_MODEL.to_owned(),
-                    context_length: Some(131_072),
+                    context_length: ContextLengthPolicy::Static(131_072),
                     tool_schema_mode: ToolSchemaMode::Preserve,
                     responses_store: ResponsesStorePolicy::Preserve,
                     responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -1715,7 +1715,7 @@ async fn models_respect_context_length_output_policy() {
                 ModelRoute {
                     public: "gpt-no-context".to_owned(),
                     backend: "backend-no-context".to_owned(),
-                    context_length: None,
+                    context_length: ContextLengthPolicy::None,
                     tool_schema_mode: ToolSchemaMode::Preserve,
                     responses_store: ResponsesStorePolicy::Preserve,
                     responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -1916,7 +1916,7 @@ fn test_backend(id: &str, base_url: String) -> ResolvedBackend {
         models: vec![ModelRoute {
             public: PUBLIC_MODEL.to_owned(),
             backend: BACKEND_MODEL.to_owned(),
-            context_length: None,
+            context_length: ContextLengthPolicy::None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -1941,7 +1941,7 @@ fn test_chat_backend(id: &str, base_url: String) -> ResolvedBackend {
         models: vec![ModelRoute {
             public: PUBLIC_MODEL.to_owned(),
             backend: BACKEND_MODEL.to_owned(),
-            context_length: None,
+            context_length: ContextLengthPolicy::None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,

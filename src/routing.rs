@@ -4,6 +4,8 @@ use std::sync::Mutex;
 
 use rand::Rng;
 
+#[cfg(test)]
+use crate::config::ContextLengthPolicy;
 use crate::config::{
     ChatStreamUsagePolicy, ResolvedBackend, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy,
     RoutingStrategy, ToolSchemaMode,
@@ -587,7 +589,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -629,7 +631,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -674,7 +676,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -716,7 +718,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -761,7 +763,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -806,7 +808,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -848,7 +850,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "backend-private".to_owned(),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -893,7 +895,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "unsupported-private".to_owned(),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -915,7 +917,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "supported-private".to_owned(),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -956,7 +958,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: "plain-private".to_owned(),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -1283,7 +1285,7 @@ mod tests {
             models: vec![ModelRoute {
                 public: "public-model".to_owned(),
                 backend: format!("{id}-private"),
-                context_length: None,
+                context_length: ContextLengthPolicy::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
