@@ -26,6 +26,8 @@ pub enum Error {
     ConfigWatch(String),
     #[error("http client error: {0}")]
     HttpClient(#[from] reqwest::Error),
+    #[error("inspector persistence error: {0}")]
+    InspectorPersistence(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("server error: {0}")]

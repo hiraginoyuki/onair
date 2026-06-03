@@ -1086,6 +1086,7 @@ async fn inspector_records_completed_requests_and_serves_details() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
     );
     let app = router(state);
@@ -1159,6 +1160,7 @@ async fn inspector_request_list_limits_to_latest_records() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
     );
     let app = router(state);
@@ -1204,6 +1206,7 @@ async fn operator_endpoints_return_sanitized_snapshots() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
     );
     let app = router(state);
@@ -1259,6 +1262,7 @@ async fn operator_health_tracks_backend_successes() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
     );
     let app = router(state);
@@ -1317,6 +1321,7 @@ async fn operator_health_tracks_backend_failures() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
     );
     let app = router(state);
@@ -1360,6 +1365,7 @@ async fn active_health_probe_marks_backend_healthy() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
         HealthConfig {
             active: true,
@@ -1394,6 +1400,7 @@ async fn backend_redirects_are_not_followed() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
         HealthConfig::default(),
     );
@@ -1433,6 +1440,7 @@ async fn send_failure_falls_back_before_response_commit() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
         HealthConfig::default(),
     );
@@ -1512,6 +1520,7 @@ async fn upstream_non_success_does_not_fall_back() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
         HealthConfig::default(),
     );
@@ -1564,6 +1573,7 @@ async fn inspector_is_local_only_by_default() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
     );
     let app = router(state);
@@ -1594,6 +1604,7 @@ async fn inspector_rejects_remote_forwarded_clients_by_default() {
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            ..InspectorConfig::default()
         },
         HealthConfig::default(),
     );

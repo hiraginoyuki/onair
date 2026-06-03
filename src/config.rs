@@ -277,6 +277,14 @@ pub struct InspectorConfig {
     pub enabled: bool,
     pub retention_requests: usize,
     pub allow_remote: bool,
+    pub persistence: InspectorPersistenceConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct InspectorPersistenceConfig {
+    pub enabled: bool,
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -305,6 +313,7 @@ impl Default for InspectorConfig {
             enabled: false,
             retention_requests: inspector::default_retention_requests(),
             allow_remote: false,
+            persistence: InspectorPersistenceConfig::default(),
         }
     }
 }
@@ -849,6 +858,11 @@ fn apply_reloaded_config(config: Config, store: &ConfigStore) {
             "config reload changed telemetry settings; telemetry exporter is only applied on restart"
         );
     }
+    if previous.inspector.persistence != next.inspector.persistence {
+        warn!(
+            "config reload changed inspector persistence settings; persistence settings are only applied on restart"
+        );
+    }
     info!(
         clients = next.clients.len(),
         backends = next.backends.len(),
@@ -1297,6 +1311,75 @@ mod tests {
         assert!(config.inspector.enabled);
         assert!(config.inspector.allow_remote);
         assert_eq!(config.inspector.retention_requests, 128);
+        assert!(!config.inspector.persistence.enabled);
+        assert!(config.inspector.persistence.path.is_none());
+    }
+
+    #[test]
+    fn inspector_persistence_config_resolves_when_enabled_with_path() {
+        let config = parse_config(
+            r#"
+            [inspector]
+            enabled = true
+            retention_requests = 128
+
+            [inspector.persistence]
+            enabled = true
+            path = ".local/inspector.sqlite"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+
+        assert!(config.inspector.persistence.enabled);
+        assert_eq!(
+            config.inspector.persistence.path.unwrap(),
+            PathBuf::from(".local/inspector.sqlite")
+        );
+    }
+
+    #[test]
+    fn inspector_persistence_rejects_enabled_without_path() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [inspector.persistence]
+            enabled = true
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        )
+        .unwrap();
+
+        let error = resolve_error(file);
+        assert!(error.contains("inspector.persistence.path is required"));
     }
 
     #[test]

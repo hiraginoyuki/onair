@@ -36,6 +36,11 @@ enabled = false
 retention_requests = 10000
 allow_remote = false
 
+[inspector.persistence]
+# Disabled by default. Restores the latest retained inspector records after restart.
+enabled = false
+# path = ".local/inspector.sqlite"
+
 [health]
 # Disabled by default because probes send requests to configured backends.
 active = false
@@ -104,12 +109,12 @@ Reloaded immediately:
   `[routing]`, `[debug_capture]`, `[inspector]`, `[health]`,
   `[server].trusted_proxy_cidrs`, backend auth, model mappings, capabilities,
   timeouts, context metadata, client-address trust policy, debug capture
-  settings, inspector settings, and health probe settings.
+  settings, inspector runtime settings, and health probe settings.
 
 Restart required:
 
-- `[server].bind`, `[server].request_body_limit_bytes`, and `[telemetry]`
-  exporter settings.
+- `[server].bind`, `[server].request_body_limit_bytes`, `[telemetry]`
+  exporter settings, and `[inspector.persistence]` settings.
 
 ## Access Rules
 

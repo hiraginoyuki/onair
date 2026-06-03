@@ -26,6 +26,12 @@ retention_requests = 10000
 # When false, trusted forwarded headers must still resolve to a loopback effective client.
 allow_remote = false
 
+[inspector.persistence]
+# Disabled by default. When enabled, restores the latest retained inspector records after restart.
+enabled = false
+# Use a private, ignored local path. SQLite sidecar files may be created next to this file.
+# path = ".local/inspector.sqlite"
+
 [health]
 # Disabled by default because probes send requests to each configured backend.
 active = false
