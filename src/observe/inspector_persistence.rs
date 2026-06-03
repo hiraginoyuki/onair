@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, params};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::error::{Error, Result};
 
@@ -75,6 +75,10 @@ pub(super) fn restore_records(
                     return;
                 }
             };
+            info!(
+                path = %path_for_thread.display(),
+                "inspector persistence writer started"
+            );
 
             let mut state = LoopState::Running;
             let mut drained: usize = 0;

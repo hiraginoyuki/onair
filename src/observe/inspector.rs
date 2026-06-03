@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+use tracing::error;
 
 use crate::config::InspectorConfig;
 use crate::error::{Error, Result};
@@ -54,9 +55,25 @@ impl Drop for InspectorStoreInner {
             return;
         };
         components.writer.request_shutdown();
-        if let Some(handle) = components.handle {
-            let _ = handle.join();
+        if let Some(handle) = components.handle
+            && let Err(panic) = handle.join()
+        {
+            let message = panic_message(&panic);
+            error!(
+                panic = %message,
+                "inspector persistence writer thread panicked; persistence is now disabled for this process"
+            );
         }
+    }
+}
+
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = panic.downcast_ref::<&'static str>() {
+        (*message).to_owned()
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_owned()
     }
 }
 
@@ -506,28 +523,8 @@ mod tests {
             },
         };
         let store = InspectorStore::from_config(&config).unwrap();
-        for index in 0..8 {
-            store.record(true, 32, test_record(&format!("drain-{index}")));
-        }
-        drop(store);
-        assert_eq!(stored_count(&path).unwrap_or_default(), 8);
-    }
-
-    #[test]
-    fn persistent_store_drop_drains_after_shutdown_signal() {
-        let path = temp_database_path("drain-signal");
-        let config = InspectorConfig {
-            enabled: true,
-            retention_requests: 32,
-            allow_remote: false,
-            persistence: InspectorPersistenceConfig {
-                enabled: true,
-                path: Some(path.clone()),
-            },
-        };
-        let store = InspectorStore::from_config(&config).unwrap();
         for index in 0..16 {
-            store.record(true, 32, test_record(&format!("signal-{index}")));
+            store.record(true, 32, test_record(&format!("drain-{index}")));
         }
         drop(store);
         assert_eq!(stored_count(&path).unwrap_or_default(), 16);
