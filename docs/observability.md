@@ -103,14 +103,26 @@ See [security.md](security.md) for the privacy boundary around debug capture.
 
 `[inspector]` is a default-off, in-process request inspector for timing and
 routing diagnostics. It keeps recent request records in memory and serves a
-local Web UI at `/_onair/inspector` when enabled.
+local Web UI at `/_onair/inspector` when enabled. Optional SQLite persistence
+can restore the latest retained records after a process restart.
 
 ```toml
 [inspector]
 enabled = true
 retention_requests = 10000
 allow_remote = false
+
+[inspector.persistence]
+enabled = false
+# path = ".local/inspector.sqlite"
 ```
+
+Persistence is default-off and uses the same `retention_requests` limit as the
+in-memory inspector view. It is intended for restart recovery, not as a
+long-lived audit log or historical query store. When enabled, onair stores the
+full inspector record JSON plus indexed metadata columns in SQLite; prompt,
+completion, and debug-capture bodies are still not included in inspector
+records.
 
 Endpoints:
 

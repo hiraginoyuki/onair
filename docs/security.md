@@ -74,9 +74,15 @@ Set `allow_remote = true` only if the onair bind address is protected by
 another access-control layer, such as SSH tunneling, a private VPN, or a
 trusted reverse proxy with its own authentication.
 
-Inspector data is memory-only and disappears on process restart. Increase
-`retention_requests` only as much as needed; config loading rejects values
-above `100000` to avoid accidental unbounded memory growth.
+Inspector data is memory-only by default. Optional SQLite persistence can
+restore the latest retained records after process restart when
+`[inspector.persistence].enabled = true`; it is not intended as a long-lived
+audit log. Store the database at a private, ignored local path and treat the
+database, `-wal`, and `-shm` sidecar files as sensitive local artifacts.
+
+Increase `retention_requests` only as much as needed; config loading rejects
+values above `100000` to avoid accidental unbounded memory growth or persisted
+metadata growth.
 
 Inspector responses use `Cache-Control: no-store`; avoid putting them behind
 shared caches or public reverse proxies.

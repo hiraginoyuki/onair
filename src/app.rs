@@ -49,6 +49,7 @@ impl AppState {
     pub fn new(config: Config, metrics: Metrics, shutdown: watch::Sender<bool>) -> Result<Self> {
         let started = Instant::now();
         let started_at_unix_ms = unix_millis();
+        let inspector = InspectorStore::from_config(&config.inspector)?;
         let config = ConfigStore::new(config);
         let http = Client::builder()
             .redirect(Policy::none())
@@ -61,7 +62,7 @@ impl AppState {
             config,
             http,
             health,
-            inspector: InspectorStore::new(),
+            inspector,
             metrics,
             shutdown,
             _health_probe: health_probe,

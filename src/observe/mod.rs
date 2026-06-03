@@ -14,4 +14,6 @@ pub(crate) use inspector::{
     InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase, InspectorRequestRecord,
     InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts,
 };
+#[cfg(test)]
+pub(crate) use inspector_persistence::stored_count as inspector_persisted_count;
 pub(crate) use timeline::{RequestTimeline, TimelineEvent, TimelineSnapshot};

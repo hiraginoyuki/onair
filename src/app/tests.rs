@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::{Body, to_bytes};
 use axum::extract::{ConnectInfo, State};
@@ -17,10 +19,11 @@ use tower::ServiceExt;
 use super::*;
 use crate::config::{
     ChatStreamUsagePolicy, Config, DebugCaptureConfig, DebugCaptureMode, HealthConfig,
-    InspectorConfig, ModelRoute, ResolvedBackend, ResolvedClient, ResponsesMaxOutputTokensPolicy,
-    ResponsesStorePolicy, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig,
-    ToolSchemaMode,
+    InspectorConfig, InspectorPersistenceConfig, ModelRoute, ResolvedBackend, ResolvedClient,
+    ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RoutingConfig, RoutingStrategy,
+    ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
+use crate::observe::inspector_persisted_count;
 
 const CLIENT_KEY: &str = "sk-test";
 const PUBLIC_MODEL: &str = "gpt-public";
@@ -1195,6 +1198,62 @@ async fn inspector_request_list_limits_to_latest_records() {
 }
 
 #[tokio::test]
+async fn inspector_persistence_restores_retained_records_after_restart() {
+    let database_path = temp_database_path("app");
+    let backend = TestBackend::spawn("backend-a").await;
+    let inspector = InspectorConfig {
+        enabled: true,
+        retention_requests: 16,
+        allow_remote: false,
+        persistence: InspectorPersistenceConfig {
+            enabled: true,
+            path: Some(database_path.clone()),
+        },
+    };
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", backend.base_url())],
+        inspector.clone(),
+    );
+    let app = router(state);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "/v1/responses?persist=1",
+            json!({
+                "model": PUBLIC_MODEL,
+                "input": "hello persisted inspector"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = json_body(response).await;
+    wait_for_persisted_count(&database_path, 1).await;
+
+    let restored_state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", backend.base_url())],
+        inspector,
+    );
+    let restored_app = router(restored_state);
+    let records = json_body(
+        restored_app
+            .oneshot(inspector_get("/_onair/inspector/requests"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let requests = records.as_array().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["query"], "persist=1");
+    assert_eq!(requests[0]["backend"], "backend-a");
+
+    backend.abort();
+}
+
+#[tokio::test]
 async fn operator_endpoints_return_sanitized_snapshots() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_backend("backend-a", backend.base_url());
@@ -1946,6 +2005,27 @@ fn temp_capture_dir(label: &str) -> std::path::PathBuf {
             .unwrap()
             .as_nanos()
     ))
+}
+
+fn temp_database_path(label: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "onair-inspector-{label}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ))
+}
+
+async fn wait_for_persisted_count(path: &Path, minimum: usize) {
+    for _ in 0..50 {
+        if inspector_persisted_count(path).unwrap_or_default() >= minimum {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("inspector persistence did not reach {minimum} records");
 }
 
 fn only_capture_path(capture_dir: &std::path::Path) -> std::path::PathBuf {
