@@ -34,6 +34,12 @@ pub struct RoundRobinCounters {
     inner: Mutex<HashMap<String, u64>>,
 }
 
+impl Default for RoundRobinCounters {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RoundRobinCounters {
     pub fn new() -> Self {
         Self {
@@ -44,6 +50,8 @@ impl RoundRobinCounters {
     /// Returns the index to promote to primary for the given model/path key.
     /// Increments the counter (wrapping) for next call.
     /// Entries are created lazily and persist across requests.
+    /// Returns `0` if `count` is `0`; this is defensive because empty
+    /// candidate lists are normally rejected before the call site.
     pub fn next_index(&self, key: &str, count: usize) -> usize {
         if count == 0 {
             return 0;
@@ -1123,6 +1131,56 @@ mod tests {
             counters.next_index("public-model", 5);
         }
         assert_eq!(counters.next_index("public-model", 2), 3 % 2);
+    }
+
+    #[test]
+    fn round_robin_zero_count_returns_zero() {
+        let counters = RoundRobinCounters::new();
+        for _ in 0..3 {
+            assert_eq!(counters.next_index("k", 0), 0);
+        }
+    }
+
+    #[test]
+    fn round_robin_default_matches_new() {
+        let a = RoundRobinCounters::default();
+        let b = RoundRobinCounters::new();
+        assert_eq!(a.next_index("k", 3), b.next_index("k", 3));
+    }
+
+    #[test]
+    fn round_robin_concurrent_threads_cover_all_indices() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let counters = Arc::new(RoundRobinCounters::new());
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let counters = Arc::clone(&counters);
+            handles.push(thread::spawn(move || {
+                let mut hits = [0usize; 3];
+                for _ in 0..3000 {
+                    let index = counters.next_index("public-model", 3);
+                    hits[index] += 1;
+                }
+                hits
+            }));
+        }
+        let mut total = [0usize; 3];
+        for handle in handles {
+            let hits = handle.join().unwrap();
+            total[0] += hits[0];
+            total[1] += hits[1];
+            total[2] += hits[2];
+        }
+        // 4 threads * 3000 iterations = 12000 total increments. Distributed
+        // across 3 indices, the modulo must produce a balanced distribution
+        // (each index within +/- 1 of 4000).
+        let total_increments: usize = total.iter().sum();
+        assert_eq!(total_increments, 12_000);
+        for count in total {
+            assert!((3999..=4001).contains(&count), "unbalanced: {total:?}");
+        }
     }
 
     #[test]
