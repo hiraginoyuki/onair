@@ -29,6 +29,7 @@ use crate::observe::{
 use crate::openai;
 use crate::operator;
 use crate::proxy;
+use crate::routing::RoundRobinCounters;
 
 const DEFAULT_INSPECTOR_SNAPSHOT_LIMIT: usize = 1_000;
 const MAX_INSPECTOR_SNAPSHOT_LIMIT: usize = 10_000;
@@ -39,6 +40,7 @@ pub struct AppState {
     pub health: BackendHealthStore,
     pub inspector: InspectorStore,
     pub metrics: Metrics,
+    pub round_robin: RoundRobinCounters,
     shutdown: watch::Sender<bool>,
     _health_probe: HealthProbeTask,
     started: Instant,
@@ -58,12 +60,14 @@ impl AppState {
             .build()?;
         let health = BackendHealthStore::new();
         let health_probe = HealthProbeTask::start(config.clone(), http.clone(), health.clone());
+        let round_robin = RoundRobinCounters::new();
         Ok(Self {
             config,
             http,
             health,
             inspector,
             metrics,
+            round_robin,
             shutdown,
             _health_probe: health_probe,
             started,
