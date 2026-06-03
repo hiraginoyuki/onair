@@ -1,5 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
+use std::sync::Mutex;
+
+use rand::Rng;
 
 use crate::config::{
     ChatStreamUsagePolicy, ResolvedBackend, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy,
@@ -24,8 +27,36 @@ pub struct SelectedRoute {
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub chat_stream_usage: ChatStreamUsagePolicy,
+    pub weight: u32,
 }
 
+pub struct RoundRobinCounters {
+    inner: Mutex<HashMap<String, u64>>,
+}
+
+impl RoundRobinCounters {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Returns the index to promote to primary for the given model/path key.
+    /// Increments the counter (wrapping) for next call.
+    /// Entries are created lazily and persist across requests.
+    pub fn next_index(&self, key: &str, count: usize) -> usize {
+        if count == 0 {
+            return 0;
+        }
+        let mut map = self.inner.lock().expect("round-robin lock");
+        let counter = map.entry(key.to_owned()).or_insert(0);
+        let index = *counter as usize % count;
+        *counter = counter.wrapping_add(1);
+        index
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn select_backend_candidates(
     backends: &[ResolvedBackend],
     strategy: RoutingStrategy,
@@ -34,6 +65,7 @@ pub fn select_backend_candidates(
     stream: bool,
     tools: bool,
     sticky_key: Option<&str>,
+    round_robin: &RoundRobinCounters,
 ) -> Result<Vec<SelectedRoute>, ApiError> {
     let path_candidates = path_capability_candidates(path);
     let mut candidates = Vec::new();
@@ -73,6 +105,7 @@ pub fn select_backend_candidates(
                     responses_store: route.responses_store,
                     responses_max_output_tokens: route.responses_max_output_tokens,
                     chat_stream_usage: route.chat_stream_usage,
+                    weight: backend.weight,
                 });
             }
             continue;
@@ -99,6 +132,7 @@ pub fn select_backend_candidates(
             responses_store: backend.responses_store,
             responses_max_output_tokens: backend.responses_max_output_tokens,
             chat_stream_usage: backend.chat_stream_usage,
+            weight: backend.weight,
         });
     }
 
@@ -123,9 +157,33 @@ pub fn select_backend_candidates(
             let index = sticky_index(sticky_key.unwrap_or(path), candidates.len());
             candidates.rotate_left(index);
         }
+        RoutingStrategy::RoundRobin => {
+            let key = model.unwrap_or(path);
+            let index = round_robin.next_index(key, candidates.len());
+            candidates.rotate_left(index);
+        }
+        RoutingStrategy::WeightedRandom => {
+            weighted_rotate(&mut candidates);
+        }
     }
 
     Ok(candidates)
+}
+
+fn weighted_rotate(candidates: &mut [SelectedRoute]) {
+    if candidates.len() <= 1 {
+        return;
+    }
+    let total: u64 = candidates.iter().map(|c| u64::from(c.weight)).sum();
+    let pick = rand::thread_rng().gen_range(0..total);
+    let mut cumulative = 0u64;
+    for (i, candidate) in candidates.iter().enumerate() {
+        cumulative += u64::from(candidate.weight);
+        if pick < cumulative {
+            candidates.rotate_left(i);
+            return;
+        }
+    }
 }
 
 fn sticky_index(key: &str, count: usize) -> usize {
@@ -475,6 +533,7 @@ mod tests {
             false,
             false,
             Some(&sticky_key),
+            &RoundRobinCounters::new(),
         )
         .unwrap();
         let sticky = select_backend_candidates(
@@ -485,6 +544,7 @@ mod tests {
             false,
             false,
             Some(&sticky_key),
+            &RoundRobinCounters::new(),
         )
         .unwrap();
 
@@ -536,6 +596,7 @@ mod tests {
             false,
             false,
             None,
+            &RoundRobinCounters::new(),
         ) {
             Ok(_) => panic!("expected implicit chat compatibility to be rejected"),
             Err(error) => error,
@@ -577,6 +638,7 @@ mod tests {
             false,
             false,
             None,
+            &RoundRobinCounters::new(),
         )
         .unwrap();
 
@@ -621,6 +683,7 @@ mod tests {
             false,
             false,
             None,
+            &RoundRobinCounters::new(),
         )
         .unwrap();
 
@@ -662,6 +725,7 @@ mod tests {
             false,
             false,
             None,
+            &RoundRobinCounters::new(),
         )
         .unwrap();
 
@@ -706,6 +770,7 @@ mod tests {
             false,
             false,
             None,
+            &RoundRobinCounters::new(),
         )
         .unwrap();
 
@@ -750,6 +815,7 @@ mod tests {
             false,
             false,
             None,
+            &RoundRobinCounters::new(),
         )
         .unwrap();
 
@@ -791,6 +857,7 @@ mod tests {
             false,
             false,
             None,
+            &RoundRobinCounters::new(),
         )
         .unwrap();
 
@@ -857,6 +924,7 @@ mod tests {
             false,
             true,
             None,
+            &RoundRobinCounters::new(),
         )
         .unwrap();
 
@@ -897,6 +965,7 @@ mod tests {
             false,
             true,
             None,
+            &RoundRobinCounters::new(),
         ) {
             Ok(_) => panic!("expected tool request routing to fail"),
             Err(error) => error,
@@ -904,6 +973,242 @@ mod tests {
 
         assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(error.param.as_deref(), Some("tools"));
+    }
+
+    #[test]
+    fn round_robin_advances_per_model() {
+        let counters = RoundRobinCounters::new();
+        assert_eq!(counters.next_index("public-model", 3), 0);
+        assert_eq!(counters.next_index("public-model", 3), 1);
+        assert_eq!(counters.next_index("public-model", 3), 2);
+        assert_eq!(counters.next_index("public-model", 3), 0);
+        assert_eq!(counters.next_index("other-model", 3), 0);
+        assert_eq!(counters.next_index("other-model", 3), 1);
+        assert_eq!(counters.next_index("public-model", 3), 1);
+    }
+
+    #[test]
+    fn round_robin_single_candidate_noop() {
+        let counters = RoundRobinCounters::new();
+        for _ in 0..5 {
+            assert_eq!(counters.next_index("public-model", 1), 0);
+        }
+    }
+
+    #[test]
+    fn round_robin_wraps() {
+        let counters = RoundRobinCounters::new();
+        for _ in 0..3 {
+            assert_eq!(counters.next_index("k", 2), 0);
+            assert_eq!(counters.next_index("k", 2), 1);
+        }
+    }
+
+    #[test]
+    fn round_robin_preserves_fallback_set() {
+        let backends = vec![
+            backend("backend-a"),
+            backend("backend-b"),
+            backend("backend-c"),
+        ];
+        let counters = RoundRobinCounters::new();
+        let routes = select_backend_candidates(
+            &backends,
+            RoutingStrategy::RoundRobin,
+            "/v1/responses",
+            Some("public-model"),
+            false,
+            false,
+            None,
+            &counters,
+        )
+        .unwrap();
+        assert_eq!(routes.len(), 3);
+        let selected: BTreeSet<&str> = routes
+            .iter()
+            .map(|route| route.backend_id.as_str())
+            .collect();
+        let original: BTreeSet<&str> = backends.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(selected, original);
+    }
+
+    #[test]
+    fn round_robin_uses_model_key() {
+        let counters = RoundRobinCounters::new();
+        let routes_a = select_backend_candidates(
+            &[
+                backend_with_public_model("a", "model-a"),
+                backend_with_public_model("b", "model-a"),
+                backend_with_public_model("c", "model-a"),
+            ],
+            RoutingStrategy::RoundRobin,
+            "/v1/responses",
+            Some("model-a"),
+            false,
+            false,
+            None,
+            &counters,
+        )
+        .unwrap();
+        let routes_b = select_backend_candidates(
+            &[
+                backend_with_public_model("a", "model-b"),
+                backend_with_public_model("b", "model-b"),
+            ],
+            RoutingStrategy::RoundRobin,
+            "/v1/responses",
+            Some("model-b"),
+            false,
+            false,
+            None,
+            &counters,
+        )
+        .unwrap();
+        assert_eq!(routes_a[0].backend_id, "a");
+        assert_eq!(routes_b[0].backend_id, "a");
+        let routes_b_second = select_backend_candidates(
+            &[
+                backend_with_public_model("a", "model-b"),
+                backend_with_public_model("b", "model-b"),
+            ],
+            RoutingStrategy::RoundRobin,
+            "/v1/responses",
+            Some("model-b"),
+            false,
+            false,
+            None,
+            &counters,
+        )
+        .unwrap();
+        assert_eq!(routes_b_second[0].backend_id, "b");
+    }
+
+    #[test]
+    fn round_robin_path_key_for_model_less() {
+        let counters = RoundRobinCounters::new();
+        let backends = vec![
+            model_less_backend("a", &["embeddings", "streaming"]),
+            model_less_backend("b", &["embeddings", "streaming"]),
+        ];
+        let routes_a = select_backend_candidates(
+            &backends,
+            RoutingStrategy::RoundRobin,
+            "/v1/embeddings",
+            None,
+            false,
+            false,
+            None,
+            &counters,
+        )
+        .unwrap();
+        let routes_b = select_backend_candidates(
+            &backends,
+            RoutingStrategy::RoundRobin,
+            "/v1/embeddings",
+            None,
+            false,
+            false,
+            None,
+            &counters,
+        )
+        .unwrap();
+        assert_eq!(routes_a[0].backend_id, "a");
+        assert_eq!(routes_b[0].backend_id, "b");
+    }
+
+    #[test]
+    fn round_robin_shrinking_candidate_list() {
+        let counters = RoundRobinCounters::new();
+        for _ in 0..3 {
+            counters.next_index("public-model", 5);
+        }
+        assert_eq!(counters.next_index("public-model", 2), 3 % 2);
+    }
+
+    #[test]
+    fn weighted_random_deterministic_weights_zero_skipped() {
+        let backends = vec![
+            backend_with_weight("a", 1),
+            backend_with_weight("b", 0),
+            backend_with_weight("c", 1),
+        ];
+        for _ in 0..200 {
+            let routes = select_backend_candidates(
+                &backends,
+                RoutingStrategy::WeightedRandom,
+                "/v1/responses",
+                Some("public-model"),
+                false,
+                false,
+                None,
+                &RoundRobinCounters::new(),
+            )
+            .unwrap();
+            assert!(routes[0].backend_id == "a" || routes[0].backend_id == "c");
+        }
+    }
+
+    #[test]
+    fn weighted_random_single_candidate_noop() {
+        let backends = vec![backend_with_weight("only", 5)];
+        for _ in 0..10 {
+            let routes = select_backend_candidates(
+                &backends,
+                RoutingStrategy::WeightedRandom,
+                "/v1/responses",
+                Some("public-model"),
+                false,
+                false,
+                None,
+                &RoundRobinCounters::new(),
+            )
+            .unwrap();
+            assert_eq!(routes[0].backend_id, "only");
+        }
+    }
+
+    #[test]
+    fn weighted_random_preserves_fallback_set() {
+        let backends = vec![
+            backend_with_weight("backend-a", 1),
+            backend_with_weight("backend-b", 1),
+            backend_with_weight("backend-c", 1),
+        ];
+        let routes = select_backend_candidates(
+            &backends,
+            RoutingStrategy::WeightedRandom,
+            "/v1/responses",
+            Some("public-model"),
+            false,
+            false,
+            None,
+            &RoundRobinCounters::new(),
+        )
+        .unwrap();
+        assert_eq!(routes.len(), 3);
+        let selected: BTreeSet<&str> = routes
+            .iter()
+            .map(|route| route.backend_id.as_str())
+            .collect();
+        let original: BTreeSet<&str> = backends.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(selected, original);
+    }
+
+    #[test]
+    fn strategy_round_robin_serializes_via_selected_route_weight() {
+        let backends = vec![backend_with_weight("a", 7)];
+        let routes = select_backend_candidates(
+            &backends,
+            RoutingStrategy::Priority,
+            "/v1/responses",
+            Some("public-model"),
+            false,
+            false,
+            None,
+            &RoundRobinCounters::new(),
+        )
+        .unwrap();
+        assert_eq!(routes[0].weight, 7);
     }
 
     fn backend(id: &str) -> ResolvedBackend {
@@ -933,5 +1238,34 @@ mod tests {
 
     fn btree_set<const N: usize>(values: [&str; N]) -> BTreeSet<String> {
         values.into_iter().map(str::to_owned).collect()
+    }
+
+    fn backend_with_weight(id: &str, weight: u32) -> ResolvedBackend {
+        ResolvedBackend {
+            weight,
+            ..backend(id)
+        }
+    }
+
+    fn backend_with_public_model(id: &str, public_model: &str) -> ResolvedBackend {
+        let mut backend = backend(id);
+        backend.models[0].public = public_model.to_owned();
+        backend
+    }
+
+    fn model_less_backend(id: &str, capabilities: &[&str]) -> ResolvedBackend {
+        ResolvedBackend {
+            id: id.to_owned(),
+            base_url: format!("http://{id}.example.invalid"),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: capabilities.iter().map(|s| s.to_string()).collect(),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            models: Vec::new(),
+            weight: 1,
+        }
     }
 }

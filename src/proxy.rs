@@ -210,6 +210,7 @@ pub async fn proxy_v1(
         request_shape.stream,
         request_shape.has_tools,
         Some(&sticky_key),
+        &routing::RoundRobinCounters::new(),
     ) {
         Ok(routes) => {
             timeline.mark(TimelineEvent::RouteSelected);

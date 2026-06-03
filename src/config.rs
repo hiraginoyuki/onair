@@ -340,6 +340,8 @@ pub enum RoutingStrategy {
     #[default]
     Priority,
     Sticky,
+    RoundRobin,
+    WeightedRandom,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1264,6 +1266,133 @@ mod tests {
 
         assert_eq!(config.routing.strategy, RoutingStrategy::Sticky);
         assert_eq!(config.routing.fallback_attempts, 2);
+    }
+
+    #[test]
+    fn routing_strategy_round_robin_and_weighted_random_parse() {
+        let config = parse_config(
+            r#"
+            [routing]
+            strategy = "round_robin"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+        assert_eq!(config.routing.strategy, RoutingStrategy::RoundRobin);
+
+        let config = parse_config(
+            r#"
+            [routing]
+            strategy = "weighted_random"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+        assert_eq!(config.routing.strategy, RoutingStrategy::WeightedRandom);
+    }
+
+    #[test]
+    fn backend_config_default_weight_is_one() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+        assert_eq!(config.backends[0].weight, 1);
+    }
+
+    #[test]
+    fn backend_config_parses_explicit_weight() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+            weight = 5
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+        assert_eq!(config.backends[0].weight, 5);
+    }
+
+    #[test]
+    fn config_rejects_zero_weight() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+            weight = 0
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        )
+        .unwrap();
+        let error = resolve_error(file);
+        assert!(error.contains("weight must be greater than zero"));
     }
 
     #[test]

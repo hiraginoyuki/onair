@@ -303,6 +303,8 @@ fn routing_snapshot(config: &RoutingConfig) -> RoutingSnapshot {
         strategy: match config.strategy {
             RoutingStrategy::Priority => "priority",
             RoutingStrategy::Sticky => "sticky",
+            RoutingStrategy::RoundRobin => "round_robin",
+            RoutingStrategy::WeightedRandom => "weighted_random",
         },
         fallback_attempts: config.fallback_attempts,
     }
