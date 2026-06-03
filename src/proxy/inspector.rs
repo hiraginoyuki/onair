@@ -119,7 +119,7 @@ pub(super) fn record_preflight_inspector(record: PreflightInspectorRecord<'_>) {
             base: preflight_inspector_base(&record),
             timeline: record.timeline,
             outcome: InspectorOutcome::Preflight {
-                stage: record.stage,
+                stage: record.stage.to_owned(),
             },
             status: record.status,
             error_kind: None,

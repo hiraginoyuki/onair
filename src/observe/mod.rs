@@ -4,6 +4,7 @@ pub(crate) mod inspector;
 mod client_info;
 mod health;
 mod health_probe;
+mod inspector_persistence;
 mod timeline;
 
 pub(crate) use client_info::{ClientInfo, IpCidr};

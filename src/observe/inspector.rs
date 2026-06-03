@@ -1,14 +1,17 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
+use std::thread::JoinHandle;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::config::InspectorConfig;
 use crate::error::{Error, Result};
 use crate::observe::TimelineSnapshot;
+
+use super::inspector_persistence::{InspectorPersistenceWriter, restore_records};
 
 const DEFAULT_RETENTION_REQUESTS: usize = 10_000;
 const MAX_RETENTION_REQUESTS: usize = 100_000;
@@ -37,15 +40,62 @@ pub(crate) struct InspectorStore {
 struct InspectorStoreInner {
     records: Mutex<VecDeque<InspectorRequestRecord>>,
     events: broadcast::Sender<InspectorRequestRecord>,
+    persistence: Option<PersistenceComponents>,
+}
+
+struct PersistenceComponents {
+    writer: InspectorPersistenceWriter,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for InspectorStoreInner {
+    fn drop(&mut self) {
+        let Some(components) = self.persistence.take() else {
+            return;
+        };
+        components.writer.request_shutdown();
+        if let Some(handle) = components.handle {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl InspectorStore {
     pub(crate) fn new() -> Self {
+        Self::from_parts(Vec::new(), None)
+    }
+
+    pub(crate) fn from_config(config: &InspectorConfig) -> Result<Self> {
+        if !config.persistence.enabled {
+            return Ok(Self::new());
+        }
+
+        let path = config.persistence.path.as_ref().ok_or_else(|| {
+            Error::Config(
+                "inspector.persistence.path is required when persistence is enabled".to_owned(),
+            )
+        })?;
+        let retention_requests = config.retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
+        let (records, writer, handle) = restore_records(path, retention_requests)?;
+        Ok(Self::from_parts(
+            records,
+            Some(PersistenceComponents {
+                writer,
+                handle: Some(handle),
+            }),
+        ))
+    }
+
+    fn from_parts(
+        records: Vec<InspectorRequestRecord>,
+        persistence: Option<PersistenceComponents>,
+    ) -> Self {
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Self {
             inner: Arc::new(InspectorStoreInner {
-                records: Mutex::new(VecDeque::new()),
+                records: Mutex::new(records.into()),
                 events,
+                persistence,
             }),
         }
     }
@@ -71,6 +121,12 @@ impl InspectorStore {
             while records.len() > retention_requests {
                 records.pop_front();
             }
+        }
+
+        if let Some(persistence) = &self.inner.persistence {
+            persistence
+                .writer
+                .record(record.clone(), retention_requests);
         }
 
         let _ = self.inner.events.send(record);
@@ -123,7 +179,7 @@ impl InspectorStore {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct InspectorRequestRecord {
     #[serde(flatten)]
     pub(crate) base: InspectorRequestBase,
@@ -131,9 +187,9 @@ pub(crate) struct InspectorRequestRecord {
     pub(crate) status: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error_kind: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) backend_attempts: Vec<InspectorAttemptRecord>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) retried_attempts: Vec<InspectorAttemptRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) response_body_bytes: Option<usize>,
@@ -176,7 +232,7 @@ pub(crate) struct InspectorRequestRecordInit {
     pub(crate) timeline: TimelineSnapshot,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct InspectorAttemptRecord {
     pub(crate) attempt: usize,
     pub(crate) backend: String,
@@ -211,7 +267,7 @@ pub(crate) struct InspectorAttemptRecord {
     pub(crate) stream_complete_us: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct InspectorRequestBase {
     pub(crate) record_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -241,11 +297,11 @@ pub(crate) struct InspectorRequestBase {
     pub(crate) debug_capture_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum InspectorOutcome {
     Completed,
-    Preflight { stage: &'static str },
+    Preflight { stage: String },
     UpstreamTimeout,
     UpstreamRequestFailed,
     UpstreamNonSuccess,
@@ -271,6 +327,18 @@ pub(crate) fn validate_config(config: &InspectorConfig) -> Result<()> {
         return Err(Error::Config(format!(
             "inspector.retention_requests must be at most {MAX_RETENTION_REQUESTS}"
         )));
+    }
+    if config.persistence.enabled {
+        let Some(path) = config.persistence.path.as_ref() else {
+            return Err(Error::Config(
+                "inspector.persistence.path is required when persistence is enabled".to_owned(),
+            ));
+        };
+        if path.as_os_str().is_empty() {
+            return Err(Error::Config(
+                "inspector.persistence.path must not be empty".to_owned(),
+            ));
+        }
     }
     Ok(())
 }
@@ -307,14 +375,43 @@ fn safe_segment(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::inspector_persistence::stored_count;
     use super::*;
+    use crate::config::InspectorPersistenceConfig;
+
+    fn temp_database_path(label: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "onair-inspector-store-{label}-{}-{nonce}.sqlite",
+            std::process::id()
+        ))
+    }
+
+    fn wait_for_stored_count(path: &std::path::Path, minimum: usize) {
+        for _ in 0..50 {
+            if stored_count(path).unwrap_or_default() >= minimum {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("inspector persistence did not reach {minimum} records");
+    }
 
     fn test_record(record_id: &str) -> InspectorRequestRecord {
+        let started_at_unix_ms = match record_id {
+            "one" => 1,
+            "two" => 2,
+            "three" => 3,
+            _ => 1,
+        };
         InspectorRequestRecord::new(InspectorRequestRecordInit {
             base: InspectorRequestBase {
                 record_id: record_id.to_owned(),
                 client_request_id: None,
-                started_at_unix_ms: 1,
+                started_at_unix_ms,
                 method: "POST".to_owned(),
                 path: "/v1/responses".to_owned(),
                 query: None,
@@ -366,6 +463,74 @@ mod tests {
         assert_eq!(records[1].base.record_id, "three");
         assert!(store.get("one").is_none());
         assert!(store.get("three").is_some());
+    }
+
+    #[test]
+    fn persistent_store_restores_latest_records() {
+        let path = temp_database_path("restore");
+        let config = InspectorConfig {
+            enabled: true,
+            retention_requests: 2,
+            allow_remote: false,
+            persistence: InspectorPersistenceConfig {
+                enabled: true,
+                path: Some(path.clone()),
+            },
+        };
+        let store = InspectorStore::from_config(&config).unwrap();
+        store.record(true, 2, test_record("one"));
+        store.record(true, 2, test_record("two"));
+        store.record(true, 2, test_record("three"));
+        wait_for_stored_count(&path, 2);
+        drop(store);
+
+        let restored = InspectorStore::from_config(&config).unwrap();
+        let records = restored.records_limited(usize::MAX);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].base.record_id, "two");
+        assert_eq!(records[1].base.record_id, "three");
+        assert!(restored.get("one").is_none());
+        assert!(restored.get("three").is_some());
+    }
+
+    #[test]
+    fn persistent_store_drop_drains_pending_records() {
+        let path = temp_database_path("drain");
+        let config = InspectorConfig {
+            enabled: true,
+            retention_requests: 32,
+            allow_remote: false,
+            persistence: InspectorPersistenceConfig {
+                enabled: true,
+                path: Some(path.clone()),
+            },
+        };
+        let store = InspectorStore::from_config(&config).unwrap();
+        for index in 0..8 {
+            store.record(true, 32, test_record(&format!("drain-{index}")));
+        }
+        drop(store);
+        assert_eq!(stored_count(&path).unwrap_or_default(), 8);
+    }
+
+    #[test]
+    fn persistent_store_drop_drains_after_shutdown_signal() {
+        let path = temp_database_path("drain-signal");
+        let config = InspectorConfig {
+            enabled: true,
+            retention_requests: 32,
+            allow_remote: false,
+            persistence: InspectorPersistenceConfig {
+                enabled: true,
+                path: Some(path.clone()),
+            },
+        };
+        let store = InspectorStore::from_config(&config).unwrap();
+        for index in 0..16 {
+            store.record(true, 32, test_record(&format!("signal-{index}")));
+        }
+        drop(store);
+        assert_eq!(stored_count(&path).unwrap_or_default(), 16);
     }
 
     #[test]
