@@ -21,7 +21,8 @@ pub struct ModelObject {
 #[derive(Debug, Serialize)]
 pub struct ModelMeta {
     pub n_ctx: u64,
-    pub n_ctx_train: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_ctx_train: Option<u64>,
 }
 
 impl ModelObject {
@@ -33,7 +34,20 @@ impl ModelObject {
             owned_by: "onair",
             meta: context_length.map(|n_ctx| ModelMeta {
                 n_ctx,
-                n_ctx_train: n_ctx,
+                n_ctx_train: None,
+            }),
+        }
+    }
+
+    pub fn new_static(id: String, context_length: u64) -> Self {
+        Self {
+            id,
+            object: "model",
+            created: 0,
+            owned_by: "onair",
+            meta: Some(ModelMeta {
+                n_ctx: context_length,
+                n_ctx_train: Some(context_length),
             }),
         }
     }
@@ -50,6 +64,10 @@ pub fn models_response(models: impl IntoIterator<Item = ModelObject>) -> Json<Mo
 
 pub fn model_response(model: String, context_length: Option<u64>) -> Json<ModelObject> {
     Json(ModelObject::new(model, context_length))
+}
+
+pub fn model_response_with_n_ctx_train(model: String, n_ctx: u64) -> Json<ModelObject> {
+    Json(ModelObject::new_static(model, n_ctx))
 }
 
 #[derive(Debug, Serialize)]

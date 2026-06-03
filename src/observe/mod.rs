@@ -9,7 +9,7 @@ mod inspector_persistence;
 mod timeline;
 
 pub(crate) use client_info::{ClientInfo, IpCidr};
-pub(crate) use context_sizes::ContextSizeCache;
+pub(crate) use context_sizes::{ContextSizeCache, ContextSizeRefreshTask};
 pub(crate) use health::{BackendHealthSnapshot, BackendHealthStore};
 pub(crate) use health_probe::HealthProbeTask;
 pub(crate) use inspector::{

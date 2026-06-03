@@ -5,8 +5,8 @@ use serde::Serialize;
 
 use crate::config::{
     Config, ContextLengthPolicy, DebugCaptureConfig, HealthConfig, InspectorConfig,
-    ResolvedBackend, ResolvedClient, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig,
-    TelemetryExporter,
+    ResolvedBackend, ResolvedClient, ResolvedContextLength, RoutingConfig, RoutingStrategy,
+    ServerConfig, TelemetryConfig, TelemetryExporter,
 };
 use crate::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 
@@ -114,6 +114,7 @@ pub(crate) struct BackendModelSnapshot {
     pub(crate) public: String,
     pub(crate) backend: String,
     pub(crate) context_length: Option<u64>,
+    pub(crate) context_length_source: &'static str,
     pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
     pub(crate) responses_store: crate::config::ResponsesStorePolicy,
     pub(crate) responses_max_output_tokens: crate::config::ResponsesMaxOutputTokensPolicy,
@@ -125,6 +126,8 @@ pub(crate) struct BackendModelSnapshot {
 pub(crate) struct PublicModelSnapshot {
     pub(crate) public: String,
     pub(crate) context_length: Option<u64>,
+    pub(crate) context_length_source: &'static str,
+    pub(crate) context_length_last_fetch_unix_ms: Option<u64>,
     pub(crate) clients: Vec<String>,
     pub(crate) routes: Vec<ModelRouteSnapshot>,
 }
@@ -178,6 +181,14 @@ pub(crate) fn runtime_snapshot(
     }
 }
 
+pub(crate) fn context_length_source(policy: &ContextLengthPolicy) -> &'static str {
+    match policy {
+        ContextLengthPolicy::None => "none",
+        ContextLengthPolicy::Static(_) => "static",
+        ContextLengthPolicy::Upstream { .. } => "upstream",
+    }
+}
+
 pub(crate) fn config_snapshot(config: &Config) -> OperatorConfigSnapshot {
     OperatorConfigSnapshot {
         server: server_snapshot(&config.server),
@@ -191,14 +202,30 @@ pub(crate) fn config_snapshot(config: &Config) -> OperatorConfigSnapshot {
     }
 }
 
-pub(crate) fn models_snapshot(config: &Config) -> OperatorModelsSnapshot {
+pub(crate) fn models_snapshot(
+    config: &Config,
+    context_sizes: &crate::observe::ContextSizeCache,
+) -> OperatorModelsSnapshot {
     let mut models = BTreeMap::<String, PublicModelSnapshot>::new();
-    for (public, context_length) in config.public_model_context_lengths() {
+    for (public, resolved) in config.public_model_context_lengths_with_cache(context_sizes) {
+        let (context_length, context_length_source, context_length_last_fetch_unix_ms) =
+            match &resolved {
+                ResolvedContextLength::None => (None, "none", None),
+                ResolvedContextLength::Static { n_ctx } => (Some(*n_ctx), "static", None),
+                ResolvedContextLength::Upstream { n_ctx } => {
+                    let last_fetch = context_sizes
+                        .entry(&public)
+                        .and_then(|entry| entry.last_success_unix_ms);
+                    (*n_ctx, "upstream", last_fetch)
+                }
+            };
         models.insert(
             public.clone(),
             PublicModelSnapshot {
                 public,
                 context_length,
+                context_length_source,
+                context_length_last_fetch_unix_ms,
                 clients: Vec::new(),
                 routes: Vec::new(),
             },
@@ -340,6 +367,7 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
                 public: model.public.clone(),
                 backend: model.backend.clone(),
                 context_length: static_context_length(&model.context_length),
+                context_length_source: context_length_source(&model.context_length),
                 tool_schema_mode: model.tool_schema_mode,
                 responses_store: model.responses_store,
                 responses_max_output_tokens: model.responses_max_output_tokens,

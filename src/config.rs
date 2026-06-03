@@ -488,11 +488,17 @@ pub enum ContextLengthMode {
 pub enum ContextLengthPolicy {
     None,
     Static(u64),
-    #[allow(dead_code)]
     Upstream {
         backend_id: String,
         backend_model: String,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum ResolvedContextLength {
+    None,
+    Static { n_ctx: u64 },
+    Upstream { n_ctx: Option<u64> },
 }
 
 #[derive(Clone)]
@@ -670,35 +676,42 @@ impl Config {
         })
     }
 
-    pub fn public_model_context_lengths(&self) -> BTreeMap<String, Option<u64>> {
+    pub fn public_model_context_lengths(&self) -> BTreeMap<String, ResolvedContextLength> {
         let mut models = BTreeMap::new();
         for backend in &self.backends {
             for model in &backend.models {
-                let value = match &model.context_length {
-                    ContextLengthPolicy::None => None,
-                    ContextLengthPolicy::Static(value) => Some(*value),
-                    ContextLengthPolicy::Upstream { .. } => None,
+                let resolved = match &model.context_length {
+                    ContextLengthPolicy::None => ResolvedContextLength::None,
+                    ContextLengthPolicy::Static(value) => {
+                        ResolvedContextLength::Static { n_ctx: *value }
+                    }
+                    ContextLengthPolicy::Upstream { .. } => {
+                        ResolvedContextLength::Upstream { n_ctx: None }
+                    }
                 };
-                models.entry(model.public.clone()).or_insert(value);
+                models.entry(model.public.clone()).or_insert(resolved);
             }
         }
         models
     }
 
-    #[allow(dead_code)]
     pub fn public_model_context_lengths_with_cache(
         &self,
         cache: &ContextSizeCache,
-    ) -> BTreeMap<String, Option<u64>> {
+    ) -> BTreeMap<String, ResolvedContextLength> {
         let mut models = BTreeMap::new();
         for backend in &self.backends {
             for model in &backend.models {
-                let value = match &model.context_length {
-                    ContextLengthPolicy::None => None,
-                    ContextLengthPolicy::Static(value) => Some(*value),
-                    ContextLengthPolicy::Upstream { .. } => cache.lookup(&model.public),
+                let resolved = match &model.context_length {
+                    ContextLengthPolicy::None => ResolvedContextLength::None,
+                    ContextLengthPolicy::Static(value) => {
+                        ResolvedContextLength::Static { n_ctx: *value }
+                    }
+                    ContextLengthPolicy::Upstream { .. } => ResolvedContextLength::Upstream {
+                        n_ctx: cache.lookup(&model.public),
+                    },
                 };
-                models.entry(model.public.clone()).or_insert(value);
+                models.entry(model.public.clone()).or_insert(resolved);
             }
         }
         models
@@ -986,9 +999,20 @@ mod tests {
 
         let cache = crate::observe::ContextSizeCache::new();
         let models = config.public_model_context_lengths_with_cache(&cache);
-        assert_eq!(models.get("public-upstream"), Some(&None));
-        assert_eq!(models.get("public-specific"), Some(&Some(8_192)));
-        assert_eq!(models.get("public-none"), Some(&None));
+        match models.get("public-upstream").unwrap() {
+            ResolvedContextLength::Upstream { n_ctx } => assert_eq!(*n_ctx, None),
+            other => panic!("expected Upstream, got {other:?}"),
+        }
+        match models.get("public-specific").unwrap() {
+            ResolvedContextLength::Static { n_ctx } => {
+                assert_eq!(*n_ctx, 8_192);
+            }
+            other => panic!("expected Static, got {other:?}"),
+        }
+        match models.get("public-none").unwrap() {
+            ResolvedContextLength::None => {}
+            other => panic!("expected None, got {other:?}"),
+        }
     }
 
     #[test]

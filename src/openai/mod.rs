@@ -6,7 +6,7 @@ mod responses_compat;
 #[allow(unused_imports)]
 pub use models::{
     DefaultGenerationSettings, ModelMeta, ModelObject, ModelsResponse, PropsResponse,
-    model_response, models_response, props_response,
+    model_response, model_response_with_n_ctx_train, models_response, props_response,
 };
 
 #[allow(unused_imports)]

@@ -23,7 +23,7 @@ use crate::config::{
     ResolvedClient, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RoutingConfig,
     RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
-use crate::observe::inspector_persisted_count;
+use crate::observe::{ContextSizeCache, inspector_persisted_count};
 
 const CLIENT_KEY: &str = "sk-test";
 const PUBLIC_MODEL: &str = "gpt-public";
@@ -1782,6 +1782,271 @@ async fn models_respect_context_length_output_policy() {
     assert_eq!(response_body["role"], "router");
 }
 
+#[tokio::test]
+async fn upstream_context_size_is_forwarded_to_v1_models() {
+    let address = TestBackend::spawn_props_only(131_072).await;
+    let state = test_state_with_client_models(
+        RoutingStrategy::Priority,
+        vec![ResolvedBackend {
+            id: "backend-a".to_owned(),
+            base_url: format!("http://{address}"),
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            capabilities: btree_set(["responses"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            models: vec![ModelRoute {
+                public: PUBLIC_MODEL.to_owned(),
+                backend: BACKEND_MODEL.to_owned(),
+                context_length: ContextLengthPolicy::Upstream {
+                    backend_id: "backend-a".to_owned(),
+                    backend_model: BACKEND_MODEL.to_owned(),
+                },
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                endpoints: btree_set(["responses"]),
+            }],
+        }],
+        btree_set([PUBLIC_MODEL]),
+    );
+    let app = router(state.clone());
+
+    wait_for_cache_value(&state.context_sizes, PUBLIC_MODEL, Some(131_072)).await;
+
+    let response = app
+        .clone()
+        .oneshot(authed_get(&format!("/v1/models/{PUBLIC_MODEL}")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = json_body(response).await;
+    assert_eq!(response_body["meta"]["n_ctx"], 131_072);
+    assert!(
+        response_body["meta"].get("n_ctx_train").is_none(),
+        "upstream models must omit n_ctx_train, got: {response_body}"
+    );
+
+    let response = app.oneshot(authed_get("/v1/models")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = json_body(response).await;
+    let model = response_body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["id"] == PUBLIC_MODEL)
+        .unwrap();
+    assert_eq!(model["meta"]["n_ctx"], 131_072);
+    assert!(model["meta"].get("n_ctx_train").is_none());
+}
+
+#[tokio::test]
+async fn upstream_context_size_is_forwarded_to_props() {
+    let address = TestBackend::spawn_props_only(65_536).await;
+    let state = test_state_with_client_models(
+        RoutingStrategy::Priority,
+        vec![ResolvedBackend {
+            id: "backend-a".to_owned(),
+            base_url: format!("http://{address}"),
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            capabilities: btree_set(["responses"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            models: vec![ModelRoute {
+                public: PUBLIC_MODEL.to_owned(),
+                backend: BACKEND_MODEL.to_owned(),
+                context_length: ContextLengthPolicy::Upstream {
+                    backend_id: "backend-a".to_owned(),
+                    backend_model: BACKEND_MODEL.to_owned(),
+                },
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                endpoints: btree_set(["responses"]),
+            }],
+        }],
+        btree_set([PUBLIC_MODEL]),
+    );
+    let app = router(state.clone());
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if state.context_sizes.lookup(PUBLIC_MODEL).is_some() {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("timed out waiting for upstream cache to populate");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let response = app
+        .oneshot(authed_get(&format!("/props?model={PUBLIC_MODEL}")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = json_body(response).await;
+    assert_eq!(
+        response_body["default_generation_settings"]["n_ctx"],
+        65_536
+    );
+    assert_eq!(response_body["model_alias"], PUBLIC_MODEL);
+}
+
+#[tokio::test]
+async fn upstream_unreachable_hides_value() {
+    let state = test_state_with_client_models(
+        RoutingStrategy::Priority,
+        vec![ResolvedBackend {
+            id: "backend-a".to_owned(),
+            base_url: "http://127.0.0.1:1".to_owned(),
+            api_key: None,
+            timeout: std::time::Duration::from_millis(50),
+            capabilities: btree_set(["responses"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            models: vec![ModelRoute {
+                public: PUBLIC_MODEL.to_owned(),
+                backend: BACKEND_MODEL.to_owned(),
+                context_length: ContextLengthPolicy::Upstream {
+                    backend_id: "backend-a".to_owned(),
+                    backend_model: BACKEND_MODEL.to_owned(),
+                },
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                endpoints: btree_set(["responses"]),
+            }],
+        }],
+        btree_set([PUBLIC_MODEL]),
+    );
+    let app = router(state.clone());
+
+    wait_for_cache_failure(&state.context_sizes, PUBLIC_MODEL).await;
+
+    let response = app
+        .clone()
+        .oneshot(authed_get(&format!("/v1/models/{PUBLIC_MODEL}")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = json_body(response).await;
+    assert!(
+        response_body.get("meta").is_none(),
+        "upstream fetch failures must hide meta, got: {response_body}"
+    );
+
+    let response = app
+        .oneshot(authed_get(&format!("/props?model={PUBLIC_MODEL}")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = json_body(response).await;
+    assert_eq!(response_body["default_generation_settings"]["n_ctx"], 0);
+}
+
+#[tokio::test]
+async fn operator_models_reports_upstream_source() {
+    let address = TestBackend::spawn_props_only(8_192).await;
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![ResolvedBackend {
+            id: "backend-a".to_owned(),
+            base_url: format!("http://{address}"),
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            capabilities: btree_set(["responses"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            models: vec![ModelRoute {
+                public: PUBLIC_MODEL.to_owned(),
+                backend: BACKEND_MODEL.to_owned(),
+                context_length: ContextLengthPolicy::Upstream {
+                    backend_id: "backend-a".to_owned(),
+                    backend_model: BACKEND_MODEL.to_owned(),
+                },
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                endpoints: btree_set(["responses"]),
+            }],
+        }],
+        InspectorConfig {
+            enabled: true,
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state.clone());
+
+    wait_for_cache_value(&state.context_sizes, PUBLIC_MODEL, Some(8_192)).await;
+
+    let response = app
+        .oneshot(inspector_get("/_onair/operator/models"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let model = body["public_models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["public"] == PUBLIC_MODEL)
+        .unwrap();
+    assert_eq!(model["context_length"], 8_192);
+    assert_eq!(model["context_length_source"], "upstream");
+    assert!(model["context_length_last_fetch_unix_ms"].is_u64());
+}
+
+async fn wait_for_cache_value(cache: &ContextSizeCache, public_model: &str, expected: Option<u64>) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if cache.lookup(public_model) == expected {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "timed out waiting for cache[{public_model}] to be {expected:?}; got {:?}",
+            cache.lookup(public_model)
+        )
+    });
+}
+
+async fn wait_for_cache_failure(cache: &ContextSizeCache, public_model: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(entry) = cache.entry(public_model)
+                && entry.last_failure_unix_ms.is_some()
+            {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for cache[{public_model}] to record a failure"));
+}
+
 fn test_state(strategy: RoutingStrategy, backends: Vec<ResolvedBackend>) -> Arc<AppState> {
     test_state_with_client_models(strategy, backends, btree_set([PUBLIC_MODEL]))
 }
@@ -2076,6 +2341,18 @@ impl TestBackend {
             state,
             handle,
         }
+    }
+
+    async fn spawn_props_only(n_ctx: u64) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/props", get(test_props_handler))
+            .with_state(n_ctx);
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        address
     }
 
     async fn spawn_json_labeled_stream(name: &str) -> Self {
@@ -2496,6 +2773,15 @@ async fn backend_models() -> Json<Value> {
     Json(json!({
         "object": "list",
         "data": []
+    }))
+}
+
+async fn test_props_handler(State(n_ctx): State<u64>) -> Json<Value> {
+    Json(json!({
+        "default_generation_settings": {
+            "params": {},
+            "n_ctx": n_ctx,
+        }
     }))
 }
 

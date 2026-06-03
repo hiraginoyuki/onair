@@ -19,12 +19,12 @@ use tracing::{debug, warn};
 use url::form_urlencoded;
 
 use crate::auth::authenticate;
-use crate::config::{Config, ConfigStore};
+use crate::config::{Config, ConfigStore, ResolvedContextLength};
 use crate::error::{ApiError, Result};
 use crate::metrics::{MetricLabels, Metrics, RequestTimer};
 use crate::observe::{
-    BackendHealthStore, ClientInfo, HealthProbeTask, InspectorRequestRecord, InspectorStore,
-    inspector,
+    BackendHealthStore, ClientInfo, ContextSizeCache, ContextSizeRefreshTask, HealthProbeTask,
+    InspectorRequestRecord, InspectorStore, inspector,
 };
 use crate::openai;
 use crate::operator;
@@ -41,8 +41,10 @@ pub struct AppState {
     pub inspector: InspectorStore,
     pub metrics: Metrics,
     pub round_robin: RoundRobinCounters,
+    pub context_sizes: ContextSizeCache,
     shutdown: watch::Sender<bool>,
     _health_probe: HealthProbeTask,
+    _context_size_refresh: ContextSizeRefreshTask,
     started: Instant,
     started_at_unix_ms: u64,
 }
@@ -61,6 +63,9 @@ impl AppState {
         let health = BackendHealthStore::new();
         let health_probe = HealthProbeTask::start(config.clone(), http.clone(), health.clone());
         let round_robin = RoundRobinCounters::new();
+        let context_sizes = ContextSizeCache::new();
+        let context_size_refresh =
+            ContextSizeRefreshTask::start(config.clone(), http.clone(), context_sizes.clone());
         Ok(Self {
             config,
             http,
@@ -68,8 +73,10 @@ impl AppState {
             inspector,
             metrics,
             round_robin,
+            context_sizes,
             shutdown,
             _health_probe: health_probe,
+            _context_size_refresh: context_size_refresh,
             started,
             started_at_unix_ms,
         })
@@ -119,16 +126,24 @@ async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
     let config = state.config.snapshot();
     let response = match authenticate(&headers, &config.clients) {
         Ok(identity) => {
-            let available = config.public_model_context_lengths();
+            let available = config.public_model_context_lengths_with_cache(&state.context_sizes);
             let identity_id = identity.id.clone();
             let models = identity
                 .models
                 .into_iter()
                 .filter_map(|model| {
-                    available
-                        .get(&model)
-                        .copied()
-                        .map(|context_length| openai::ModelObject::new(model, context_length))
+                    available.get(&model).map(|resolved| match resolved {
+                        ResolvedContextLength::None => openai::ModelObject::new(model, None),
+                        ResolvedContextLength::Static { n_ctx } => {
+                            openai::ModelObject::new_static(model, *n_ctx)
+                        }
+                        ResolvedContextLength::Upstream { n_ctx: Some(n_ctx) } => {
+                            openai::ModelObject::new(model, Some(*n_ctx))
+                        }
+                        ResolvedContextLength::Upstream { n_ctx: None } => {
+                            openai::ModelObject::new(model, None)
+                        }
+                    })
                 })
                 .collect::<Vec<_>>();
             let model_count = models.len();
@@ -167,11 +182,21 @@ async fn model(
     let config = state.config.snapshot();
     let response = match authenticate(&headers, &config.clients) {
         Ok(identity) => {
-            let available = config.public_model_context_lengths();
+            let available = config.public_model_context_lengths_with_cache(&state.context_sizes);
             if identity.models.contains(&model) {
-                if let Some(context_length) = available.get(&model).copied() {
-                    let response =
-                        openai::model_response(model.clone(), context_length).into_response();
+                if let Some(resolved) = available.get(&model) {
+                    let response = match resolved {
+                        ResolvedContextLength::None => {
+                            openai::model_response(model.clone(), None).into_response()
+                        }
+                        ResolvedContextLength::Static { n_ctx } => {
+                            openai::model_response_with_n_ctx_train(model.clone(), *n_ctx)
+                                .into_response()
+                        }
+                        ResolvedContextLength::Upstream { n_ctx } => {
+                            openai::model_response(model.clone(), *n_ctx).into_response()
+                        }
+                    };
                     state.metrics.record_request(
                         &model_route_labels("models_retrieve", &identity.id, &model),
                         response.status().as_u16(),
@@ -180,7 +205,6 @@ async fn model(
                     debug!(
                         identity = %identity.id,
                         model = %model,
-                        context_length = ?context_length,
                         response_status = response.status().as_u16(),
                         "model response completed"
                     );
@@ -231,17 +255,18 @@ async fn props(
     let config = state.config.snapshot();
     let response = match authenticate(&headers, &config.clients) {
         Ok(identity) => {
-            let available = config.public_model_context_lengths();
+            let available = config.public_model_context_lengths_with_cache(&state.context_sizes);
             let response = match query_model.as_deref() {
                 Some(model) => {
                     if identity.models.contains(model) {
-                        if let Some(context_length) = available.get(model).copied() {
-                            openai::props_response(
-                                Some("router"),
-                                Some(model.to_owned()),
-                                context_length.unwrap_or(0),
-                            )
-                            .into_response()
+                        if let Some(resolved) = available.get(model) {
+                            let n_ctx = match resolved {
+                                ResolvedContextLength::None => 0,
+                                ResolvedContextLength::Static { n_ctx, .. } => *n_ctx,
+                                ResolvedContextLength::Upstream { n_ctx } => n_ctx.unwrap_or(0),
+                            };
+                            openai::props_response(Some("router"), Some(model.to_owned()), n_ctx)
+                                .into_response()
                         } else {
                             ApiError::model_not_found(model).into_response()
                         }
@@ -473,7 +498,8 @@ async fn operator_models(
     }
 
     let config = state.config.snapshot();
-    let mut response = Json(operator::models_snapshot(&config)).into_response();
+    let mut response =
+        Json(operator::models_snapshot(&config, &state.context_sizes)).into_response();
     add_inspector_headers(&mut response);
     response
 }
