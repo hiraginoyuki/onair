@@ -61,10 +61,6 @@ models = ["gpt-4o"]
 id = "local-vllm"
 base_url = "http://127.0.0.1:8000"
 # api_key_env = "LOCAL_VLLM_API_KEY"
-# Optional backend-level value for model routes that use context_length = "inherit".
-context_length = 131072
-# Optional: weight biases selection under strategy = "weighted_random". Default is 1; must be > 0.
-# weight = 1
 # Use ["all", "streaming"] for a backend that should receive any native OpenAI-compatible /v1/* route it supports.
 # Compatibility routes require explicit markers:
 # - "responses_via_chat_completions" for client /v1/responses -> upstream /v1/chat/completions.
@@ -82,8 +78,9 @@ timeout_ms = 120000
 [[backend.model]]
 public = "gpt-4o-mini"
 backend = "llama-3.1-8b-instruct"
-# Optional: "none" or omitted hides it, "inherit" uses backend.context_length, or use an integer.
-context_length = "inherit"
+# Optional: omitted or "none" hides the value, integer literal sets a fixed n_ctx, "upstream" forwards the
+# live n_ctx from this backend's /props?model=<backend>. See docs/configuration.md for details.
+context_length = "upstream"
 endpoints = ["chat", "responses"]
 # endpoints = ["chat", "responses", "tools"] # if this model route supports function tools
 

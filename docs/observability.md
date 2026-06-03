@@ -203,6 +203,21 @@ probes; redirect responses are treated as non-success.
 Backend health is currently an operator signal; it does not automatically
 remove unhealthy backends from routing.
 
+## Context-Size Refresh
+
+For each `[[backend.model]]` whose `context_length` policy is `"upstream"`,
+onair issues a background `GET <backend.base_url>/props?model=<backend_model>`
+to the owning backend on a 60 s interval and caches the
+`default_generation_settings.n_ctx` value. The refresh task runs once
+immediately after config load, then sleeps between ticks. Each request uses
+the backend's configured API key (if any) and a 5 s per-fetch timeout.
+Failures are recorded as a non-2xx status, JSON parse error, or
+`reqwest::Error` class (`timeout`, `connect`, `request`, `unknown`); the
+model is hidden from `/v1/models` and `/props` until the next successful
+refresh. The operator endpoint `/_onair/operator/models` reports the
+`context_length_source` and `context_length_last_fetch_unix_ms` for each
+public model so operators can see whether the cached value is fresh.
+
 ## Logging
 
 onair logs sanitized failures at `warn` and successful proxy/model responses at

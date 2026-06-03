@@ -68,14 +68,13 @@ api_key_env = "ONAIR_DEV_API_KEY"
 id = "local-vllm"
 base_url = "http://127.0.0.1:8000"
 api_key_env = "LOCAL_VLLM_API_KEY"
-context_length = 131072
 capabilities = ["chat", "responses", "streaming", "tools"]
 timeout_ms = 120000
 
 [[backend.model]]
 public = "gpt-4o-mini"
 backend = "llama-3.1-8b-instruct"
-context_length = "inherit"
+context_length = "upstream"
 endpoints = ["chat", "responses"]
 ```
 
@@ -156,22 +155,33 @@ chain and resolved the same way: the closest valid hop wins.
 
 ## Context Length
 
-- `[[backend]].context_length` sets a backend-level default context length for
-  inheritance.
-- `[[backend.model]].context_length = "inherit"` copies the backend-level
-  value into llama.cpp-style public metadata.
-- `[[backend.model]].context_length = <integer>` returns a specific value for
-  that public model.
-- `[[backend.model]].context_length = "none"` or omitting the field entirely
-  hides the value, which is the default OpenAI-compatible behavior.
-- If you use `"inherit"` without a backend-level `context_length`, config
-  loading fails.
-- When visible, `/v1/models` and `/v1/models/{model}` expose the value as
-  `meta.n_ctx` and `meta.n_ctx_train`, matching llama.cpp's OpenAI-compatible
-  model object shape.
-- `/props?model=<public-model>` and `/v1/props?model=<public-model>` expose
-  the runtime context as `default_generation_settings.n_ctx`, matching
-  llama.cpp's props endpoint shape.
+- Omitting `[[backend.model]].context_length` or setting it to `"none"` hides
+  the value, which is the default OpenAI-compatible behavior. No metadata is
+  exposed for that public model in `/v1/models` or `/props`.
+- `[[backend.model]].context_length = <integer>` returns a fixed value for
+  that public model. `/v1/models` and `/v1/models/{model}` expose
+  `meta.n_ctx` and `meta.n_ctx_train`, both equal to the configured integer.
+- `[[backend.model]].context_length = "upstream"` forwards the live context
+  size from the backend that owns this route. onair issues a background
+  `GET <backend.base_url>/props?model=<backend_model>` to the backend on a
+  60 s interval and caches the `default_generation_settings.n_ctx` value.
+  `/v1/models` and `/v1/models/{model}` expose the value as `meta.n_ctx`
+  only; `meta.n_ctx_train` is omitted because llama.cpp's `/props` does
+  not return a corresponding field. `/props?model=<public-model>` exposes
+  the same value as `default_generation_settings.n_ctx`.
+- If the upstream `/props` request fails (timeout, connect error, non-2xx,
+  malformed body, missing `n_ctx`), the model is hidden from `/v1/models`
+  and `/props` until the next successful refresh, and the operator API
+  reports `context_length_source: "upstream"` with a null
+  `context_length_last_fetch_unix_ms`. No retry is attempted within a
+  single refresh tick; the next tick retries on its own schedule.
+- `[[backend]].context_length` is not a recognized field. Old configs that
+  use it fail to load with a serde `unknown field` error pointing to the
+  exact field. Move the value to a `[[backend.model]].context_length` entry
+  (either an integer or `"upstream"`).
+- The old `"inherit"` mode is no longer accepted. Replace it with
+  `"upstream"` to forward the live value, or with the desired integer if
+  the value is known at config time.
 
 ## API Keys
 
