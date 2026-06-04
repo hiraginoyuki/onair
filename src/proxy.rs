@@ -50,7 +50,7 @@ use self::upstream::{
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
 
-fn no_op_live_upsert(_record: &mut InspectorRequestRecord) {}
+fn refresh_live_record(_record: &mut InspectorRequestRecord) {}
 
 pub async fn proxy_v1(
     state: Arc<AppState>,
@@ -93,10 +93,6 @@ pub async fn proxy_v1(
     let identity = match authenticate(&headers, &config.clients) {
         Ok(identity) => {
             timeline.mark(TimelineEvent::AuthDone);
-            live_record.update(|record| {
-                record.base.identity = identity.id.clone();
-                record.timeline.auth_done_us = timeline.snapshot().auth_done_us;
-            });
             identity
         }
         Err(error) => {
@@ -138,14 +134,6 @@ pub async fn proxy_v1(
     let content_type = header_str(&headers, &CONTENT_TYPE).map(str::to_owned);
     let request_shape = openai::inspect_request(&body, content_type.as_deref(), uri.query());
     timeline.mark(TimelineEvent::RequestInspected);
-    live_record.update(|record| {
-        record.base.requested_model = request_shape
-            .model
-            .clone()
-            .unwrap_or_else(|| "unknown".to_owned());
-        record.base.stream = request_shape.stream;
-        record.timeline.request_inspected_us = timeline.snapshot().request_inspected_us;
-    });
     if request_shape.model.is_none() && routing::path_requires_model(&path) {
         let error = ApiError::bad_request(
             "Missing required parameter: model.",
@@ -237,9 +225,6 @@ pub async fn proxy_v1(
     ) {
         Ok(routes) => {
             timeline.mark(TimelineEvent::RouteSelected);
-            live_record.update(|record| {
-                record.timeline.route_selected_us = timeline.snapshot().route_selected_us;
-            });
             routes
         }
         Err(error) => {
@@ -301,7 +286,9 @@ pub async fn proxy_v1(
         routed_inspector_base(&observation, &labels, &model_log_fields, &backend_target);
     live_record.update(|record| {
         record.base = inspector_base.clone();
+        record.timeline = timeline.snapshot();
     });
+    live_record.publish_initial();
 
     let span = info_span!(
         "proxy_v1",
@@ -447,7 +434,7 @@ impl ProxyContext {
     fn record_retried_attempt(&mut self, attempt: InspectorAttemptRecord) {
         self.backend_attempts.push(attempt.clone());
         self.retried_attempts.push(attempt);
-        self.live_upsert(no_op_live_upsert);
+        self.live_upsert(refresh_live_record);
     }
 
     fn record_final_attempt(
@@ -466,7 +453,7 @@ impl ProxyContext {
                 error_kind,
                 ended_us,
             ));
-            self.live_upsert(no_op_live_upsert);
+            self.live_upsert(refresh_live_record);
         }
     }
 }
@@ -587,7 +574,7 @@ async fn do_proxy(
         .map_err(|error| ApiError::bad_request(error.message(), error.param()))?;
         attempt_record
             .mark_request_rewritten(context.timeline.mark(TimelineEvent::RequestRewritten));
-        context.live_upsert(no_op_live_upsert);
+        context.live_upsert(refresh_live_record);
         let upstream_query = openai::rewrite_query_model(
             request_query.as_deref(),
             context.route.backend_model.as_deref(),
@@ -629,7 +616,7 @@ async fn do_proxy(
         if context.debug_capture.is_some() {
             attempt_record
                 .mark_debug_capture_done(context.timeline.mark(TimelineEvent::DebugCaptureDone));
-            context.live_upsert(no_op_live_upsert);
+            context.live_upsert(refresh_live_record);
         }
 
         let mut upstream_request = context
@@ -666,16 +653,16 @@ async fn do_proxy(
 
         attempt_record
             .mark_backend_forward_start(context.timeline.mark(TimelineEvent::BackendForwardStart));
-        context.live_upsert(no_op_live_upsert);
+        context.live_upsert(refresh_live_record);
         match send_upstream_request(upstream_request, &mut context.shutdown).await {
             Ok(response) => {
                 attempt_record.mark_backend_headers_received(
                     context.timeline.mark(TimelineEvent::BackendHeadersReceived),
                 );
-                context.live_upsert(no_op_live_upsert);
                 context.backend_remote_addr = response.remote_addr();
                 attempt_record.set_backend_remote_addr(context.backend_remote_addr);
                 context.current_attempt = Some(attempt_record);
+                context.live_upsert(refresh_live_record);
                 break response;
             }
             Err(UpstreamSendError::Shutdown) => {

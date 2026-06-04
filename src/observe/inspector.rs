@@ -306,13 +306,25 @@ impl LiveRecord {
         retention_requests: usize,
         initial: InspectorRequestRecord,
     ) -> Self {
-        store.upsert(enabled, retention_requests, initial.clone());
         Self {
             store,
             enabled,
             retention_requests,
             record: Mutex::new(initial),
         }
+    }
+
+    pub(crate) fn publish_initial(&self) {
+        if !self.enabled {
+            return;
+        }
+        let record = self
+            .record
+            .lock()
+            .expect("live inspector record lock poisoned")
+            .clone();
+        self.store
+            .upsert(self.enabled, self.retention_requests, record);
     }
 
     pub(crate) fn update<F>(&self, mutate: F)
@@ -648,6 +660,29 @@ mod tests {
     }
 
     #[test]
+    fn live_record_new_does_not_publish_initial_record() {
+        let store = InspectorStore::new();
+        let mut initial = test_record("deferred-1");
+        initial.outcome = InspectorOutcome::InFlight;
+        initial.status = 0;
+        let _live = LiveRecord::new(store.clone(), true, 8, initial);
+        assert!(store.get("deferred-1").is_none());
+    }
+
+    #[test]
+    fn live_record_publish_initial_pushes_after_creation() {
+        let store = InspectorStore::new();
+        let mut initial = test_record("publish-1");
+        initial.outcome = InspectorOutcome::InFlight;
+        initial.status = 0;
+        let live = LiveRecord::new(store.clone(), true, 8, initial);
+        live.publish_initial();
+        let stored = store.get("publish-1").expect("published record");
+        assert!(matches!(stored.outcome, InspectorOutcome::InFlight));
+        assert_eq!(stored.status, 0);
+    }
+
+    #[test]
     fn live_record_partial_field_updates_replace_in_place() {
         let store = InspectorStore::new();
         let mut initial = test_record("live-1");
@@ -762,19 +797,22 @@ mod tests {
             },
         };
         let store = InspectorStore::from_config(&config).unwrap();
+        store.record(true, 8, test_record("completed-1"));
         let mut in_flight = test_record("inflight-1");
         in_flight.outcome = InspectorOutcome::InFlight;
         in_flight.status = 0;
         in_flight.error_kind = None;
         store.upsert(true, 8, in_flight);
         drop(store);
-        wait_for_stored_count(&path, 1);
+        wait_for_stored_count(&path, 2);
 
         let restored = InspectorStore::from_config(&config).unwrap();
         let record = restored.get("inflight-1").expect("interrupted record");
         assert!(matches!(record.outcome, InspectorOutcome::Interrupted));
         assert_eq!(record.status, 503);
         assert_eq!(record.error_kind.as_deref(), Some("interrupted"));
+        let completed = restored.get("completed-1").expect("completed record");
+        assert!(matches!(completed.outcome, InspectorOutcome::Completed));
     }
 
     #[test]
