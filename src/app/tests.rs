@@ -11,6 +11,7 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, FORWARDED, LOCATION};
 use axum::http::{Request, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -1418,6 +1419,249 @@ async fn inspector_preflight_failure_replaces_live_record_without_duplication() 
     assert_eq!(record["query"], "preflight=deny&model=nonexistent-model");
     let outcome_kind = record["outcome"]["kind"].as_str().unwrap_or("");
     assert_eq!(outcome_kind, "preflight");
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn inspector_auth_preflight_failure_emits_auth_stage_record() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", backend.base_url())],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state);
+
+    let unauth_request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses?preflight=auth")
+        .header(CONTENT_TYPE, "application/json")
+        .extension(ConnectInfo(
+            "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+        ))
+        .body(Body::from(
+            json!({
+                "model": PUBLIC_MODEL,
+                "input": "hello auth preflight"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(unauth_request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let _ = json_body(response).await;
+
+    let response = app
+        .clone()
+        .oneshot(inspector_get("/_onair/inspector/requests"))
+        .await
+        .unwrap();
+    let body = json_body(response).await;
+    let requests = body.as_array().unwrap();
+    assert_eq!(requests.len(), 1, "expected one record, not a duplicate");
+    let record = &requests[0];
+    assert_eq!(record["query"], "preflight=auth");
+    assert_eq!(record["outcome"]["kind"], "preflight");
+    assert_eq!(record["outcome"]["stage"], "auth");
+    assert_eq!(record["status"], 401);
+    assert_eq!(record["identity"], "unknown");
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn inspector_sse_event_stream_emits_in_flight_record_for_active_request() {
+    let backend = TestBackend::spawn_slow("backend-a").await;
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", backend.base_url())],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state);
+
+    let sse_request = Request::builder()
+        .method(Method::GET)
+        .uri("/_onair/inspector/events")
+        .extension(ConnectInfo(
+            "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let sse_response = app.clone().oneshot(sse_request).await.unwrap();
+    assert_eq!(sse_response.status(), StatusCode::OK);
+    assert!(
+        sse_response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .contains("text/event-stream")
+    );
+
+    let consumer = tokio::spawn(async move {
+        let mut body = sse_response.into_body();
+        let mut buffer = String::new();
+        loop {
+            let frame = match body.frame().await {
+                Some(Ok(frame)) => frame,
+                Some(Err(error)) => return Err(format!("sse body error: {error}")),
+                None => return Err("sse body closed before in-flight event".to_owned()),
+            };
+            if let Some(data) = frame.data_ref() {
+                buffer.push_str(std::str::from_utf8(data).map_err(|e| e.to_string())?);
+            }
+            while let Some(split) = buffer.find("\n\n") {
+                let event: String = buffer.drain(..split + 2).collect();
+                let mut event_name = String::new();
+                let mut data = String::new();
+                for line in event.lines() {
+                    if let Some(rest) = line.strip_prefix("event: ") {
+                        event_name = rest.to_owned();
+                    } else if let Some(rest) = line.strip_prefix("data: ") {
+                        data.push_str(rest);
+                        data.push('\n');
+                    }
+                }
+                if event_name == "request" {
+                    let parsed: Value = serde_json::from_str(data.trim_end())
+                        .map_err(|e| format!("bad sse json: {e}"))?;
+                    if parsed["query"] == "sse=1" && parsed["outcome"]["kind"] == "in_flight" {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    });
+
+    let request_handle = tokio::spawn({
+        let app = app.clone();
+        async move {
+            app.oneshot(json_request(
+                "/v1/responses?sse=1",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello live sse consumer"
+                }),
+            ))
+            .await
+        }
+    });
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), consumer)
+        .await
+        .expect("SSE consumer did not see an in-flight event within 5s")
+        .expect("SSE consumer task panicked");
+    outcome.expect("SSE consumer did not return Ok");
+    let _ = request_handle.await;
+    backend.abort();
+}
+
+#[tokio::test]
+async fn inspector_in_flight_record_persisted_as_interrupted_on_app_state_drop() {
+    let database_path = temp_database_path("app-drop");
+    let backend = TestBackend::spawn_slow("backend-a").await;
+    let inspector = InspectorConfig {
+        enabled: true,
+        retention_requests: 16,
+        allow_remote: false,
+        persistence: InspectorPersistenceConfig {
+            enabled: true,
+            path: Some(database_path.clone()),
+        },
+    };
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", backend.base_url())],
+        inspector,
+    );
+    let app = router(state.clone());
+
+    let request_handle = tokio::spawn({
+        let app = app.clone();
+        async move {
+            app.oneshot(json_request(
+                "/v1/responses?app-drop=1",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello app drop"
+                }),
+            ))
+            .await
+        }
+    });
+
+    let mut saw_inflight = false;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let body = json_body(
+            app.clone()
+                .oneshot(inspector_get("/_onair/inspector/requests"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let requests = body.as_array().unwrap();
+        if requests
+            .iter()
+            .any(|r| r["query"] == "app-drop=1" && r["outcome"]["kind"] == "in_flight")
+        {
+            saw_inflight = true;
+            break;
+        }
+    }
+    assert!(
+        saw_inflight,
+        "polling never saw the in-flight record for app-drop=1"
+    );
+
+    request_handle.abort();
+    let _ = request_handle.await;
+
+    drop(app);
+    drop(state);
+
+    wait_for_persisted_count(&database_path, 1).await;
+
+    let restored_state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", backend.base_url())],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            persistence: InspectorPersistenceConfig {
+                enabled: true,
+                path: Some(database_path.clone()),
+            },
+        },
+    );
+    let restored_app = router(restored_state);
+    let body = json_body(
+        restored_app
+            .oneshot(inspector_get("/_onair/inspector/requests"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let requests = body.as_array().unwrap();
+    let record = requests
+        .iter()
+        .find(|r| r["query"] == "app-drop=1")
+        .expect("interrupted record should be persisted");
+    assert_eq!(record["outcome"]["kind"], "interrupted");
+    assert_eq!(record["status"], 503);
+    assert_eq!(record["error_kind"], "interrupted");
 
     backend.abort();
 }

@@ -285,7 +285,10 @@
 
     function outcomeText(record) {
       if (!record || !record.outcome) return "unknown";
-      if (typeof record.outcome === "string") return record.outcome;
+      if (typeof record.outcome === "string") {
+        if (record.outcome === "in_flight") return "in-flight";
+        return record.outcome;
+      }
       if (record.outcome.kind === "preflight") return `preflight:${record.outcome.stage}`;
       if (record.outcome.kind === "in_flight") return "in-flight";
       if (record.outcome.kind === "interrupted") return "interrupted";
@@ -293,11 +296,15 @@
     }
 
     function isInFlight(record) {
-      return record && record.outcome && typeof record.outcome === "object" && record.outcome.kind === "in_flight";
+      if (!record || !record.outcome) return false;
+      if (typeof record.outcome === "string") return record.outcome === "in_flight";
+      return record.outcome.kind === "in_flight";
     }
 
     function isInterrupted(record) {
-      return record && record.outcome && typeof record.outcome === "object" && record.outcome.kind === "interrupted";
+      if (!record || !record.outcome) return false;
+      if (typeof record.outcome === "string") return record.outcome === "interrupted";
+      return record.outcome.kind === "interrupted";
     }
 
     function statusClass(status, record) {

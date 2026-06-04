@@ -86,6 +86,15 @@ impl Drop for InspectorStoreInner {
 }
 
 fn mark_record_interrupted(record: &mut InspectorRequestRecord) {
+    // `completed_at_unix_ms` is computed from the recorded timeline
+    // rather than the wall clock at interruption time: the record
+    // already carries `started_at_unix_ms`, and adding the elapsed
+    // timeline keeps the wall-clock duration internally consistent
+    // with how completed records are stamped. If the request was
+    // interrupted before any timeline mark landed, `total_us` is 0
+    // and the value collapses to `started_at_unix_ms`; in that case
+    // the value reads as "finished at start" but is still
+    // monotonically non-decreasing against any sibling record.
     let completed_at_unix_ms = record
         .base
         .started_at_unix_ms

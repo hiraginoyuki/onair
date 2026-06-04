@@ -927,6 +927,7 @@ dependencies = [
  "bytes",
  "clap",
  "futures-util",
+ "http-body-util",
  "notify",
  "opentelemetry",
  "opentelemetry-otlp",
