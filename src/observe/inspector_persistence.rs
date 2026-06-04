@@ -374,6 +374,7 @@ fn prune_records(connection: &Connection, retention_requests: usize) -> Result<(
 
 fn outcome_kind(outcome: &InspectorOutcome) -> &'static str {
     match outcome {
+        InspectorOutcome::InFlight => "in_flight",
         InspectorOutcome::Completed => "completed",
         InspectorOutcome::Preflight { .. } => "preflight",
         InspectorOutcome::UpstreamTimeout => "upstream_timeout",
@@ -382,6 +383,7 @@ fn outcome_kind(outcome: &InspectorOutcome) -> &'static str {
         InspectorOutcome::UpstreamBodyReadFailed => "upstream_body_read_failed",
         InspectorOutcome::UpstreamStreamFailed => "upstream_stream_failed",
         InspectorOutcome::StreamIncomplete => "stream_incomplete",
+        InspectorOutcome::Interrupted => "interrupted",
     }
 }
 

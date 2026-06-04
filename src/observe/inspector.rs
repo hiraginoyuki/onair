@@ -317,6 +317,7 @@ pub(crate) struct InspectorRequestBase {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum InspectorOutcome {
+    InFlight,
     Completed,
     Preflight { stage: String },
     UpstreamTimeout,
@@ -325,6 +326,7 @@ pub(crate) enum InspectorOutcome {
     UpstreamBodyReadFailed,
     UpstreamStreamFailed,
     StreamIncomplete,
+    Interrupted,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -535,6 +537,18 @@ mod tests {
         let record_id = InspectorStore::next_record_id(42, Some("req/test value"));
         assert!(record_id.contains("42-"));
         assert!(record_id.ends_with("req_test_value"));
+    }
+
+    #[test]
+    fn in_flight_outcome_serializes_as_in_flight_kind() {
+        let value = serde_json::to_value(InspectorOutcome::InFlight).unwrap();
+        assert_eq!(value, serde_json::json!({"kind": "in_flight"}));
+    }
+
+    #[test]
+    fn interrupted_outcome_serializes_as_interrupted_kind() {
+        let value = serde_json::to_value(InspectorOutcome::Interrupted).unwrap();
+        assert_eq!(value, serde_json::json!({"kind": "interrupted"}));
     }
 
     #[test]
