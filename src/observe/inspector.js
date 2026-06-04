@@ -77,7 +77,7 @@
         headerClass: "c-status",
         defaultVisible: true,
         value: record => record.status,
-        className: record => `status-code ${statusClass(Number(record.status))}`,
+        className: record => `status-code ${statusClass(Number(record.status), record)}`,
         help: "Client-facing response status.",
       },
       {
@@ -252,6 +252,12 @@
 
     const quickFilterDefinitions = [
       {
+        key: "in-flight",
+        label: "in-flight",
+        title: "Show requests that are currently being processed (live updates).",
+        matches: record => isInFlight(record),
+      },
+      {
         key: "error",
         label: "errors",
         title: "Show requests with status >= 400 or a non-completed outcome.",
@@ -281,12 +287,26 @@
       if (!record || !record.outcome) return "unknown";
       if (typeof record.outcome === "string") return record.outcome;
       if (record.outcome.kind === "preflight") return `preflight:${record.outcome.stage}`;
+      if (record.outcome.kind === "in_flight") return "in-flight";
+      if (record.outcome.kind === "interrupted") return "interrupted";
       return record.outcome.kind || "unknown";
     }
 
-    function statusClass(status) {
-      if (status >= 500) return "bad";
-      if (status >= 400) return "warn";
+    function isInFlight(record) {
+      return record && record.outcome && typeof record.outcome === "object" && record.outcome.kind === "in_flight";
+    }
+
+    function isInterrupted(record) {
+      return record && record.outcome && typeof record.outcome === "object" && record.outcome.kind === "interrupted";
+    }
+
+    function statusClass(status, record) {
+      if (record && isInFlight(record)) return "pending";
+      if (record && isInterrupted(record)) return "interrupted";
+      const code = Number(status);
+      if (code >= 500) return "bad";
+      if (code >= 400) return "warn";
+      if (code === 0) return "pending";
       return "ok";
     }
 
@@ -901,9 +921,12 @@
       const list = recordList();
       const columns = activeColumns();
       rows.replaceChildren();
-      countText.textContent = list.length === records.size
-        ? `${records.size} request${records.size === 1 ? "" : "s"}`
-        : `${list.length}/${records.size} requests`;
+      const inFlightCount = Array.from(records.values()).filter(isInFlight).length;
+      const countSuffix = inFlightCount > 0 ? `, ${inFlightCount} in-flight` : "";
+      const total = records.size;
+      countText.textContent = list.length === total
+        ? `${total} request${total === 1 ? "" : "s"}${countSuffix}`
+        : `${list.length}/${total} requests${countSuffix}`;
       empty.style.display = list.length ? "none" : "block";
 
       for (const record of list.slice(0, 1000)) {
@@ -1208,7 +1231,7 @@
         const track = document.createElement("div");
         track.className = "waterfall-track";
         const span = document.createElement("div");
-        span.className = `waterfall-span ${statusClass(Number(attempt.status))}`;
+        span.className = `waterfall-span ${statusClass(Number(attempt.status), null)}`;
         span.style.left = `${percent(started, total)}%`;
         span.style.width = `${Math.max(0.6, percent(ended - started, total))}%`;
         span.title = [
