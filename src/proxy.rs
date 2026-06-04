@@ -18,8 +18,9 @@ use crate::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
 use crate::observe::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
 use crate::observe::{
-    ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase, InspectorStore,
-    InspectorTokenCounts, RequestTimeline, TimelineEvent,
+    ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
+    InspectorRequestRecord, InspectorStore, InspectorTokenCounts, LiveRecord, RequestTimeline,
+    TimelineEvent,
 };
 use crate::openai;
 use crate::routing::{self, SelectedRoute};
@@ -32,8 +33,9 @@ mod upstream;
 
 use self::attempt::{InspectorAttemptBuilder, InspectorAttemptInit};
 use self::inspector::{
-    PreflightInspectorRecord, RequestObservationBase, record_context_inspector,
-    record_preflight_inspector, routed_inspector_base,
+    PreflightInspectorRecord, RequestObservationBase, build_live_record_from_context,
+    initial_live_record, record_context_inspector, record_preflight_inspector,
+    routed_inspector_base,
 };
 use self::logging::{
     PreflightFailureLog, debug_capture_id, warn_preflight_failure, warn_proxy_failure,
@@ -79,9 +81,20 @@ pub async fn proxy_v1(
         request_body_bytes,
     };
 
+    let live_record = LiveRecord::new(
+        state.inspector.clone(),
+        observation.inspector_enabled,
+        observation.inspector_retention_requests,
+        initial_live_record(&observation, &timeline, &route_name),
+    );
+
     let identity = match authenticate(&headers, &config.clients) {
         Ok(identity) => {
             timeline.mark(TimelineEvent::AuthDone);
+            live_record.update(|record| {
+                record.base.identity = identity.id.clone();
+                record.timeline.auth_done_us = timeline.snapshot().auth_done_us;
+            });
             identity
         }
         Err(error) => {
@@ -123,6 +136,14 @@ pub async fn proxy_v1(
     let content_type = header_str(&headers, &CONTENT_TYPE).map(str::to_owned);
     let request_shape = openai::inspect_request(&body, content_type.as_deref(), uri.query());
     timeline.mark(TimelineEvent::RequestInspected);
+    live_record.update(|record| {
+        record.base.requested_model = request_shape
+            .model
+            .clone()
+            .unwrap_or_else(|| "unknown".to_owned());
+        record.base.stream = request_shape.stream;
+        record.timeline.request_inspected_us = timeline.snapshot().request_inspected_us;
+    });
     if request_shape.model.is_none() && routing::path_requires_model(&path) {
         let error = ApiError::bad_request(
             "Missing required parameter: model.",
@@ -214,6 +235,9 @@ pub async fn proxy_v1(
     ) {
         Ok(routes) => {
             timeline.mark(TimelineEvent::RouteSelected);
+            live_record.update(|record| {
+                record.timeline.route_selected_us = timeline.snapshot().route_selected_us;
+            });
             routes
         }
         Err(error) => {
@@ -273,6 +297,9 @@ pub async fn proxy_v1(
     };
     let inspector_base =
         routed_inspector_base(&observation, &labels, &model_log_fields, &backend_target);
+    live_record.update(|record| {
+        record.base = inspector_base.clone();
+    });
 
     let span = info_span!(
         "proxy_v1",
@@ -310,6 +337,7 @@ pub async fn proxy_v1(
         inspector_base,
         inspector_enabled: observation.inspector_enabled,
         inspector_retention_requests: observation.inspector_retention_requests,
+        live_record: Some(live_record),
         client_info,
         shutdown,
         backend_target,
@@ -351,6 +379,7 @@ struct ProxyContext {
     inspector_base: InspectorRequestBase,
     inspector_enabled: bool,
     inspector_retention_requests: usize,
+    live_record: Option<LiveRecord>,
     client_info: ClientInfo,
     shutdown: watch::Receiver<bool>,
     backend_target: String,
@@ -391,6 +420,31 @@ impl ProxyContext {
         self.inspector_base.backend_remote_addr = None;
         self.inspector_base.debug_capture_id = None;
         self.route = route;
+        if let Some(live) = &self.live_record {
+            let base = self.inspector_base.clone();
+            live.update(|record| record.base = base);
+        }
+    }
+
+    #[allow(dead_code)]
+    fn live_upsert<F>(&self, mutate: F)
+    where
+        F: FnOnce(&mut InspectorRequestRecord),
+    {
+        if let Some(live) = &self.live_record {
+            live.update(|record| {
+                let mut snapshot = build_live_record_from_context(self);
+                mutate(&mut snapshot);
+                *record = snapshot;
+            });
+        }
+    }
+
+    #[allow(dead_code)]
+    fn live_finalize(self, final_record: InspectorRequestRecord) {
+        if let Some(live) = self.live_record {
+            live.finalize(final_record);
+        }
     }
 
     fn record_retried_attempt(&mut self, attempt: InspectorAttemptRecord) {

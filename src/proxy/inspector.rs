@@ -11,6 +11,8 @@ use crate::observe::{
 };
 use crate::openai::UsageTotals;
 
+#[allow(unused_imports)]
+use super::attempt::InspectorAttemptBuilder;
 use super::{ModelLogFields, ProxyContext};
 
 pub(super) struct RequestObservationBase {
@@ -111,23 +113,22 @@ pub(super) fn record_preflight_inspector(record: PreflightInspectorRecord<'_>) {
         return;
     }
 
-    record_inspector_request(
-        &record.state.inspector,
+    record.state.inspector.upsert_final(
         record.observation.inspector_enabled,
         record.observation.inspector_retention_requests,
-        InspectorRecord {
+        InspectorRequestRecord::new(InspectorRequestRecordInit {
             base: preflight_inspector_base(&record),
-            timeline: record.timeline,
             outcome: InspectorOutcome::Preflight {
                 stage: record.stage.to_owned(),
             },
-            status: record.status,
+            status: record.status.as_u16(),
             error_kind: None,
             backend_attempts: Vec::new(),
             retried_attempts: Vec::new(),
             response_body_bytes: None,
             tokens: InspectorTokenCounts::default(),
-        },
+            timeline: record.timeline.snapshot(),
+        }),
     );
 }
 
@@ -210,4 +211,74 @@ pub(super) fn inspector_tokens(usage: UsageTotals) -> InspectorTokenCounts {
         cached_input: usage.cached_input,
         output: usage.output,
     }
+}
+
+pub(super) fn initial_live_record(
+    observation: &RequestObservationBase,
+    timeline: &RequestTimeline,
+    route: &str,
+) -> InspectorRequestRecord {
+    let base = InspectorRequestBase {
+        record_id: observation.record_id.clone(),
+        client_request_id: observation.client_request_id.clone(),
+        started_at_unix_ms: observation.started_at_unix_ms,
+        method: observation.method.clone(),
+        path: observation.path.clone(),
+        query: observation.query.clone(),
+        route: route.to_owned(),
+        identity: "unknown".to_owned(),
+        requested_model: "unknown".to_owned(),
+        public_model: "unknown".to_owned(),
+        backend_model: "unknown".to_owned(),
+        backend: "unknown".to_owned(),
+        backend_target: "unknown".to_owned(),
+        backend_remote_addr: None,
+        stream: false,
+        peer_addr: observation.client_info.peer_addr().to_owned(),
+        effective_client_addr: observation.client_info.effective_client_addr().to_owned(),
+        trusted_proxy_addr: observation.client_info.trusted_proxy_addr().to_owned(),
+        forwarded_for: observation.client_info.forwarded_for().to_owned(),
+        user_agent: observation.client_info.user_agent().to_owned(),
+        request_body_bytes: observation.request_body_bytes,
+        debug_capture_id: None,
+    };
+    InspectorRequestRecord::new(InspectorRequestRecordInit {
+        base,
+        outcome: InspectorOutcome::InFlight,
+        status: 0,
+        error_kind: None,
+        backend_attempts: Vec::new(),
+        retried_attempts: Vec::new(),
+        response_body_bytes: None,
+        tokens: InspectorTokenCounts::default(),
+        timeline: timeline.snapshot(),
+    })
+}
+
+#[allow(dead_code)]
+pub(super) fn build_live_record_from_context(context: &ProxyContext) -> InspectorRequestRecord {
+    let mut base = context.inspector_base.clone();
+    base.backend_remote_addr = context
+        .backend_remote_addr
+        .map(|address| address.to_string());
+    base.debug_capture_id = context
+        .debug_capture
+        .as_ref()
+        .map(|capture| capture.id().to_owned());
+    let now_us = context.timeline.elapsed_us();
+    let mut backend_attempts = context.backend_attempts.clone();
+    if let Some(current) = &context.current_attempt {
+        backend_attempts.push(current.to_attempt_record(now_us));
+    }
+    InspectorRequestRecord::new(InspectorRequestRecordInit {
+        base,
+        outcome: InspectorOutcome::InFlight,
+        status: 0,
+        error_kind: None,
+        backend_attempts,
+        retried_attempts: context.retried_attempts.clone(),
+        response_body_bytes: None,
+        tokens: InspectorTokenCounts::default(),
+        timeline: context.timeline.snapshot(),
+    })
 }

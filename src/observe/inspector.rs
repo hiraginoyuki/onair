@@ -77,6 +77,24 @@ fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+fn upsert_in_place(
+    records: &mut VecDeque<InspectorRequestRecord>,
+    record: InspectorRequestRecord,
+    retention_requests: usize,
+) {
+    if let Some(slot) = records
+        .iter_mut()
+        .find(|slot| slot.base.record_id == record.base.record_id)
+    {
+        *slot = record;
+        return;
+    }
+    records.push_back(record);
+    while records.len() > retention_requests {
+        records.pop_front();
+    }
+}
+
 impl InspectorStore {
     pub(crate) fn new() -> Self {
         Self::from_parts(Vec::new(), None)
@@ -134,10 +152,59 @@ impl InspectorStore {
                 .records
                 .lock()
                 .expect("inspector store lock poisoned");
-            records.push_back(record.clone());
-            while records.len() > retention_requests {
-                records.pop_front();
-            }
+            upsert_in_place(&mut records, record.clone(), retention_requests);
+        }
+
+        if let Some(persistence) = &self.inner.persistence {
+            persistence
+                .writer
+                .record(record.clone(), retention_requests);
+        }
+
+        let _ = self.inner.events.send(record);
+    }
+
+    pub(crate) fn upsert(
+        &self,
+        enabled: bool,
+        retention_requests: usize,
+        record: InspectorRequestRecord,
+    ) {
+        if !enabled {
+            return;
+        }
+
+        let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
+        {
+            let mut records = self
+                .inner
+                .records
+                .lock()
+                .expect("inspector store lock poisoned");
+            upsert_in_place(&mut records, record.clone(), retention_requests);
+        }
+
+        let _ = self.inner.events.send(record);
+    }
+
+    pub(crate) fn upsert_final(
+        &self,
+        enabled: bool,
+        retention_requests: usize,
+        record: InspectorRequestRecord,
+    ) {
+        if !enabled {
+            return;
+        }
+
+        let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
+        {
+            let mut records = self
+                .inner
+                .records
+                .lock()
+                .expect("inspector store lock poisoned");
+            upsert_in_place(&mut records, record.clone(), retention_requests);
         }
 
         if let Some(persistence) = &self.inner.persistence {
@@ -193,6 +260,73 @@ impl InspectorStore {
             record_id.push_str(&client_request_id);
         }
         record_id
+    }
+}
+
+pub(crate) struct LiveRecord {
+    store: InspectorStore,
+    enabled: bool,
+    retention_requests: usize,
+    record: Mutex<InspectorRequestRecord>,
+}
+
+impl LiveRecord {
+    pub(crate) fn new(
+        store: InspectorStore,
+        enabled: bool,
+        retention_requests: usize,
+        initial: InspectorRequestRecord,
+    ) -> Self {
+        store.upsert(enabled, retention_requests, initial.clone());
+        Self {
+            store,
+            enabled,
+            retention_requests,
+            record: Mutex::new(initial),
+        }
+    }
+
+    pub(crate) fn update<F>(&self, mutate: F)
+    where
+        F: FnOnce(&mut InspectorRequestRecord),
+    {
+        if !self.enabled {
+            return;
+        }
+        let snapshot = {
+            let mut record = self
+                .record
+                .lock()
+                .expect("live inspector record lock poisoned");
+            mutate(&mut record);
+            record.clone()
+        };
+        self.store
+            .upsert(self.enabled, self.retention_requests, snapshot);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn snapshot(&self) -> InspectorRequestRecord {
+        self.record
+            .lock()
+            .expect("live inspector record lock poisoned")
+            .clone()
+    }
+
+    pub(crate) fn finalize(self, mut final_record: InspectorRequestRecord) {
+        if !self.enabled {
+            return;
+        }
+        let started = self
+            .record
+            .lock()
+            .expect("live inspector record lock poisoned")
+            .base
+            .started_at_unix_ms;
+        final_record.base.started_at_unix_ms = started;
+        final_record.timeline.started_unix_ms = started;
+        self.store
+            .upsert_final(self.enabled, self.retention_requests, final_record);
     }
 }
 

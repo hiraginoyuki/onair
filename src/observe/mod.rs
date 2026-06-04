@@ -14,7 +14,7 @@ pub(crate) use health::{BackendHealthSnapshot, BackendHealthStore};
 pub(crate) use health_probe::HealthProbeTask;
 pub(crate) use inspector::{
     InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase, InspectorRequestRecord,
-    InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts,
+    InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts, LiveRecord,
 };
 #[cfg(test)]
 pub(crate) use inspector_persistence::stored_count as inspector_persisted_count;

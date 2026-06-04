@@ -89,6 +89,33 @@ impl InspectorAttemptBuilder {
         self.stream_complete_us = Some(elapsed_us);
     }
 
+    #[allow(dead_code)]
+    pub(super) fn to_attempt_record(&self, now_us: u64) -> InspectorAttemptRecord {
+        let elapsed_us = now_us.saturating_sub(self.started_us);
+        InspectorAttemptRecord {
+            attempt: self.attempt,
+            backend: self.backend.clone(),
+            backend_target: self.backend_target.clone(),
+            backend_remote_addr: self.backend_remote_addr.clone(),
+            debug_capture_id: self.debug_capture_id.clone(),
+            status: 0,
+            outcome: "in_progress".to_owned(),
+            error_kind: None,
+            started_us: self.started_us,
+            ended_us: now_us,
+            elapsed_us,
+            elapsed_ms: Duration::from_micros(elapsed_us).as_millis() as u64,
+            upstream_status: None,
+            request_rewritten_us: self.request_rewritten_us,
+            debug_capture_done_us: self.debug_capture_done_us,
+            backend_forward_start_us: self.backend_forward_start_us,
+            backend_headers_received_us: self.backend_headers_received_us,
+            backend_body_first_chunk_us: self.backend_body_first_chunk_us,
+            backend_body_complete_us: self.backend_body_complete_us,
+            stream_complete_us: self.stream_complete_us,
+        }
+    }
+
     pub(super) fn finish_at_body_complete_or(
         self,
         status: StatusCode,
