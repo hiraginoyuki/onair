@@ -145,6 +145,14 @@ and tool-call constraints.
   errors/headers, debug-capture risk, inspector exposure, and secret hygiene.
 - [ROADMAP.md](ROADMAP.md): implemented milestones and future work.
 
+## License
+
+MIT. See [LICENSE](LICENSE). Binary distributions bundle a
+`THIRD_PARTY_LICENSES.md` listing the licenses of the Rust crates onair
+is built on; source distribution is the contents of `Cargo.lock` plus
+this repository. Run `cargo about generate about.hbs >
+THIRD_PARTY_LICENSES.md` to regenerate.
+
 ## Operator Notes
 
 - onair hot-reloads most routing, access, backend, debug-capture, inspector,

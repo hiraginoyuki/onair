@@ -2,6 +2,7 @@
 name = "onair"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 async-stream = "0.3"
