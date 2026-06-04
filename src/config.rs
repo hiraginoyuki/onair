@@ -615,6 +615,12 @@ impl Config {
             }
             let base_url = normalize_backend_base_url(&backend.base_url, &backend.id)?;
             let api_key = resolve_optional_secret(backend.api_key, backend.api_key_env)?;
+            validate_markers(
+                &backend.capabilities,
+                file.routing.unknown_capability_policy,
+                MarkerKind::Capability,
+                &format!("backend '{}'", backend.id),
+            )?;
             let models = backend
                 .models
                 .into_iter()
@@ -634,6 +640,12 @@ impl Config {
                         &model.context_length,
                         &backend.id,
                         &backend_model,
+                    )?;
+                    validate_markers(
+                        &model.endpoints,
+                        file.routing.unknown_endpoint_policy,
+                        MarkerKind::Endpoint,
+                        &format!("backend '{}' model '{}'", backend.id, model.public),
                     )?;
                     Ok(ModelRoute {
                         backend: model.backend.unwrap_or_else(|| model.public.clone()),
@@ -814,6 +826,52 @@ fn validate_routing_config(config: &RoutingConfig) -> Result<()> {
         return Err(Error::Config(format!(
             "routing.fallback_attempts must be at most {MAX_FALLBACK_ATTEMPTS}"
         )));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum MarkerKind {
+    Capability,
+    Endpoint,
+}
+
+impl MarkerKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            MarkerKind::Capability => "capability",
+            MarkerKind::Endpoint => "endpoint",
+        }
+    }
+}
+
+fn validate_markers(
+    values: &BTreeSet<String>,
+    policy: UnknownMarkerPolicy,
+    kind: MarkerKind,
+    location: &str,
+) -> Result<()> {
+    for value in values {
+        if crate::routing::is_known_marker(value) {
+            continue;
+        }
+        match policy {
+            UnknownMarkerPolicy::Warn => {
+                warn!(
+                    marker_kind = kind.as_str(),
+                    unknown_marker = value.as_str(),
+                    location,
+                    "unknown marker; not recognized by the router",
+                );
+            }
+            UnknownMarkerPolicy::Error => {
+                return Err(Error::Config(format!(
+                    "{location} {} '{value}' is not a recognized marker; allowed: {}",
+                    kind.as_str(),
+                    crate::routing::KNOWN_MARKERS.join(", "),
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -1522,6 +1580,255 @@ mod tests {
         assert!(
             error.to_string().contains("unknown_capability_policy"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn unknown_endpoint_marker_passes_under_warn_policy() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["chat", "streaming"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            endpoints = ["chat", "responses_via_chat_completion"]
+            "#,
+        );
+        let endpoint_value = config.backends[0].models[0]
+            .endpoints
+            .iter()
+            .find(|value| value.as_str() == "responses_via_chat_completion")
+            .expect("typo marker should be preserved under warn policy");
+        assert_eq!(endpoint_value, "responses_via_chat_completion");
+    }
+
+    #[test]
+    fn unknown_endpoint_marker_fails_under_error_policy() {
+        let result: std::result::Result<ConfigFile, _> = toml::from_str(
+            r#"
+            [routing]
+            unknown_endpoint_policy = "error"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["chat", "streaming"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            endpoints = ["chat", "responses_via_chat_completion"]
+            "#,
+        );
+        let file = result.expect("config should parse at the toml level");
+        let error = Config::resolve(file)
+            .err()
+            .expect("expected unknown endpoint marker to fail under error policy");
+        let message = error.to_string();
+        assert!(
+            message.contains("backend 'backend-a' model 'public-model'"),
+            "missing location in error: {message}"
+        );
+        assert!(
+            message.contains("responses_via_chat_completion"),
+            "missing offending value in error: {message}"
+        );
+        assert!(
+            message.contains("not a recognized marker"),
+            "missing explanation in error: {message}"
+        );
+    }
+
+    #[test]
+    fn unknown_capability_marker_fails_under_error_policy() {
+        let result: std::result::Result<ConfigFile, _> = toml::from_str(
+            r#"
+            [routing]
+            unknown_capability_policy = "error"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["respons"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+        let file = result.expect("config should parse at the toml level");
+        let error = Config::resolve(file)
+            .err()
+            .expect("expected unknown capability to fail under error policy");
+        let message = error.to_string();
+        assert!(
+            message.contains("backend 'backend-a'"),
+            "missing location in error: {message}"
+        );
+        assert!(
+            message.contains("'respons'"),
+            "missing offending value in error: {message}"
+        );
+    }
+
+    #[test]
+    fn known_aliases_and_compat_markers_are_accepted() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = [
+                "all",
+                "streaming",
+                "chat",
+                "chat_completions",
+                "completions",
+                "responses",
+                "response",
+                "tools",
+                "tool_calls",
+                "function_calling",
+                "functions",
+                "responses_via_chat_completions",
+                "chat_completions_via_responses",
+                "embeddings",
+                "images",
+                "audio",
+                "files",
+                "models",
+                "batches",
+                "fine_tuning",
+                "assistants",
+                "threads",
+                "vector_stores",
+                "uploads",
+            ]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            endpoints = [
+                "chat",
+                "responses_via_chat_completions",
+                "chat_completions_via_responses",
+                "tools",
+                "embeddings",
+            ]
+            "#,
+        );
+        let capabilities = &config.backends[0].capabilities;
+        for known in [
+            "all",
+            "streaming",
+            "chat",
+            "chat_completions",
+            "completions",
+            "responses",
+            "response",
+            "tools",
+            "tool_calls",
+            "function_calling",
+            "functions",
+            "responses_via_chat_completions",
+            "chat_completions_via_responses",
+            "embeddings",
+            "images",
+            "audio",
+            "files",
+            "models",
+            "batches",
+            "fine_tuning",
+            "assistants",
+            "threads",
+            "vector_stores",
+            "uploads",
+        ] {
+            assert!(
+                capabilities.contains(known),
+                "expected capability '{known}' to be accepted"
+            );
+        }
+        let endpoints = &config.backends[0].models[0].endpoints;
+        for known in [
+            "chat",
+            "responses_via_chat_completions",
+            "chat_completions_via_responses",
+            "tools",
+            "embeddings",
+        ] {
+            assert!(
+                endpoints.contains(known),
+                "expected endpoint '{known}' to be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn marker_policies_are_independent() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [routing]
+            unknown_capability_policy = "error"
+            unknown_endpoint_policy = "warn"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["respons"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            endpoints = ["responses_via_chat_completion"]
+            "#,
+        )
+        .expect("config should parse at the toml level");
+        let error = Config::resolve(file)
+            .err()
+            .expect("unknown capability should fail under its own error policy");
+        assert!(
+            error.to_string().contains("'respons'"),
+            "capability error should fire even when endpoint policy is warn: {error}"
         );
     }
 
