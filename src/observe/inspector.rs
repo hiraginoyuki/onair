@@ -648,6 +648,41 @@ mod tests {
     }
 
     #[test]
+    fn live_record_partial_field_updates_replace_in_place() {
+        let store = InspectorStore::new();
+        let mut initial = test_record("live-1");
+        initial.outcome = InspectorOutcome::InFlight;
+        initial.status = 0;
+        let live = LiveRecord::new(store.clone(), true, 8, initial);
+        live.update(|record| {
+            record.timeline.auth_done_us = Some(1234);
+            record.timeline.request_inspected_us = Some(5678);
+        });
+        let stored = store.get("live-1").expect("updated record");
+        assert!(matches!(stored.outcome, InspectorOutcome::InFlight));
+        assert_eq!(stored.timeline.auth_done_us, Some(1234));
+        assert_eq!(stored.timeline.request_inspected_us, Some(5678));
+    }
+
+    #[test]
+    fn live_record_upsert_replaces_in_place_preserving_position() {
+        let store = InspectorStore::new();
+        for id in ["first", "second", "third"] {
+            store.record(true, 8, test_record(id));
+        }
+        let live = LiveRecord::new(store.clone(), true, 8, test_record("second").clone());
+        live.update(|record| {
+            record.timeline.backend_forward_start_us = Some(9999);
+        });
+        let records = store.records_limited(usize::MAX);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].base.record_id, "first");
+        assert_eq!(records[1].base.record_id, "second");
+        assert_eq!(records[1].timeline.backend_forward_start_us, Some(9999));
+        assert_eq!(records[2].base.record_id, "third");
+    }
+
+    #[test]
     fn persistent_store_restores_latest_records() {
         let path = temp_database_path("restore");
         let config = InspectorConfig {

@@ -1254,6 +1254,175 @@ async fn inspector_persistence_restores_retained_records_after_restart() {
 }
 
 #[tokio::test]
+async fn inspector_record_appears_before_request_completes() {
+    let backend = TestBackend::spawn_slow("backend-a").await;
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", backend.base_url())],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state);
+
+    let request_handle = tokio::spawn({
+        let app = app.clone();
+        async move {
+            app.oneshot(json_request(
+                "/v1/responses?inflight=1",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello live inspector"
+                }),
+            ))
+            .await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    let response = app
+        .clone()
+        .oneshot(inspector_get("/_onair/inspector/requests"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let requests = body.as_array().unwrap();
+    assert_eq!(requests.len(), 1);
+    let record = &requests[0];
+    assert_eq!(record["query"], "inflight=1");
+    assert_eq!(record["outcome"]["kind"], "in_flight");
+    assert_eq!(record["status"], 0);
+
+    let _ = request_handle.await;
+    backend.abort();
+}
+
+#[tokio::test]
+async fn inspector_sse_reports_in_flight_record() {
+    let backend = TestBackend::spawn_slow("backend-a").await;
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", backend.base_url())],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state);
+
+    let sse_request = Request::builder()
+        .method(Method::GET)
+        .uri("/_onair/inspector/events")
+        .extension(ConnectInfo(
+            "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let sse_response = app.clone().oneshot(sse_request).await.unwrap();
+    assert_eq!(sse_response.status(), StatusCode::OK);
+    let snapshot = sse_response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        snapshot.contains("text/event-stream"),
+        "content-type: {snapshot}"
+    );
+    drop(sse_response);
+
+    let request_handle = tokio::spawn({
+        let app = app.clone();
+        async move {
+            app.oneshot(json_request(
+                "/v1/responses?sse=1",
+                json!({
+                    "model": PUBLIC_MODEL,
+                    "input": "hello live sse"
+                }),
+            ))
+            .await
+        }
+    });
+    let mut saw_inflight = false;
+    let poll_app = app.clone();
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let body = json_body(
+            poll_app
+                .clone()
+                .oneshot(inspector_get("/_onair/inspector/requests"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let requests = body.as_array().unwrap();
+        if requests
+            .iter()
+            .any(|r| r["query"] == "sse=1" && r["outcome"]["kind"] == "in_flight")
+        {
+            saw_inflight = true;
+            break;
+        }
+    }
+    assert!(saw_inflight, "polling never saw the in-flight record");
+    let _ = request_handle.await;
+    backend.abort();
+}
+
+#[tokio::test]
+async fn inspector_preflight_failure_replaces_live_record_without_duplication() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![test_backend("backend-a", backend.base_url())],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "/v1/responses?preflight=deny&model=nonexistent-model",
+            json!({
+                "model": "nonexistent-model",
+                "input": "hello preflight"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let _ = json_body(response).await;
+
+    let response = app
+        .clone()
+        .oneshot(inspector_get("/_onair/inspector/requests"))
+        .await
+        .unwrap();
+    let body = json_body(response).await;
+    let requests = body.as_array().unwrap();
+    assert_eq!(requests.len(), 1, "expected one record, not a duplicate");
+    let record = &requests[0];
+    assert_eq!(record["query"], "preflight=deny&model=nonexistent-model");
+    let outcome_kind = record["outcome"]["kind"].as_str().unwrap_or("");
+    assert_eq!(outcome_kind, "preflight");
+
+    backend.abort();
+}
+
+#[tokio::test]
 async fn operator_endpoints_return_sanitized_snapshots() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_backend("backend-a", backend.base_url());
