@@ -14,7 +14,8 @@ use crate::metrics::MetricLabels;
 use crate::observe::debug_capture::{CaptureOutcome, RequestCapture};
 use crate::observe::{
     BackendHealthStore, ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
-    InspectorStore, InspectorTokenCounts, RequestTimeline, TimelineEvent,
+    InspectorRequestRecord, InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts,
+    LiveRecord, RequestTimeline, TimelineEvent,
 };
 use crate::openai::{self, SseNormalizer, UsageDiagnostics, UsageTotals};
 
@@ -42,7 +43,7 @@ pub(super) async fn buffered_response(
         inspector_base,
         inspector_enabled,
         inspector_retention_requests,
-        live_record: _,
+        live_record,
         client_info,
         mut shutdown,
         backend_target,
@@ -147,6 +148,11 @@ pub(super) async fn buffered_response(
         route.request_mode,
     );
     timeline.mark(TimelineEvent::ResponseRewritten);
+    if let Some(live) = live_record.as_ref() {
+        live.update(|r| {
+            r.timeline = timeline.snapshot();
+        });
+    }
 
     state.metrics.record_usage(&labels, usage);
     state
@@ -192,6 +198,12 @@ pub(super) async fn buffered_response(
         ));
     }
     timeline.mark(TimelineEvent::ClientResponseReady);
+    if let Some(live) = live_record.as_ref() {
+        live.update(|r| {
+            r.timeline = timeline.snapshot();
+            r.backend_attempts = backend_attempts.clone();
+        });
+    }
     let mut final_inspector_base = inspector_base;
     final_inspector_base.backend_remote_addr =
         backend_remote_addr.map(|address| address.to_string());
@@ -241,7 +253,7 @@ pub(super) fn streaming_response(
         inspector_base,
         inspector_enabled,
         inspector_retention_requests,
-        live_record: _,
+        live_record,
         client_info,
         mut shutdown,
         backend_target,
@@ -270,6 +282,11 @@ pub(super) fn streaming_response(
         .metrics
         .record_request(&labels, upstream_status.as_u16(), request_timer.elapsed());
     timeline.mark(TimelineEvent::ClientResponseReady);
+    if let Some(live) = live_record.as_ref() {
+        live.update(|r| {
+            r.timeline = timeline.snapshot();
+        });
+    }
     let stream_metrics = StreamMetrics::new(StreamMetricsInit {
         metrics: state.metrics.clone(),
         health_store: state.health.clone(),
@@ -293,6 +310,7 @@ pub(super) fn streaming_response(
         backend_attempts,
         retried_attempts,
         current_attempt,
+        live_record: live_record.expect("streaming response always has a live record"),
     });
     debug!(
         upstream_status = upstream_status.as_u16(),
@@ -484,6 +502,7 @@ struct StreamMetrics {
     usage_diagnostics: UsageDiagnostics,
     body_complete: bool,
     stream_error_kind: Option<&'static str>,
+    live_record: LiveRecord,
 }
 
 struct StreamMetricsInit {
@@ -509,6 +528,7 @@ struct StreamMetricsInit {
     backend_attempts: Vec<InspectorAttemptRecord>,
     retried_attempts: Vec<InspectorAttemptRecord>,
     current_attempt: Option<InspectorAttemptBuilder>,
+    live_record: LiveRecord,
 }
 
 impl StreamMetrics {
@@ -541,6 +561,7 @@ impl StreamMetrics {
             usage_diagnostics: UsageDiagnostics::default(),
             body_complete: false,
             stream_error_kind: None,
+            live_record: init.live_record,
         }
     }
 
@@ -549,6 +570,9 @@ impl StreamMetrics {
         if let Some(attempt_record) = &mut self.current_attempt {
             attempt_record.mark_body_first_chunk(body_first_chunk_us);
         }
+        self.live_record.update(|r| {
+            r.timeline = self.timeline.snapshot();
+        });
     }
 
     fn mark_body_complete(&mut self) {
@@ -557,6 +581,9 @@ impl StreamMetrics {
         if let Some(attempt_record) = &mut self.current_attempt {
             attempt_record.mark_body_complete(body_complete_us);
         }
+        self.live_record.update(|r| {
+            r.timeline = self.timeline.snapshot();
+        });
     }
 
     fn add_usage(&mut self, usage: UsageTotals) {
@@ -585,6 +612,9 @@ impl Drop for StreamMetrics {
     fn drop(&mut self) {
         let duration = self.started.elapsed();
         let stream_complete_us = self.timeline.mark(TimelineEvent::StreamComplete);
+        self.live_record.update(|r| {
+            r.timeline = self.timeline.snapshot();
+        });
         if self.stream_error_kind.is_some() {
             ensure_failure_debug_capture(
                 &self.debug_capture_config,
@@ -688,21 +718,22 @@ impl Drop for StreamMetrics {
             .debug_capture
             .as_ref()
             .map(|capture| capture.id().to_owned());
-        record_inspector_request(
-            &self.inspector_store,
+        self.inspector_store.upsert_final(
             self.inspector_enabled,
             self.inspector_retention_requests,
-            InspectorRecord {
+            InspectorRequestRecord::new(InspectorRequestRecordInit {
                 base: inspector_base,
-                timeline: &self.timeline,
                 outcome: inspector_outcome,
-                status: StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::OK),
-                error_kind: self.stream_error_kind,
+                status: StatusCode::from_u16(self.status_code)
+                    .unwrap_or(StatusCode::OK)
+                    .as_u16(),
+                error_kind: self.stream_error_kind.map(str::to_owned),
                 backend_attempts: self.backend_attempts.clone(),
                 retried_attempts: self.retried_attempts.clone(),
                 response_body_bytes: None,
                 tokens: inspector_tokens(self.usage),
-            },
+                timeline: self.timeline.snapshot(),
+            }),
         );
         debug_timeline_fields(
             self.timeline.snapshot(),

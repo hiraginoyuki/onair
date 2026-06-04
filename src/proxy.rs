@@ -50,6 +50,8 @@ use self::upstream::{
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
 
+fn no_op_live_upsert(_record: &mut InspectorRequestRecord) {}
+
 pub async fn proxy_v1(
     state: Arc<AppState>,
     peer_addr: Option<SocketAddr>,
@@ -426,11 +428,7 @@ impl ProxyContext {
         }
     }
 
-    #[allow(dead_code)]
-    fn live_upsert<F>(&self, mutate: F)
-    where
-        F: FnOnce(&mut InspectorRequestRecord),
-    {
+    fn live_upsert(&self, mutate: impl FnOnce(&mut InspectorRequestRecord)) {
         if let Some(live) = &self.live_record {
             live.update(|record| {
                 let mut snapshot = build_live_record_from_context(self);
@@ -440,7 +438,6 @@ impl ProxyContext {
         }
     }
 
-    #[allow(dead_code)]
     fn live_finalize(self, final_record: InspectorRequestRecord) {
         if let Some(live) = self.live_record {
             live.finalize(final_record);
@@ -450,6 +447,7 @@ impl ProxyContext {
     fn record_retried_attempt(&mut self, attempt: InspectorAttemptRecord) {
         self.backend_attempts.push(attempt.clone());
         self.retried_attempts.push(attempt);
+        self.live_upsert(no_op_live_upsert);
     }
 
     fn record_final_attempt(
@@ -468,6 +466,7 @@ impl ProxyContext {
                 error_kind,
                 ended_us,
             ));
+            self.live_upsert(no_op_live_upsert);
         }
     }
 }
@@ -588,6 +587,7 @@ async fn do_proxy(
         .map_err(|error| ApiError::bad_request(error.message(), error.param()))?;
         attempt_record
             .mark_request_rewritten(context.timeline.mark(TimelineEvent::RequestRewritten));
+        context.live_upsert(no_op_live_upsert);
         let upstream_query = openai::rewrite_query_model(
             request_query.as_deref(),
             context.route.backend_model.as_deref(),
@@ -629,6 +629,7 @@ async fn do_proxy(
         if context.debug_capture.is_some() {
             attempt_record
                 .mark_debug_capture_done(context.timeline.mark(TimelineEvent::DebugCaptureDone));
+            context.live_upsert(no_op_live_upsert);
         }
 
         let mut upstream_request = context
@@ -665,11 +666,13 @@ async fn do_proxy(
 
         attempt_record
             .mark_backend_forward_start(context.timeline.mark(TimelineEvent::BackendForwardStart));
+        context.live_upsert(no_op_live_upsert);
         match send_upstream_request(upstream_request, &mut context.shutdown).await {
             Ok(response) => {
                 attempt_record.mark_backend_headers_received(
                     context.timeline.mark(TimelineEvent::BackendHeadersReceived),
                 );
+                context.live_upsert(no_op_live_upsert);
                 context.backend_remote_addr = response.remote_addr();
                 attempt_record.set_backend_remote_addr(context.backend_remote_addr);
                 context.current_attempt = Some(attempt_record);
@@ -743,19 +746,19 @@ async fn do_proxy(
                     Some("timeout"),
                     context.timeline.elapsed_us(),
                 ));
-                record_context_inspector(
-                    &context,
-                    InspectorOutcome::UpstreamTimeout,
-                    StatusCode::GATEWAY_TIMEOUT,
-                    None,
-                    None,
-                    InspectorTokenCounts::default(),
-                );
                 warn_proxy_failure(
                     &context,
                     StatusCode::GATEWAY_TIMEOUT,
                     "timeout",
                     "upstream request timed out",
+                );
+                record_context_inspector(
+                    context,
+                    InspectorOutcome::UpstreamTimeout,
+                    StatusCode::GATEWAY_TIMEOUT,
+                    None,
+                    None,
+                    InspectorTokenCounts::default(),
                 );
                 return Err(ApiError::timeout());
             }
@@ -829,19 +832,19 @@ async fn do_proxy(
                     Some(error_kind),
                     context.timeline.elapsed_us(),
                 ));
-                record_context_inspector(
-                    &context,
-                    InspectorOutcome::UpstreamRequestFailed,
-                    StatusCode::BAD_GATEWAY,
-                    Some(error_kind),
-                    None,
-                    InspectorTokenCounts::default(),
-                );
                 warn_proxy_failure(
                     &context,
                     StatusCode::BAD_GATEWAY,
                     error_kind,
                     "upstream request failed",
+                );
+                record_context_inspector(
+                    context,
+                    InspectorOutcome::UpstreamRequestFailed,
+                    StatusCode::BAD_GATEWAY,
+                    Some(error_kind),
+                    None,
+                    InspectorTokenCounts::default(),
                 );
                 return Err(ApiError::upstream(StatusCode::BAD_GATEWAY));
             }
@@ -929,19 +932,19 @@ async fn do_proxy(
             "upstream_non_success",
             None,
         );
-        record_context_inspector(
-            &context,
-            InspectorOutcome::UpstreamNonSuccess,
-            api_error.status,
-            None,
-            None,
-            InspectorTokenCounts::default(),
-        );
         warn_proxy_failure(
             &context,
             api_error.status,
             "upstream_non_success",
             "upstream returned non-success status",
+        );
+        record_context_inspector(
+            context,
+            InspectorOutcome::UpstreamNonSuccess,
+            api_error.status,
+            None,
+            None,
+            InspectorTokenCounts::default(),
         );
         return Err(api_error);
     }

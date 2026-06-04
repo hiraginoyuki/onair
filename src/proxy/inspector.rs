@@ -133,7 +133,7 @@ pub(super) fn record_preflight_inspector(record: PreflightInspectorRecord<'_>) {
 }
 
 pub(super) fn record_context_inspector(
-    context: &ProxyContext,
+    context: ProxyContext,
     outcome: InspectorOutcome,
     status: StatusCode,
     error_kind: Option<&'static str>,
@@ -148,22 +148,18 @@ pub(super) fn record_context_inspector(
         .debug_capture
         .as_ref()
         .map(|capture| capture.id().to_owned());
-    record_inspector_request(
-        &context.state.inspector,
-        context.inspector_enabled,
-        context.inspector_retention_requests,
-        InspectorRecord {
-            base,
-            timeline: &context.timeline,
-            outcome,
-            status,
-            error_kind,
-            backend_attempts: context.backend_attempts.clone(),
-            retried_attempts: context.retried_attempts.clone(),
-            response_body_bytes,
-            tokens,
-        },
-    );
+    let final_record = InspectorRequestRecord::new(InspectorRequestRecordInit {
+        base,
+        outcome,
+        status: status.as_u16(),
+        error_kind: error_kind.map(str::to_owned),
+        backend_attempts: context.backend_attempts.clone(),
+        retried_attempts: context.retried_attempts.clone(),
+        response_body_bytes,
+        tokens,
+        timeline: context.timeline.snapshot(),
+    });
+    context.live_finalize(final_record);
 }
 
 pub(super) struct InspectorRecord<'a> {
