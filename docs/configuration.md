@@ -183,6 +183,51 @@ chain and resolved the same way: the closest valid hop wins.
   `"upstream"` to forward the live value, or with the desired integer if
   the value is known at config time.
 
+## Capability And Endpoint Marker Validation
+
+`[[backend]].capabilities` and `[[backend.model]].endpoints` accept a set of
+marker strings that the router matches against `/v1/*` path families,
+streaming, tool use, and the two explicit compat paths
+(`responses_via_chat_completions`, `chat_completions_via_responses`).
+Because these are `BTreeSet<String>`, a typo would otherwise be loaded
+silently and only surface as a request-time 404.
+
+onair validates every string against a small known set and applies the
+policy set under `[routing]`:
+
+```toml
+[routing]
+unknown_capability_policy = "warn"   # default
+unknown_endpoint_policy  = "warn"   # default
+```
+
+- `warn` (default): the unknown marker is reported at `WARN` level on
+  load and on every hot reload. The config still loads and runs.
+- `error`: the config is rejected. Initial load exits with a non-zero
+  status; hot reloads keep the previous config active and log the
+  rejection at `WARN`.
+
+The known-marker allowlist covers the structural typo-prone set
+(`streaming`, `tools` family, `chat` / `chat_completions` / `completions`,
+`responses` / `response`, the two compat markers, `all`) and the path
+families enumerated in [routing.md](routing.md) (`embeddings`, `images` /
+`image`, `audio`, `files` / `file`, `models` / `model`, `batches`,
+`fine_tuning`, `assistants`, `threads`, `vector_stores`, `uploads`, and
+their singular forms). Custom path families are not on the list; set
+`unknown_*_policy = "warn"` to tolerate them, or extend the
+`routing::KNOWN_MARKERS` list to add them.
+
+Error messages name the location, the offending marker, and the full
+known list, for example:
+
+```text
+invalid config: backend 'w1998-llamacpp' model 'qwen-3.6-35b-a3b' endpoint
+'responses_via_chat_completion' is not a recognized marker; allowed: all,
+streaming, chat, chat_completions, ...
+```
+
+Both policies are reloaded immediately when the config file changes.
+
 ## API Keys
 
 Clients authenticate with OpenAI-style bearer tokens:

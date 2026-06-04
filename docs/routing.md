@@ -102,6 +102,12 @@ Examples:
   client Chat Completions requests and sends upstream Responses requests.
 - To force Chat-to-Responses compatibility, omit `chat` from that model route.
 
+onair validates the strings in `capabilities` and `endpoints` against the
+known marker set at load and reload time. See
+[configuration.md](configuration.md#capability-and-endpoint-marker-validation)
+for the `unknown_capability_policy` / `unknown_endpoint_policy` settings
+that control whether a typo fails to load or just emits a warning.
+
 ## Compatibility Routes
 
 A route that allows `responses` serves client `/v1/responses` natively. A

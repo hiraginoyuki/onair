@@ -46,6 +46,13 @@ path = "/v1/models"
 strategy = "priority"
 # Extra compatible backends to try after a pre-response connect/send/timeout failure. Set 0 to disable.
 fallback_attempts = 1
+# Behavior when [[backend]].capabilities or [[backend.model]].endpoints contain
+# a string the router does not recognize (for example a typo'd
+# "responses_via_chat_completion"). Default is "warn" (load succeeds, log a
+# warning at load and reload time). Use "error" to refuse to load the config
+# until the unknown marker is fixed.
+unknown_capability_policy = "warn"
+unknown_endpoint_policy = "warn"
 
 [access]
 # Every configured client receives these public models in addition to its own models.
@@ -65,6 +72,9 @@ base_url = "http://127.0.0.1:8000"
 # Compatibility routes require explicit markers:
 # - "responses_via_chat_completions" for client /v1/responses -> upstream /v1/chat/completions.
 # - "chat_completions_via_responses" for client /v1/chat/completions -> upstream /v1/responses.
+# Typos in capability or endpoint marker names are reported at load and reload
+# time. The default policy is "warn" (log only). Set the routing policies below
+# to "error" to fail to load when a marker is not recognized.
 # Add "tools" here, and to a model route's endpoints when endpoints is non-empty, only if that backend/template supports function tools.
 # Optional: tool_schema_mode = "llamacpp_compat" can relax converted Responses tool schemas for llama.cpp chat templates.
 # Optional: responses_store = "force_false" adds store=false to upstream Responses requests when clients omit it.
