@@ -206,11 +206,12 @@ pub fn select_backend_candidates(
             ));
         }
         if let Some(requested_model) = model {
+            if model_is_known(backends, requested_model) {
+                return Err(ApiError::endpoint_unavailable(path, Some(requested_model)));
+            }
             return Err(ApiError::model_not_found(requested_model));
         }
-        return Err(ApiError::not_found(format!(
-            "The requested endpoint '{path}' is unavailable."
-        )));
+        return Err(ApiError::endpoint_unavailable(path, None));
     }
 
     match strategy {
@@ -256,6 +257,15 @@ fn sticky_index(key: &str, count: usize) -> usize {
     let mut hasher = FnvHasher::default();
     key.hash(&mut hasher);
     (hasher.finish() as usize) % count
+}
+
+fn model_is_known(backends: &[ResolvedBackend], requested_model: &str) -> bool {
+    backends.iter().any(|backend| {
+        backend
+            .models
+            .iter()
+            .any(|route| route.public == requested_model)
+    })
 }
 
 fn request_mode_for_route(
@@ -665,6 +675,100 @@ mod tests {
         };
 
         assert_eq!(error.status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(error.code.as_deref(), Some("endpoint_unavailable"));
+        assert_eq!(error.param.as_deref(), Some("endpoint"));
+        assert!(error.message.contains("public-model"));
+        assert!(error.message.contains("/v1/responses"));
+    }
+
+    #[test]
+    fn responses_404_for_known_model_uses_endpoint_unavailable_code() {
+        let backend = ResolvedBackend {
+            id: "chat-backend".to_owned(),
+            base_url: "http://chat-backend.example.invalid".to_owned(),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["chat"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            models: vec![ModelRoute {
+                public: "public-model".to_owned(),
+                backend: "backend-private".to_owned(),
+                context_length: ContextLengthPolicy::None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                endpoints: btree_set(["chat"]),
+            }],
+        };
+
+        let error = match select_backend_candidates(
+            &[backend],
+            RoutingStrategy::Priority,
+            "/v1/responses",
+            Some("public-model"),
+            false,
+            false,
+            None,
+            &RoundRobinCounters::new(),
+        ) {
+            Ok(_) => panic!("expected routing failure"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(error.code.as_deref(), Some("endpoint_unavailable"));
+        assert_eq!(error.param.as_deref(), Some("endpoint"));
+        assert!(error.message.contains("public-model"));
+    }
+
+    #[test]
+    fn responses_404_for_unknown_model_uses_model_not_found_code() {
+        let backend = ResolvedBackend {
+            id: "chat-backend".to_owned(),
+            base_url: "http://chat-backend.example.invalid".to_owned(),
+            api_key: None,
+            timeout: Duration::from_secs(5),
+            capabilities: btree_set(["chat"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            models: vec![ModelRoute {
+                public: "configured-model".to_owned(),
+                backend: "backend-private".to_owned(),
+                context_length: ContextLengthPolicy::None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                endpoints: btree_set(["chat"]),
+            }],
+        };
+
+        let error = match select_backend_candidates(
+            &[backend],
+            RoutingStrategy::Priority,
+            "/v1/responses",
+            Some("unknown-model"),
+            false,
+            false,
+            None,
+            &RoundRobinCounters::new(),
+        ) {
+            Ok(_) => panic!("expected routing failure"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(error.code.as_deref(), Some("model_not_found"));
+        assert_eq!(error.param.as_deref(), Some("model"));
+        assert!(error.message.contains("unknown-model"));
     }
 
     #[test]
@@ -1143,6 +1247,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(routes_b_second[0].backend_id, "b");
+    }
+
+    #[test]
+    fn model_less_unavailable_path_uses_endpoint_unavailable_code() {
+        let backends = vec![model_less_backend("a", &["embeddings", "streaming"])];
+        let error = match select_backend_candidates(
+            &backends,
+            RoutingStrategy::Priority,
+            "/v1/audio/transcriptions",
+            None,
+            false,
+            false,
+            None,
+            &RoundRobinCounters::new(),
+        ) {
+            Ok(_) => panic!("expected model-less routing failure"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(error.code.as_deref(), Some("endpoint_unavailable"));
+        assert_eq!(error.param.as_deref(), Some("endpoint"));
+        assert!(error.message.contains("/v1/audio/transcriptions"));
     }
 
     #[test]

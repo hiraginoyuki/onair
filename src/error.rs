@@ -90,6 +90,22 @@ impl ApiError {
         }
     }
 
+    pub fn endpoint_unavailable(path: &str, model: Option<&str>) -> Self {
+        let message = match model {
+            Some(model) => {
+                format!("The model '{model}' is configured but does not serve endpoint '{path}'.")
+            }
+            None => format!("The requested endpoint '{path}' is unavailable."),
+        };
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message,
+            kind: "invalid_request_error".to_owned(),
+            code: Some("endpoint_unavailable".to_owned()),
+            param: Some("endpoint".to_owned()),
+        }
+    }
+
     pub fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
