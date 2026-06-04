@@ -2246,6 +2246,77 @@ mod tests {
     }
 
     #[test]
+    fn reload_applies_unknown_marker_under_warn_policy() {
+        let path = temp_config_path("reload-warn-marker");
+        let initial = r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["chat", "streaming"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            endpoints = ["chat"]
+            "#;
+        std::fs::write(&path, initial).unwrap();
+        let store = ConfigStore::new(Config::load(&path).unwrap());
+
+        assert!(
+            !store.snapshot().backends[0].models[0]
+                .endpoints
+                .iter()
+                .any(|value| value == "responses_via_chat_completion")
+        );
+
+        let updated = r#"
+            [routing]
+            unknown_endpoint_policy = "warn"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["chat", "streaming"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            endpoints = ["chat", "responses_via_chat_completion"]
+            "#;
+        std::fs::write(&path, updated).unwrap();
+        reload_config(&path, &store);
+
+        let snapshot = store.snapshot();
+        assert!(
+            snapshot.backends[0].models[0]
+                .endpoints
+                .iter()
+                .any(|value| value == "responses_via_chat_completion"),
+            "warn policy should preserve the unknown endpoint marker across reload",
+        );
+        assert_eq!(
+            snapshot.routing.unknown_endpoint_policy,
+            UnknownMarkerPolicy::Warn
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn reload_events_include_close_after_write() {
         let path = PathBuf::from("/tmp/onair.toml");
         let filename = path.file_name().unwrap();

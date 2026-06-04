@@ -1479,6 +1479,79 @@ mod tests {
         values.into_iter().map(str::to_owned).collect()
     }
 
+    #[test]
+    fn known_markers_allowlist_is_non_empty_and_deduped() {
+        let len = KNOWN_MARKERS.len();
+        assert!(len > 0, "KNOWN_MARKERS must not be empty");
+
+        let unique: BTreeSet<&str> = KNOWN_MARKERS.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            len,
+            "KNOWN_MARKERS must not contain duplicates"
+        );
+    }
+
+    #[test]
+    fn known_markers_contain_structural_aliases() {
+        let set: BTreeSet<&str> = KNOWN_MARKERS.iter().copied().collect();
+        for required in [
+            "all",
+            "streaming",
+            "chat",
+            "chat_completions",
+            "completions",
+            "responses",
+            "response",
+            "tools",
+            "tool_calls",
+            "function_calling",
+            "functions",
+            "responses_via_chat_completions",
+            "chat_completions_via_responses",
+            "embeddings",
+            "images",
+            "image",
+            "audio",
+            "files",
+            "file",
+            "models",
+            "model",
+            "batches",
+            "fine_tuning",
+            "assistants",
+            "threads",
+            "vector_stores",
+            "uploads",
+        ] {
+            assert!(
+                set.contains(required),
+                "KNOWN_MARKERS must include the structural marker '{required}'"
+            );
+        }
+    }
+
+    #[test]
+    fn is_known_marker_matches_canonical_allowlist() {
+        for value in KNOWN_MARKERS {
+            assert!(
+                is_known_marker(value),
+                "is_known_marker must agree with KNOWN_MARKERS for '{value}'"
+            );
+        }
+        for value in [
+            "respons",
+            "responses_via_chat_completion",
+            "straming",
+            "tols",
+        ] {
+            assert!(
+                !is_known_marker(value),
+                "is_known_marker must reject the typo '{value}'"
+            );
+        }
+    }
+
     fn backend_with_weight(id: &str, weight: u32) -> ResolvedBackend {
         ResolvedBackend {
             weight,
