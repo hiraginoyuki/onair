@@ -54,6 +54,24 @@ impl Drop for InspectorStoreInner {
         let Some(components) = self.persistence.take() else {
             return;
         };
+        let interrupted: Vec<InspectorRequestRecord> = {
+            let mut records = self.records.lock().expect("inspector store lock poisoned");
+            for record in records.iter_mut() {
+                if matches!(record.outcome, InspectorOutcome::InFlight) {
+                    mark_record_interrupted(record);
+                }
+            }
+            records
+                .iter()
+                .filter(|record| matches!(record.outcome, InspectorOutcome::Interrupted))
+                .cloned()
+                .collect()
+        };
+        for record in &interrupted {
+            components
+                .writer
+                .record(record.clone(), MAX_RETENTION_REQUESTS);
+        }
         components.writer.request_shutdown();
         if let Some(handle) = components.handle
             && let Err(panic) = handle.join()
@@ -65,6 +83,17 @@ impl Drop for InspectorStoreInner {
             );
         }
     }
+}
+
+fn mark_record_interrupted(record: &mut InspectorRequestRecord) {
+    let completed_at_unix_ms = record
+        .base
+        .started_at_unix_ms
+        .saturating_add(record.timeline.total_us / 1000);
+    record.outcome = InspectorOutcome::Interrupted;
+    record.status = 503;
+    record.error_kind = Some("interrupted".to_owned());
+    record.completed_at_unix_ms = completed_at_unix_ms;
 }
 
 fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
@@ -683,6 +712,34 @@ mod tests {
     fn interrupted_outcome_serializes_as_interrupted_kind() {
         let value = serde_json::to_value(InspectorOutcome::Interrupted).unwrap();
         assert_eq!(value, serde_json::json!({"kind": "interrupted"}));
+    }
+
+    #[test]
+    fn store_drop_marks_inflight_records_as_interrupted() {
+        let path = temp_database_path("interrupted");
+        let config = InspectorConfig {
+            enabled: true,
+            retention_requests: 8,
+            allow_remote: false,
+            persistence: InspectorPersistenceConfig {
+                enabled: true,
+                path: Some(path.clone()),
+            },
+        };
+        let store = InspectorStore::from_config(&config).unwrap();
+        let mut in_flight = test_record("inflight-1");
+        in_flight.outcome = InspectorOutcome::InFlight;
+        in_flight.status = 0;
+        in_flight.error_kind = None;
+        store.upsert(true, 8, in_flight);
+        drop(store);
+        wait_for_stored_count(&path, 1);
+
+        let restored = InspectorStore::from_config(&config).unwrap();
+        let record = restored.get("inflight-1").expect("interrupted record");
+        assert!(matches!(record.outcome, InspectorOutcome::Interrupted));
+        assert_eq!(record.status, 503);
+        assert_eq!(record.error_kind.as_deref(), Some("interrupted"));
     }
 
     #[test]
