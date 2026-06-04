@@ -323,6 +323,8 @@ impl Default for InspectorConfig {
 pub struct RoutingConfig {
     pub strategy: RoutingStrategy,
     pub fallback_attempts: usize,
+    pub unknown_capability_policy: UnknownMarkerPolicy,
+    pub unknown_endpoint_policy: UnknownMarkerPolicy,
 }
 
 impl Default for RoutingConfig {
@@ -330,6 +332,8 @@ impl Default for RoutingConfig {
         Self {
             strategy: RoutingStrategy::Priority,
             fallback_attempts: 1,
+            unknown_capability_policy: UnknownMarkerPolicy::Warn,
+            unknown_endpoint_policy: UnknownMarkerPolicy::Warn,
         }
     }
 }
@@ -342,6 +346,14 @@ pub enum RoutingStrategy {
     Sticky,
     RoundRobin,
     WeightedRandom,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UnknownMarkerPolicy {
+    #[default]
+    Warn,
+    Error,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1412,6 +1424,105 @@ mod tests {
             "#,
         );
         assert_eq!(config.routing.strategy, RoutingStrategy::WeightedRandom);
+    }
+
+    #[test]
+    fn unknown_marker_policy_defaults_to_warn() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+        assert_eq!(
+            config.routing.unknown_capability_policy,
+            UnknownMarkerPolicy::Warn
+        );
+        assert_eq!(
+            config.routing.unknown_endpoint_policy,
+            UnknownMarkerPolicy::Warn
+        );
+    }
+
+    #[test]
+    fn unknown_marker_policy_parses_error_value() {
+        let config = parse_config(
+            r#"
+            [routing]
+            unknown_capability_policy = "error"
+            unknown_endpoint_policy = "error"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+        assert_eq!(
+            config.routing.unknown_capability_policy,
+            UnknownMarkerPolicy::Error
+        );
+        assert_eq!(
+            config.routing.unknown_endpoint_policy,
+            UnknownMarkerPolicy::Error
+        );
+    }
+
+    #[test]
+    fn unknown_marker_policy_rejects_unknown_value() {
+        let result: std::result::Result<ConfigFile, _> = toml::from_str(
+            r#"
+            [routing]
+            unknown_capability_policy = "explode"
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            capabilities = ["responses"]
+
+            [[backend.model]]
+            public = "public-model"
+            backend = "private-model"
+            "#,
+        );
+        let error = result
+            .err()
+            .expect("expected unknown policy value to fail to parse");
+        assert!(
+            error.to_string().contains("unknown_capability_policy"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
