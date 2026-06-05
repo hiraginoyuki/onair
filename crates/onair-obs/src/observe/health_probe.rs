@@ -4,17 +4,17 @@ use reqwest::Client;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::observe::BackendHealthStore;
+use super::BackendHealthStore;
 use onair_core::config::{ConfigStore, HealthConfig, ResolvedBackend};
 
 const INACTIVE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-pub(crate) struct HealthProbeTask {
+pub struct HealthProbeTask {
     task: JoinHandle<()>,
 }
 
 impl HealthProbeTask {
-    pub(crate) fn start(config: ConfigStore, http: Client, health: BackendHealthStore) -> Self {
+    pub fn start(config: ConfigStore, http: Client, health: BackendHealthStore) -> Self {
         let task = tokio::spawn(async move {
             loop {
                 let snapshot = config.snapshot();

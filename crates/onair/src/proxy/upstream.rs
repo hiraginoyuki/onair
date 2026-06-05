@@ -2,7 +2,7 @@ use axum::body::Bytes;
 use futures_util::StreamExt;
 use tokio::sync::watch;
 
-use crate::observe::{RequestTimeline, TimelineEvent};
+use onair_obs::observe::{RequestTimeline, TimelineEvent};
 
 use super::attempt::InspectorAttemptBuilder;
 

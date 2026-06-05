@@ -1,5 +1,4 @@
 mod app;
-mod observe;
 mod operator;
 mod proxy;
 mod routing;

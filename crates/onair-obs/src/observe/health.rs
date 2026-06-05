@@ -5,22 +5,28 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const UNHEALTHY_FAILURE_THRESHOLD: u64 = 3;
 
 #[derive(Debug, Clone)]
-pub(crate) struct BackendHealthStore {
+pub struct BackendHealthStore {
     inner: Arc<Mutex<BTreeMap<String, BackendHealthRecord>>>,
 }
 
+impl Default for BackendHealthStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BackendHealthStore {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
-    pub(crate) fn record_success(&self, backend: &str, latency: Duration, status: u16) {
+    pub fn record_success(&self, backend: &str, latency: Duration, status: u16) {
         self.record_success_with_source(backend, latency, status, ObservationSource::Traffic);
     }
 
-    pub(crate) fn record_failure(
+    pub fn record_failure(
         &self,
         backend: &str,
         latency: Duration,
@@ -36,11 +42,11 @@ impl BackendHealthStore {
         );
     }
 
-    pub(crate) fn record_probe_success(&self, backend: &str, latency: Duration, status: u16) {
+    pub fn record_probe_success(&self, backend: &str, latency: Duration, status: u16) {
         self.record_success_with_source(backend, latency, status, ObservationSource::Probe);
     }
 
-    pub(crate) fn record_probe_failure(
+    pub fn record_probe_failure(
         &self,
         backend: &str,
         latency: Duration,
@@ -111,7 +117,7 @@ impl BackendHealthStore {
         record.last_source = Some(source);
     }
 
-    pub(crate) fn snapshot(&self, configured_backends: &[String]) -> Vec<BackendHealthSnapshot> {
+    pub fn snapshot(&self, configured_backends: &[String]) -> Vec<BackendHealthSnapshot> {
         let records = self.inner.lock().expect("backend health lock poisoned");
         configured_backends
             .iter()
@@ -194,23 +200,23 @@ impl ObservationSource {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct BackendHealthSnapshot {
-    pub(crate) backend: String,
-    pub(crate) status: &'static str,
-    pub(crate) successes: u64,
-    pub(crate) failures: u64,
-    pub(crate) traffic_successes: u64,
-    pub(crate) traffic_failures: u64,
-    pub(crate) probe_successes: u64,
-    pub(crate) probe_failures: u64,
-    pub(crate) consecutive_failures: u64,
-    pub(crate) last_success_unix_ms: Option<u64>,
-    pub(crate) last_failure_unix_ms: Option<u64>,
-    pub(crate) last_observed_unix_ms: Option<u64>,
-    pub(crate) last_status: Option<u16>,
-    pub(crate) last_error_kind: Option<String>,
-    pub(crate) last_latency_ms: Option<u64>,
-    pub(crate) last_source: Option<&'static str>,
+pub struct BackendHealthSnapshot {
+    pub backend: String,
+    pub status: &'static str,
+    pub successes: u64,
+    pub failures: u64,
+    pub traffic_successes: u64,
+    pub traffic_failures: u64,
+    pub probe_successes: u64,
+    pub probe_failures: u64,
+    pub consecutive_failures: u64,
+    pub last_success_unix_ms: Option<u64>,
+    pub last_failure_unix_ms: Option<u64>,
+    pub last_observed_unix_ms: Option<u64>,
+    pub last_status: Option<u16>,
+    pub last_error_kind: Option<String>,
+    pub last_latency_ms: Option<u64>,
+    pub last_source: Option<&'static str>,
 }
 
 fn unix_millis() -> u64 {

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::error;
 
-use crate::observe::TimelineSnapshot;
+use super::TimelineSnapshot;
 use onair_core::config::InspectorConfig;
 use onair_core::error::{Error, Result};
 
@@ -22,18 +22,18 @@ const UI_TEMPLATE: &str = include_str!("inspector.html");
 const UI_CSS: &str = include_str!("inspector.css");
 const UI_JS: &str = include_str!("inspector.js");
 
-pub(crate) static UI_HTML: LazyLock<String> = LazyLock::new(|| {
+pub static UI_HTML: LazyLock<String> = LazyLock::new(|| {
     UI_TEMPLATE
         .replace("__ONAIR_INSPECTOR_CSS__", UI_CSS)
         .replace("__ONAIR_INSPECTOR_JS__", UI_JS)
 });
 
-pub(crate) fn ui_html() -> &'static str {
+pub fn ui_html() -> &'static str {
     UI_HTML.as_str()
 }
 
 #[derive(Clone)]
-pub(crate) struct InspectorStore {
+pub struct InspectorStore {
     inner: Arc<InspectorStoreInner>,
 }
 
@@ -132,12 +132,18 @@ fn upsert_in_place(
     }
 }
 
+impl Default for InspectorStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InspectorStore {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::from_parts(Vec::new(), None)
     }
 
-    pub(crate) fn from_config(config: &InspectorConfig) -> Result<Self> {
+    pub fn from_config(config: &InspectorConfig) -> Result<Self> {
         if !config.persistence.enabled {
             return Ok(Self::new());
         }
@@ -172,7 +178,49 @@ impl InspectorStore {
         }
     }
 
-    pub(crate) fn record(
+    pub fn record(&self, enabled: bool, retention_requests: usize, record: InspectorRequestRecord) {
+        if !enabled {
+            return;
+        }
+
+        let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
+        {
+            let mut records = self
+                .inner
+                .records
+                .lock()
+                .expect("inspector store lock poisoned");
+            upsert_in_place(&mut records, record.clone(), retention_requests);
+        }
+
+        if let Some(persistence) = &self.inner.persistence {
+            persistence
+                .writer
+                .record(record.clone(), retention_requests);
+        }
+
+        let _ = self.inner.events.send(record);
+    }
+
+    pub fn upsert(&self, enabled: bool, retention_requests: usize, record: InspectorRequestRecord) {
+        if !enabled {
+            return;
+        }
+
+        let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
+        {
+            let mut records = self
+                .inner
+                .records
+                .lock()
+                .expect("inspector store lock poisoned");
+            upsert_in_place(&mut records, record.clone(), retention_requests);
+        }
+
+        let _ = self.inner.events.send(record);
+    }
+
+    pub fn upsert_final(
         &self,
         enabled: bool,
         retention_requests: usize,
@@ -201,59 +249,7 @@ impl InspectorStore {
         let _ = self.inner.events.send(record);
     }
 
-    pub(crate) fn upsert(
-        &self,
-        enabled: bool,
-        retention_requests: usize,
-        record: InspectorRequestRecord,
-    ) {
-        if !enabled {
-            return;
-        }
-
-        let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        {
-            let mut records = self
-                .inner
-                .records
-                .lock()
-                .expect("inspector store lock poisoned");
-            upsert_in_place(&mut records, record.clone(), retention_requests);
-        }
-
-        let _ = self.inner.events.send(record);
-    }
-
-    pub(crate) fn upsert_final(
-        &self,
-        enabled: bool,
-        retention_requests: usize,
-        record: InspectorRequestRecord,
-    ) {
-        if !enabled {
-            return;
-        }
-
-        let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        {
-            let mut records = self
-                .inner
-                .records
-                .lock()
-                .expect("inspector store lock poisoned");
-            upsert_in_place(&mut records, record.clone(), retention_requests);
-        }
-
-        if let Some(persistence) = &self.inner.persistence {
-            persistence
-                .writer
-                .record(record.clone(), retention_requests);
-        }
-
-        let _ = self.inner.events.send(record);
-    }
-
-    pub(crate) fn records_limited(&self, limit: usize) -> Vec<InspectorRequestRecord> {
+    pub fn records_limited(&self, limit: usize) -> Vec<InspectorRequestRecord> {
         let records = self
             .inner
             .records
@@ -263,7 +259,7 @@ impl InspectorStore {
         records.iter().skip(skip).cloned().collect()
     }
 
-    pub(crate) fn retained_len(&self) -> usize {
+    pub fn retained_len(&self) -> usize {
         self.inner
             .records
             .lock()
@@ -271,7 +267,7 @@ impl InspectorStore {
             .len()
     }
 
-    pub(crate) fn get(&self, record_id: &str) -> Option<InspectorRequestRecord> {
+    pub fn get(&self, record_id: &str) -> Option<InspectorRequestRecord> {
         self.inner
             .records
             .lock()
@@ -282,14 +278,11 @@ impl InspectorStore {
             .cloned()
     }
 
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<InspectorRequestRecord> {
+    pub fn subscribe(&self) -> broadcast::Receiver<InspectorRequestRecord> {
         self.inner.events.subscribe()
     }
 
-    pub(crate) fn next_record_id(
-        started_at_unix_ms: u64,
-        client_request_id: Option<&str>,
-    ) -> String {
+    pub fn next_record_id(started_at_unix_ms: u64, client_request_id: Option<&str>) -> String {
         let sequence = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut record_id = format!("{started_at_unix_ms}-{}-{sequence}", std::process::id());
         if let Some(client_request_id) = client_request_id.and_then(safe_segment) {
@@ -300,7 +293,7 @@ impl InspectorStore {
     }
 }
 
-pub(crate) struct LiveRecord {
+pub struct LiveRecord {
     store: InspectorStore,
     enabled: bool,
     retention_requests: usize,
@@ -308,7 +301,7 @@ pub(crate) struct LiveRecord {
 }
 
 impl LiveRecord {
-    pub(crate) fn new(
+    pub fn new(
         store: InspectorStore,
         enabled: bool,
         retention_requests: usize,
@@ -322,7 +315,7 @@ impl LiveRecord {
         }
     }
 
-    pub(crate) fn publish_initial(&self) {
+    pub fn publish_initial(&self) {
         if !self.enabled {
             return;
         }
@@ -335,7 +328,7 @@ impl LiveRecord {
             .upsert(self.enabled, self.retention_requests, record);
     }
 
-    pub(crate) fn update<F>(&self, mutate: F)
+    pub fn update<F>(&self, mutate: F)
     where
         F: FnOnce(&mut InspectorRequestRecord),
     {
@@ -355,14 +348,14 @@ impl LiveRecord {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn snapshot(&self) -> InspectorRequestRecord {
+    pub fn snapshot(&self) -> InspectorRequestRecord {
         self.record
             .lock()
             .expect("live inspector record lock poisoned")
             .clone()
     }
 
-    pub(crate) fn finalize(self, mut final_record: InspectorRequestRecord) {
+    pub fn finalize(self, mut final_record: InspectorRequestRecord) {
         if !self.enabled {
             return;
         }
@@ -380,28 +373,28 @@ impl LiveRecord {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub(crate) struct InspectorRequestRecord {
+pub struct InspectorRequestRecord {
     #[serde(flatten)]
-    pub(crate) base: InspectorRequestBase,
-    pub(crate) outcome: InspectorOutcome,
-    pub(crate) status: u16,
+    pub base: InspectorRequestBase,
+    pub outcome: InspectorOutcome,
+    pub status: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) error_kind: Option<String>,
+    pub error_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) backend_attempts: Vec<InspectorAttemptRecord>,
+    pub backend_attempts: Vec<InspectorAttemptRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) retried_attempts: Vec<InspectorAttemptRecord>,
+    pub retried_attempts: Vec<InspectorAttemptRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) response_body_bytes: Option<usize>,
-    pub(crate) input_tokens: u64,
-    pub(crate) cached_input_tokens: u64,
-    pub(crate) output_tokens: u64,
-    pub(crate) completed_at_unix_ms: u64,
-    pub(crate) timeline: TimelineSnapshot,
+    pub response_body_bytes: Option<usize>,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub completed_at_unix_ms: u64,
+    pub timeline: TimelineSnapshot,
 }
 
 impl InspectorRequestRecord {
-    pub(crate) fn new(init: InspectorRequestRecordInit) -> Self {
+    pub fn new(init: InspectorRequestRecordInit) -> Self {
         Self {
             base: init.base,
             outcome: init.outcome,
@@ -420,86 +413,86 @@ impl InspectorRequestRecord {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct InspectorRequestRecordInit {
-    pub(crate) base: InspectorRequestBase,
-    pub(crate) outcome: InspectorOutcome,
-    pub(crate) status: u16,
-    pub(crate) error_kind: Option<String>,
-    pub(crate) backend_attempts: Vec<InspectorAttemptRecord>,
-    pub(crate) retried_attempts: Vec<InspectorAttemptRecord>,
-    pub(crate) response_body_bytes: Option<usize>,
-    pub(crate) tokens: InspectorTokenCounts,
-    pub(crate) timeline: TimelineSnapshot,
+pub struct InspectorRequestRecordInit {
+    pub base: InspectorRequestBase,
+    pub outcome: InspectorOutcome,
+    pub status: u16,
+    pub error_kind: Option<String>,
+    pub backend_attempts: Vec<InspectorAttemptRecord>,
+    pub retried_attempts: Vec<InspectorAttemptRecord>,
+    pub response_body_bytes: Option<usize>,
+    pub tokens: InspectorTokenCounts,
+    pub timeline: TimelineSnapshot,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub(crate) struct InspectorAttemptRecord {
-    pub(crate) attempt: usize,
-    pub(crate) backend: String,
-    pub(crate) backend_target: String,
+pub struct InspectorAttemptRecord {
+    pub attempt: usize,
+    pub backend: String,
+    pub backend_target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) backend_remote_addr: Option<String>,
+    pub backend_remote_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) debug_capture_id: Option<String>,
-    pub(crate) status: u16,
-    pub(crate) outcome: String,
+    pub debug_capture_id: Option<String>,
+    pub status: u16,
+    pub outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) error_kind: Option<String>,
-    pub(crate) started_us: u64,
-    pub(crate) ended_us: u64,
-    pub(crate) elapsed_us: u64,
-    pub(crate) elapsed_ms: u64,
+    pub error_kind: Option<String>,
+    pub started_us: u64,
+    pub ended_us: u64,
+    pub elapsed_us: u64,
+    pub elapsed_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) upstream_status: Option<u16>,
+    pub upstream_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) request_rewritten_us: Option<u64>,
+    pub request_rewritten_us: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) debug_capture_done_us: Option<u64>,
+    pub debug_capture_done_us: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) backend_forward_start_us: Option<u64>,
+    pub backend_forward_start_us: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) backend_headers_received_us: Option<u64>,
+    pub backend_headers_received_us: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) backend_body_first_chunk_us: Option<u64>,
+    pub backend_body_first_chunk_us: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) backend_body_complete_us: Option<u64>,
+    pub backend_body_complete_us: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) stream_complete_us: Option<u64>,
+    pub stream_complete_us: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub(crate) struct InspectorRequestBase {
-    pub(crate) record_id: String,
+pub struct InspectorRequestBase {
+    pub record_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) client_request_id: Option<String>,
-    pub(crate) started_at_unix_ms: u64,
-    pub(crate) method: String,
-    pub(crate) path: String,
+    pub client_request_id: Option<String>,
+    pub started_at_unix_ms: u64,
+    pub method: String,
+    pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) query: Option<String>,
-    pub(crate) route: String,
-    pub(crate) identity: String,
-    pub(crate) requested_model: String,
-    pub(crate) public_model: String,
-    pub(crate) backend_model: String,
-    pub(crate) backend: String,
-    pub(crate) backend_target: String,
+    pub query: Option<String>,
+    pub route: String,
+    pub identity: String,
+    pub requested_model: String,
+    pub public_model: String,
+    pub backend_model: String,
+    pub backend: String,
+    pub backend_target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) backend_remote_addr: Option<String>,
-    pub(crate) stream: bool,
-    pub(crate) peer_addr: String,
-    pub(crate) effective_client_addr: String,
-    pub(crate) trusted_proxy_addr: String,
-    pub(crate) forwarded_for: String,
-    pub(crate) user_agent: String,
-    pub(crate) request_body_bytes: usize,
+    pub backend_remote_addr: Option<String>,
+    pub stream: bool,
+    pub peer_addr: String,
+    pub effective_client_addr: String,
+    pub trusted_proxy_addr: String,
+    pub forwarded_for: String,
+    pub user_agent: String,
+    pub request_body_bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) debug_capture_id: Option<String>,
+    pub debug_capture_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum InspectorOutcome {
+pub enum InspectorOutcome {
     InFlight,
     Completed,
     Preflight { stage: String },
@@ -513,10 +506,10 @@ pub(crate) enum InspectorOutcome {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct InspectorTokenCounts {
-    pub(crate) input: u64,
-    pub(crate) cached_input: u64,
-    pub(crate) output: u64,
+pub struct InspectorTokenCounts {
+    pub input: u64,
+    pub cached_input: u64,
+    pub output: u64,
 }
 
 fn unix_millis() -> u64 {

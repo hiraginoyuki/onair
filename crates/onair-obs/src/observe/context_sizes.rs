@@ -14,15 +14,15 @@ use onair_core::config::{
     ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
 
-pub(crate) const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+pub const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) struct ContextSizeRefreshTask {
+pub struct ContextSizeRefreshTask {
     task: JoinHandle<()>,
 }
 
 impl ContextSizeRefreshTask {
-    pub(crate) fn start(config: ConfigStore, http: Client, cache: ContextSizeCache) -> Self {
+    pub fn start(config: ConfigStore, http: Client, cache: ContextSizeCache) -> Self {
         let task = tokio::spawn(async move {
             loop {
                 let snapshot = config.snapshot();
@@ -40,7 +40,7 @@ impl Drop for ContextSizeRefreshTask {
     }
 }
 
-pub(crate) async fn refresh_once(http: &Client, cache: &ContextSizeCache, config: &Config) {
+pub async fn refresh_once(http: &Client, cache: &ContextSizeCache, config: &Config) {
     let targets = collect_upstream_targets(config);
     let mut active = BTreeSet::new();
     for (public, backend_id, backend_model) in &targets {
@@ -149,7 +149,7 @@ async fn fetch_upstream_n_ctx(
     }
 }
 
-pub(crate) fn build_props_url(base_url: &str, backend_model: &str) -> Option<String> {
+pub fn build_props_url(base_url: &str, backend_model: &str) -> Option<String> {
     let trimmed = base_url.trim_end_matches('/');
     let mut url = url::Url::parse(&format!("{trimmed}/props")).ok()?;
     url.query_pairs_mut().append_pair("model", backend_model);

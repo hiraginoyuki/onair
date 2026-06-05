@@ -3,12 +3,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 use onair_core::config::{
     Config, ContextLengthPolicy, DebugCaptureConfig, HealthConfig, InspectorConfig,
     ResolvedBackend, ResolvedClient, ResolvedContextLength, RoutingConfig, RoutingStrategy,
     ServerConfig, TelemetryConfig, TelemetryExporter,
 };
+use onair_obs::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct OperatorRuntimeSnapshot {

@@ -18,7 +18,6 @@ use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
 use super::*;
-use crate::observe::inspector_persisted_count;
 use onair_core::ContextSizeCache;
 use onair_core::config::{
     ChatStreamUsagePolicy, Config, ContextLengthPolicy, DebugCaptureConfig, DebugCaptureMode,
@@ -26,6 +25,7 @@ use onair_core::config::{
     ResolvedClient, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RoutingConfig,
     RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
+use onair_obs::observe::inspector_persisted_count;
 
 const CLIENT_KEY: &str = "sk-test";
 const PUBLIC_MODEL: &str = "gpt-public";

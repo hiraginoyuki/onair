@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 
-use crate::observe::InspectorAttemptRecord;
-use crate::observe::debug_capture::RequestCapture;
+use onair_obs::observe::InspectorAttemptRecord;
+use onair_obs::observe::debug_capture::RequestCapture;
 
 pub(super) struct InspectorAttemptInit<'a> {
     pub(super) attempt: usize,

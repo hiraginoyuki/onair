@@ -6,7 +6,6 @@ use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, params};
 use tracing::{info, warn};
@@ -395,8 +394,7 @@ fn sqlite_usize(value: usize) -> i64 {
     value.try_into().unwrap_or(i64::MAX)
 }
 
-#[cfg(test)]
-pub(crate) fn stored_count(path: &Path) -> Result<usize> {
+pub fn stored_count(path: &Path) -> Result<usize> {
     let connection = open_connection(path)?;
     initialize_schema(&connection)?;
     connection

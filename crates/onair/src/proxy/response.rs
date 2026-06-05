@@ -8,16 +8,16 @@ use axum::http::{Response, StatusCode};
 use futures_util::TryStreamExt;
 use tracing::{debug, warn};
 
-use crate::observe::debug_capture::{CaptureOutcome, RequestCapture};
-use crate::observe::{
-    BackendHealthStore, ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
-    InspectorRequestRecord, InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts,
-    LiveRecord, RequestTimeline, TimelineEvent,
-};
 use onair_core::config::DebugCaptureConfig;
 use onair_core::error::ApiError;
 use onair_core::openai::{self, SseNormalizer, UsageDiagnostics, UsageTotals};
 use onair_obs::metrics::MetricLabels;
+use onair_obs::observe::debug_capture::{CaptureOutcome, RequestCapture};
+use onair_obs::observe::{
+    BackendHealthStore, ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
+    InspectorRequestRecord, InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts,
+    LiveRecord, RequestTimeline, TimelineEvent,
+};
 
 use super::attempt::InspectorAttemptBuilder;
 use super::inspector::{InspectorRecord, inspector_tokens, record_inspector_request};
