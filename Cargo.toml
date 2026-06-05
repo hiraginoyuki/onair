@@ -1,15 +1,23 @@
-[package]
-name = "onair"
+[workspace]
+resolver = "2"
+members = [
+    "crates/onair",
+    "crates/onair-core",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+publish = false
 
-[dependencies]
+[workspace.dependencies]
 async-stream = "0.3"
 axum = { version = "0.8", features = ["macros"] }
 bytes = "1"
 clap = { version = "4.5", features = ["derive", "env"] }
 futures-util = "0.3"
+http-body-util = "0.1"
 notify = "8"
 opentelemetry = "0.30"
 opentelemetry-otlp = { version = "0.30", features = ["grpc-tonic", "metrics"] }
@@ -23,11 +31,8 @@ subtle = "2.6"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "0.9"
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2"
-
-[dev-dependencies]
-http-body-util = "0.1"
-tower = { version = "0.5", features = ["util"] }
