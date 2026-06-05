@@ -8,34 +8,36 @@ use axum::http::header::{
     HeaderValue,
 };
 use axum::http::{HeaderMap, Method, Response, StatusCode, Uri};
-use tokio::sync::watch;
 use tracing::{Instrument, info_span, warn};
 
 use crate::proxy_state::ProxyState;
 use crate::routing::{self, SelectedRoute};
 use onair_core::auth::authenticate;
-use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
+use onair_core::config::DebugCaptureMode;
 use onair_core::error::ApiError;
 use onair_core::openai;
 use onair_obs::metrics::{MetricLabels, RequestTimer};
-use onair_obs::observe::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
+use onair_obs::observe::debug_capture::CaptureOutcome;
 use onair_obs::observe::{
-    ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
-    InspectorRequestRecord, InspectorStore, InspectorTokenCounts, LiveRecord, RequestTimeline,
-    TimelineEvent,
+    ClientInfo, InspectorOutcome, InspectorStore, InspectorTokenCounts, LiveRecord,
+    RequestTimeline, TimelineEvent,
 };
 
 pub mod attempt;
+pub mod context;
 pub mod inspector;
 pub mod logging;
 pub mod response;
 pub mod upstream;
 
 use self::attempt::{InspectorAttemptBuilder, InspectorAttemptInit};
+pub(super) use self::context::{
+    ModelLogFields, PendingDebugCapture, ProxyContext, ProxyRequest, ensure_failure_debug_capture,
+    refresh_live_record,
+};
 use self::inspector::{
-    PreflightInspectorRecord, RequestObservationBase, build_live_record_from_context,
-    initial_live_record, record_context_inspector, record_preflight_inspector,
-    routed_inspector_base,
+    PreflightInspectorRecord, RequestObservationBase, initial_live_record,
+    record_context_inspector, record_preflight_inspector, routed_inspector_base,
 };
 use self::logging::{
     PreflightFailureLog, debug_capture_id, warn_preflight_failure, warn_proxy_failure,
@@ -49,8 +51,6 @@ use self::upstream::{
 
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
-
-fn refresh_live_record(_record: &mut InspectorRequestRecord) {}
 
 pub async fn proxy_v1(
     state: Arc<ProxyState>,
@@ -349,177 +349,6 @@ pub async fn proxy_v1(
     do_proxy(context, request, fallback_routes)
         .instrument(span)
         .await
-}
-
-struct ProxyRequest {
-    method: Method,
-    uri: Uri,
-    body: Bytes,
-    content_type: Option<String>,
-    stream: bool,
-}
-
-struct ProxyContext {
-    state: Arc<ProxyState>,
-    client_headers: HeaderMap,
-    debug_capture_config: DebugCaptureConfig,
-    debug_capture: Option<RequestCapture>,
-    pending_debug_capture: Option<PendingDebugCapture>,
-    inspector_base: InspectorRequestBase,
-    inspector_enabled: bool,
-    inspector_retention_requests: usize,
-    live_record: Option<LiveRecord>,
-    client_info: ClientInfo,
-    shutdown: watch::Receiver<bool>,
-    backend_target: String,
-    backend_remote_addr: Option<SocketAddr>,
-    route: SelectedRoute,
-    labels: MetricLabels,
-    model_log_fields: ModelLogFields,
-    requested_model: Option<String>,
-    client_stream_usage_requested: bool,
-    request_body_bytes: usize,
-    request_timer: RequestTimer,
-    timeline: RequestTimeline,
-    attempt: usize,
-    max_attempts: usize,
-    backend_attempts: Vec<InspectorAttemptRecord>,
-    retried_attempts: Vec<InspectorAttemptRecord>,
-    current_attempt: Option<InspectorAttemptBuilder>,
-}
-
-impl ProxyContext {
-    fn apply_route(&mut self, route: SelectedRoute) {
-        self.backend_target = backend_target(&route.base_url);
-        self.backend_remote_addr = None;
-        self.debug_capture = None;
-        self.pending_debug_capture = None;
-        self.model_log_fields = ModelLogFields::from_route(self.requested_model.as_deref(), &route);
-        self.labels.backend = route.backend_id.clone();
-        self.labels.public_model = route
-            .public_model
-            .clone()
-            .or_else(|| self.requested_model.clone())
-            .unwrap_or_else(|| "none".to_owned());
-        self.inspector_base.requested_model = self.model_log_fields.requested.clone();
-        self.inspector_base.public_model = self.model_log_fields.public.clone();
-        self.inspector_base.backend_model = self.model_log_fields.backend.clone();
-        self.inspector_base.backend = self.labels.backend.clone();
-        self.inspector_base.backend_target = self.backend_target.clone();
-        self.inspector_base.backend_remote_addr = None;
-        self.inspector_base.debug_capture_id = None;
-        self.route = route;
-        if let Some(live) = &self.live_record {
-            let base = self.inspector_base.clone();
-            live.update(|record| record.base = base);
-        }
-    }
-
-    fn live_upsert(&self, mutate: impl FnOnce(&mut InspectorRequestRecord)) {
-        if let Some(live) = &self.live_record {
-            live.update(|record| {
-                let mut snapshot = build_live_record_from_context(self);
-                mutate(&mut snapshot);
-                *record = snapshot;
-            });
-        }
-    }
-
-    fn live_finalize(self, final_record: InspectorRequestRecord) {
-        if let Some(live) = self.live_record {
-            live.finalize(final_record);
-        }
-    }
-
-    fn record_retried_attempt(&mut self, attempt: InspectorAttemptRecord) {
-        self.backend_attempts.push(attempt.clone());
-        self.retried_attempts.push(attempt);
-        self.live_upsert(refresh_live_record);
-    }
-
-    fn record_final_attempt(
-        &mut self,
-        status: StatusCode,
-        upstream_status: Option<u16>,
-        outcome: &'static str,
-        error_kind: Option<&'static str>,
-    ) {
-        if let Some(attempt) = self.current_attempt.take() {
-            let ended_us = self.timeline.elapsed_us();
-            self.backend_attempts.push(attempt.finish(
-                status,
-                upstream_status,
-                outcome,
-                error_kind,
-                ended_us,
-            ));
-            self.live_upsert(refresh_live_record);
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PendingDebugCapture {
-    method: Method,
-    client_path: String,
-    client_query: Option<String>,
-    upstream_path: String,
-    upstream_query: Option<String>,
-    content_type: Option<String>,
-    request_id: Option<String>,
-    labels: MetricLabels,
-    requested_model: String,
-    public_model: String,
-    backend_model: String,
-    inbound_body: Bytes,
-    upstream_body: Vec<u8>,
-}
-
-impl PendingDebugCapture {
-    fn capture(&self, config: &DebugCaptureConfig) -> Option<RequestCapture> {
-        debug_capture::capture_request(
-            config,
-            CaptureRequest {
-                method: &self.method,
-                client_path: &self.client_path,
-                client_query: self.client_query.as_deref(),
-                upstream_path: &self.upstream_path,
-                upstream_query: self.upstream_query.as_deref(),
-                content_type: self.content_type.as_deref(),
-                request_id: self.request_id.as_deref(),
-                labels: &self.labels,
-                requested_model: &self.requested_model,
-                public_model: &self.public_model,
-                backend_model: &self.backend_model,
-                inbound_body: &self.inbound_body,
-                upstream_body: &self.upstream_body,
-            },
-        )
-    }
-}
-
-fn ensure_failure_debug_capture(
-    config: &DebugCaptureConfig,
-    pending_debug_capture: &mut Option<PendingDebugCapture>,
-    debug_capture: &mut Option<RequestCapture>,
-    timeline: &mut RequestTimeline,
-    attempt_record: Option<&mut InspectorAttemptBuilder>,
-) {
-    let had_capture = debug_capture.is_some();
-    if debug_capture.is_none()
-        && let Some(pending_capture) = pending_debug_capture.take()
-    {
-        *debug_capture = pending_capture.capture(config);
-    }
-
-    if let Some(attempt_record) = attempt_record {
-        attempt_record.set_debug_capture(debug_capture.as_ref());
-        if !had_capture && debug_capture.is_some() {
-            attempt_record.mark_debug_capture_done(timeline.mark(TimelineEvent::DebugCaptureDone));
-        }
-    } else if !had_capture && debug_capture.is_some() {
-        timeline.mark(TimelineEvent::DebugCaptureDone);
-    }
 }
 
 async fn do_proxy(
@@ -1053,21 +882,4 @@ fn record_preflight_failure(
     state
         .metrics
         .record_request(&labels, status.as_u16(), duration);
-}
-
-#[derive(Debug, Clone)]
-struct ModelLogFields {
-    requested: String,
-    public: String,
-    backend: String,
-}
-
-impl ModelLogFields {
-    fn from_route(requested_model: Option<&str>, route: &SelectedRoute) -> Self {
-        Self {
-            requested: requested_model.unwrap_or("none").to_owned(),
-            public: route.public_model.as_deref().unwrap_or("none").to_owned(),
-            backend: route.backend_model.as_deref().unwrap_or("none").to_owned(),
-        }
-    }
 }

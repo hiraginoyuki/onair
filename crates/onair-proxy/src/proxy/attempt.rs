@@ -16,7 +16,7 @@ pub(super) struct InspectorAttemptInit<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct InspectorAttemptBuilder {
+pub struct InspectorAttemptBuilder {
     attempt: usize,
     backend: String,
     backend_target: String,
