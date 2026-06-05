@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/onair",
     "crates/onair-core",
+    "crates/onair-obs",
+    "crates/onair-proxy",
 ]
 
 [workspace.package]
