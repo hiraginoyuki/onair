@@ -114,7 +114,17 @@ fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-fn upsert_in_place(
+// Add `record` to the deque, enforcing the retention cap with FIFO eviction.
+//
+// If a record with the same `record_id` already exists, replace it in
+// place to preserve its deque position (stable table ordering in the UI
+// and reverse-scan `get()` semantics). Otherwise the record is treated
+// as a new push: when the deque is already at the retention limit, the
+// oldest record is popped from the front *before* the new record is
+// pushed to the back. Eviction intentionally drops the record from the
+// deque only; the persistence layer is notified separately by the
+// caller and never sees the evicted record.
+fn upsert_with_fifo_eviction(
     records: &mut VecDeque<InspectorRequestRecord>,
     record: InspectorRequestRecord,
     retention_requests: usize,
@@ -126,10 +136,10 @@ fn upsert_in_place(
         *slot = record;
         return;
     }
-    records.push_back(record);
-    while records.len() > retention_requests {
+    if records.len() >= retention_requests {
         records.pop_front();
     }
+    records.push_back(record);
 }
 
 impl Default for InspectorStore {
@@ -190,7 +200,7 @@ impl InspectorStore {
                 .records
                 .lock()
                 .expect("inspector store lock poisoned");
-            upsert_in_place(&mut records, record.clone(), retention_requests);
+            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
         }
 
         if let Some(persistence) = &self.inner.persistence {
@@ -214,7 +224,7 @@ impl InspectorStore {
                 .records
                 .lock()
                 .expect("inspector store lock poisoned");
-            upsert_in_place(&mut records, record.clone(), retention_requests);
+            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
         }
 
         let _ = self.inner.events.send(record);
@@ -237,7 +247,7 @@ impl InspectorStore {
                 .records
                 .lock()
                 .expect("inspector store lock poisoned");
-            upsert_in_place(&mut records, record.clone(), retention_requests);
+            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
         }
 
         if let Some(persistence) = &self.inner.persistence {
@@ -628,6 +638,220 @@ mod tests {
         assert_eq!(records[1].base.record_id, "three");
         assert!(store.get("one").is_none());
         assert!(store.get("three").is_some());
+    }
+
+    fn in_flight_count(store: &InspectorStore) -> usize {
+        store
+            .records_limited(usize::MAX)
+            .iter()
+            .filter(|record| matches!(record.outcome, InspectorOutcome::InFlight))
+            .count()
+    }
+
+    fn in_flight_record(record_id: &str) -> InspectorRequestRecord {
+        let mut record = test_record(record_id);
+        record.outcome = InspectorOutcome::InFlight;
+        record.status = 0;
+        record.error_kind = None;
+        record
+    }
+
+    #[test]
+    fn retention_boundary_evicts_oldest_record() {
+        // Push retention+1 records at a small retention cap and assert
+        // the FIFO eviction drops exactly the oldest record.
+        let store = InspectorStore::new();
+        let retention = 3;
+        for index in 0..=retention {
+            store.record(true, retention, test_record(&format!("rec-{index}")));
+        }
+
+        let records = store.records_limited(usize::MAX);
+        assert_eq!(records.len(), retention);
+        assert_eq!(records[0].base.record_id, "rec-1");
+        assert_eq!(records[1].base.record_id, "rec-2");
+        assert_eq!(records[2].base.record_id, "rec-3");
+        assert!(store.get("rec-0").is_none());
+        assert!(store.get("rec-1").is_some());
+    }
+
+    #[test]
+    fn retention_boundary_evicts_under_bulk_load() {
+        // Stress test: pushing more than the retention cap in one go
+        // must keep the deque bounded at the retention limit and
+        // retain only the most recent records.
+        let store = InspectorStore::new();
+        let retention = 4;
+        let total = retention + 2;
+        for index in 0..total {
+            store.record(true, retention, test_record(&format!("bulk-{index}")));
+        }
+
+        let records = store.records_limited(usize::MAX);
+        assert_eq!(records.len(), retention);
+        assert_eq!(records[0].base.record_id, "bulk-2");
+        assert_eq!(records[retention - 1].base.record_id, "bulk-5");
+        for index in 0..(total - retention) {
+            assert!(store.get(&format!("bulk-{index}")).is_none());
+        }
+    }
+
+    #[test]
+    fn eviction_decrements_in_flight_count() {
+        // Three in-flight records fill the deque. A fourth push (a
+        // final record) evicts the oldest, which is in-flight, so the
+        // in-flight count goes from 3 to 2.
+        let store = InspectorStore::new();
+        for id in ["a", "b", "c"] {
+            store.upsert(true, 3, in_flight_record(id));
+        }
+        assert_eq!(in_flight_count(&store), 3);
+
+        store.record(true, 3, test_record("d"));
+
+        assert_eq!(in_flight_count(&store), 2);
+        let records = store.records_limited(usize::MAX);
+        assert_eq!(records[0].base.record_id, "b");
+        assert!(matches!(records[0].outcome, InspectorOutcome::InFlight));
+        assert_eq!(records[2].base.record_id, "d");
+        assert!(matches!(records[2].outcome, InspectorOutcome::Completed));
+    }
+
+    #[test]
+    fn eviction_of_final_record_does_not_change_in_flight_count() {
+        // Three final records fill the deque. A fourth push (a final
+        // record) evicts the oldest, which is also final, so the
+        // in-flight count stays at 0.
+        let store = InspectorStore::new();
+        for id in ["a", "b", "c"] {
+            store.record(true, 3, test_record(id));
+        }
+        assert_eq!(in_flight_count(&store), 0);
+
+        store.record(true, 3, test_record("d"));
+
+        assert_eq!(in_flight_count(&store), 0);
+        let records = store.records_limited(usize::MAX);
+        assert_eq!(records[0].base.record_id, "b");
+    }
+
+    #[test]
+    fn upsert_replace_at_limit_does_not_evict() {
+        // Three records fill the deque. Replacing an existing record
+        // by id via `upsert` keeps the deque at the retention limit
+        // and does not trigger eviction.
+        let store = InspectorStore::new();
+        for id in ["a", "b", "c"] {
+            store.record(true, 3, test_record(id));
+        }
+
+        let mut update = test_record("b");
+        update.timeline.auth_done_us = Some(1234);
+        store.upsert(true, 3, update);
+
+        let records = store.records_limited(usize::MAX);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].base.record_id, "a");
+        assert_eq!(records[1].base.record_id, "b");
+        assert_eq!(records[1].timeline.auth_done_us, Some(1234));
+        assert_eq!(records[2].base.record_id, "c");
+    }
+
+    #[test]
+    fn upsert_final_replace_at_limit_does_not_evict() {
+        // Three in-flight records fill the deque. Calling
+        // `upsert_final` for one of them replaces it in place with
+        // the terminal record; the other two stay in flight and the
+        // deque is still at the retention limit.
+        let store = InspectorStore::new();
+        store.upsert(true, 3, in_flight_record("a"));
+        store.upsert(true, 3, in_flight_record("b"));
+        store.upsert(true, 3, in_flight_record("c"));
+
+        store.upsert_final(true, 3, test_record("a"));
+
+        let records = store.records_limited(usize::MAX);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].base.record_id, "a");
+        assert!(matches!(records[0].outcome, InspectorOutcome::Completed));
+        assert_eq!(records[1].base.record_id, "b");
+        assert!(matches!(records[1].outcome, InspectorOutcome::InFlight));
+        assert_eq!(records[2].base.record_id, "c");
+        assert!(matches!(records[2].outcome, InspectorOutcome::InFlight));
+        assert_eq!(in_flight_count(&store), 2);
+    }
+
+    #[test]
+    fn persistence_drain_only_walks_current_deque_state() {
+        // Push more records than the retention cap. The first
+        // records are evicted from the deque. The persistence writer
+        // is enqueued per-push and prunes its own SQLite file to the
+        // retention cap on each insert, so the post-drop drain only
+        // needs to mark the records still in the deque as
+        // `Interrupted`. Evicted records must not appear in the
+        // restored file.
+        let path = temp_database_path("evict-drain");
+        let config = InspectorConfig {
+            enabled: true,
+            retention_requests: 3,
+            allow_remote: false,
+            persistence: InspectorPersistenceConfig {
+                enabled: true,
+                path: Some(path.clone()),
+            },
+        };
+        let store = InspectorStore::from_config(&config).unwrap();
+        for index in 0..5 {
+            store.record(true, 3, test_record(&format!("drain-{index}")));
+        }
+        wait_for_stored_count(&path, 3);
+        drop(store);
+
+        let restored = InspectorStore::from_config(&config).unwrap();
+        let records = restored.records_limited(usize::MAX);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].base.record_id, "drain-2");
+        assert_eq!(records[1].base.record_id, "drain-3");
+        assert_eq!(records[2].base.record_id, "drain-4");
+        assert!(restored.get("drain-0").is_none());
+        assert!(restored.get("drain-1").is_none());
+    }
+
+    #[test]
+    fn evicted_in_flight_record_is_not_marked_interrupted_on_drop() {
+        // With retention 3, push 4 in-flight records. The first one
+        // is evicted by the fourth push and is no longer in the
+        // deque when `Drop` runs, so it is never marked
+        // `Interrupted`. The 3 remaining in-flight records are
+        // marked `Interrupted` and persisted.
+        let path = temp_database_path("evict-interrupt");
+        let config = InspectorConfig {
+            enabled: true,
+            retention_requests: 3,
+            allow_remote: false,
+            persistence: InspectorPersistenceConfig {
+                enabled: true,
+                path: Some(path.clone()),
+            },
+        };
+        let store = InspectorStore::from_config(&config).unwrap();
+        for index in 0..4 {
+            store.upsert(true, 3, in_flight_record(&format!("evict-{index}")));
+        }
+        drop(store);
+        wait_for_stored_count(&path, 3);
+
+        let restored = InspectorStore::from_config(&config).unwrap();
+        let records = restored.records_limited(usize::MAX);
+        assert_eq!(records.len(), 3);
+        for record in &records {
+            assert!(matches!(record.outcome, InspectorOutcome::Interrupted));
+            assert_eq!(record.status, 503);
+        }
+        assert!(restored.get("evict-0").is_none());
+        assert!(restored.get("evict-1").is_some());
+        assert!(restored.get("evict-2").is_some());
+        assert!(restored.get("evict-3").is_some());
     }
 
     #[test]
