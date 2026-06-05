@@ -1,0 +1,33 @@
+# Third-Party Licenses
+
+onair is built on the Rust crates listed below. Their licenses and copyright
+notices are reproduced here. The full text of each license is included.
+
+## Overview of licenses
+
+| License | Crates |
+| --- | --- |
+{{~ #each overview }}
+| [{{ name }}](#{{ id }}) | {{ count }} |
+{{~ /each }}
+
+## License texts
+
+{{~ #each licenses }}
+{{~ #if first_of_kind }}
+### {{ name }}
+
+{{~ /if }}
+#### {{ name }} ({{ id }})
+
+Used by:
+
+{{~ #each used_by }}
+- [{{ crate.name }} {{ crate.version }}]({{#if crate.repository}}{{ crate.repository }}{{else}}https://crates.io/crates/{{ crate.name }}{{/if}})
+{{~ /each }}
+
+```
+{{ text }}
+```
+
+{{~ /each }}

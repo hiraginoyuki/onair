@@ -1,0 +1,321 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'unstable'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name (e.g. v0.1.0 or unstable). Defaults to "unstable".'
+        required: false
+        default: 'unstable'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  meta:
+    name: resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      is_unstable: ${{ steps.resolve.outputs.is_unstable }}
+      is_stable: ${{ steps.resolve.outputs.is_stable }}
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: resolve
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${{ github.ref_name }}"
+          fi
+          cargo_version="$(grep -E '^version' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [ "$tag" = "unstable" ]; then
+            is_unstable="true"
+            is_stable="false"
+            prerelease="true"
+            version="${cargo_version}"
+          elif [[ "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            is_unstable="false"
+            is_stable="true"
+            prerelease="false"
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          else
+            echo "Unsupported tag: $tag" >&2
+            exit 1
+          fi
+          {
+            echo "tag=$tag"
+            echo "is_unstable=$is_unstable"
+            echo "is_stable=$is_stable"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved: tag=$tag version=$version unstable=$is_unstable stable=$is_stable"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            method: native
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            method: zigbuild
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            method: zigbuild
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            method: zigbuild
+          - target: x86_64-apple-darwin
+            os: macos-13
+            method: native
+          - target: aarch64-apple-darwin
+            os: macos-14
+            method: native
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install zig
+        if: ${{ matrix.method == 'zigbuild' }}
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: ${{ matrix.method == 'zigbuild' }}
+        run: cargo install --locked cargo-zigbuild
+
+      - name: Install musl tools
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build (native)
+        if: ${{ matrix.method == 'native' }}
+        run: cargo build --release --target ${{ matrix.target }} -p onair --locked
+
+      - name: Build (zigbuild)
+        if: ${{ matrix.method == 'zigbuild' }}
+        run: cargo zigbuild --release --target ${{ matrix.target }} -p onair --locked
+
+      - name: Stage binary
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/onair dist/onair-${{ matrix.target }}
+          chmod +x dist/onair-${{ matrix.target }}
+          file dist/onair-${{ matrix.target }} || true
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: onair-${{ matrix.target }}
+          path: dist/onair-${{ matrix.target }}
+          if-no-files-found: error
+
+  licenses:
+    name: generate THIRD_PARTY_LICENSES.md
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-about
+        run: cargo install --locked cargo-about
+
+      - name: Generate THIRD_PARTY_LICENSES.md
+        run: cargo about generate about.hbs -o THIRD_PARTY_LICENSES.md
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: THIRD_PARTY_LICENSES
+          path: THIRD_PARTY_LICENSES.md
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: [meta, build, licenses]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la dist/
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: ${{ needs.meta.outputs.tag }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/onair-x86_64-unknown-linux-gnu
+            dist/onair-x86_64-unknown-linux-musl
+            dist/onair-aarch64-unknown-linux-gnu
+            dist/onair-aarch64-unknown-linux-musl
+            dist/onair-x86_64-apple-darwin
+            dist/onair-aarch64-apple-darwin
+            dist/THIRD_PARTY_LICENSES.md
+
+  nix-metadata:
+    name: update nix-metadata
+    needs: [meta, release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Enable flakes
+        run: |
+          mkdir -p ~/.config/nix
+          printf 'experimental-features = nix-command flakes\n' >> ~/.config/nix/nix.conf
+
+      - name: Compute sha256 for each release asset
+        id: hashes
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          targets=(
+            x86_64-unknown-linux-gnu
+            x86_64-unknown-linux-musl
+            aarch64-unknown-linux-gnu
+            aarch64-unknown-linux-musl
+            x86_64-apple-darwin
+            aarch64-apple-darwin
+          )
+          hash_obj="{"
+          first=true
+          for t in "${targets[@]}"; do
+            url="https://github.com/${REPO}/releases/download/${TAG}/onair-${t}"
+            nix_hash=$(nix-prefetch-url --type sha256 "$url")
+            sha=$(nix hash convert --to sha256 --hash-algo sha256 "$nix_hash")
+            printf '%s -> %s\n' "$t" "$sha"
+            if [ "$first" = "true" ]; then first=false; else hash_obj+=","; fi
+            hash_obj+="\"${t}\":\"${sha}\""
+          done
+          hash_obj+="}"
+          {
+            echo "hashes<<EOF"
+            echo "$hash_obj"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Update nix-metadata branch and release tag
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          IS_UNSTABLE: ${{ needs.meta.outputs.is_unstable }}
+          IS_STABLE: ${{ needs.meta.outputs.is_stable }}
+          HASHES: ${{ steps.hashes.outputs.hashes }}
+        run: |
+          set -euo pipefail
+
+          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          if ! git ls-remote --heads origin nix-metadata | grep -q nix-metadata; then
+            echo "Bootstrapping nix-metadata branch"
+            git checkout -b nix-metadata
+            mkdir -p nix
+            printf '{}\n' > nix/metadata.json
+            git add nix/metadata.json
+            git commit -m "chore(nix-metadata): initialize [skip ci]"
+            git push -u origin nix-metadata
+          fi
+
+          git fetch origin nix-metadata
+          git checkout nix-metadata
+
+          if [ -f nix/metadata.json ]; then
+            existing="$(cat nix/metadata.json)"
+          else
+            existing='{}'
+          fi
+
+          if [ "$IS_UNSTABLE" = "true" ]; then
+            entry_key="unstable"
+            entry="$(jq -n \
+              --arg tag "$TAG" \
+              --arg version "$VERSION" \
+              --arg now "$now" \
+              --argjson sha "$HASHES" \
+              '{tag: $tag, version: $version, committed_at: $now, sha256: $sha}')"
+          else
+            entry_key="stable"
+            entry="$(jq -n \
+              --arg tag "$TAG" \
+              --arg version "$VERSION" \
+              --arg now "$now" \
+              --argjson sha "$HASHES" \
+              '{tag: $tag, version: $version, released_at: $now, sha256: $sha}')"
+          fi
+
+          new_metadata="$(echo "$existing" | jq \
+            --arg key "$entry_key" \
+            --argjson entry "$entry" \
+            '. + {($key): $entry, default: (.default // "unstable")}')"
+
+          mkdir -p nix
+          printf '%s\n' "$new_metadata" | jq '.' > nix/metadata.json
+
+          git add nix/metadata.json
+          git commit -m "chore(nix-metadata): refresh after ${TAG} [skip ci]"
+          git push origin nix-metadata
+
+          if [ "$IS_STABLE" = "true" ]; then
+            echo "Pinning metadata.json to release tag ${TAG}"
+            git checkout "$TAG"
+            mkdir -p nix
+            printf '%s\n' "$new_metadata" | jq '.' > nix/metadata.json
+            git add nix/metadata.json
+            git commit --allow-empty -m "chore(nix-metadata): pin ${TAG} [skip ci]"
+            git tag -f "$TAG"
+            git push origin "tag" "$TAG" --force
+          fi
