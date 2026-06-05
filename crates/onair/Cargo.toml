@@ -12,6 +12,7 @@ bytes = { workspace = true }
 clap = { workspace = true }
 futures-util = { workspace = true }
 notify = { workspace = true }
+onair-core = { path = "../onair-core" }
 opentelemetry = { workspace = true }
 opentelemetry-otlp = { workspace = true }
 opentelemetry_sdk = { workspace = true }

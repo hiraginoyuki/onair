@@ -20,7 +20,7 @@ use url::form_urlencoded;
 
 use crate::auth::authenticate;
 use crate::config::{Config, ConfigStore, ResolvedContextLength};
-use crate::error::{ApiError, Result};
+use onair_core::error::{ApiError, Result};
 use crate::metrics::{MetricLabels, Metrics, RequestTimer};
 use crate::observe::{
     BackendHealthStore, ClientInfo, ContextSizeCache, ContextSizeRefreshTask, HealthProbeTask,

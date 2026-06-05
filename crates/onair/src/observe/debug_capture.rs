@@ -205,13 +205,13 @@ pub enum CaptureOutcome {
     },
 }
 
-pub fn validate_config(config: &DebugCaptureConfig) -> crate::error::Result<()> {
+pub fn validate_config(config: &DebugCaptureConfig) -> onair_core::error::Result<()> {
     if !config.enabled {
         return Ok(());
     }
 
     if config.directory.as_os_str().is_empty() {
-        return Err(crate::error::Error::Config(
+        return Err(onair_core::error::Error::Config(
             "debug_capture.directory must not be empty when debug capture is enabled".to_owned(),
         ));
     }
@@ -221,7 +221,7 @@ pub fn validate_config(config: &DebugCaptureConfig) -> crate::error::Result<()> 
         .components()
         .any(|component| matches!(component, Component::ParentDir))
     {
-        return Err(crate::error::Error::Config(
+        return Err(onair_core::error::Error::Config(
             "debug_capture.directory must not contain '..' components".to_owned(),
         ));
     }
@@ -231,7 +231,7 @@ pub fn validate_config(config: &DebugCaptureConfig) -> crate::error::Result<()> 
         .components()
         .any(|component| matches!(component, Component::Normal(_)))
     {
-        return Err(crate::error::Error::Config(
+        return Err(onair_core::error::Error::Config(
             "debug_capture.directory must include a directory name".to_owned(),
         ));
     }

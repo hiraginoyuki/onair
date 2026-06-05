@@ -8,7 +8,7 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 
 use crate::config::{TelemetryConfig, TelemetryExporter};
-use crate::error::{Error, Result};
+use onair_core::error::{Error, Result};
 use crate::openai::UsageTotals;
 
 #[derive(Debug, Clone)]

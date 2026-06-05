@@ -1,1 +1,2 @@
-// Placeholder. Real modules land in commits 2-4.
+pub mod error;
+pub mod openai;

@@ -10,7 +10,7 @@ use crate::config::{
     ChatStreamUsagePolicy, ResolvedBackend, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy,
     RoutingStrategy, ToolSchemaMode,
 };
-use crate::error::ApiError;
+use onair_core::error::ApiError;
 use crate::openai::RequestMode;
 
 const RESPONSES_VIA_CHAT_COMPLETIONS: &str = "responses_via_chat_completions";

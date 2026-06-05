@@ -9,7 +9,7 @@ use tokio::sync::broadcast;
 use tracing::error;
 
 use crate::config::InspectorConfig;
-use crate::error::{Error, Result};
+use onair_core::error::{Error, Result};
 use crate::observe::TimelineSnapshot;
 
 use super::inspector_persistence::{InspectorPersistenceWriter, restore_records};

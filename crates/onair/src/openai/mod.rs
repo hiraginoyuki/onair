@@ -1,10 +1,9 @@
-mod models;
 mod request;
 mod response;
 mod responses_compat;
 
 #[allow(unused_imports)]
-pub use models::{
+pub use onair_core::openai::models::{
     DefaultGenerationSettings, ModelMeta, ModelObject, ModelsResponse, PropsResponse,
     model_response, model_response_with_n_ctx_train, models_response, props_response,
 };

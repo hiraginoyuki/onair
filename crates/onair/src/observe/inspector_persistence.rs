@@ -11,7 +11,7 @@ use rusqlite::OptionalExtension;
 use rusqlite::{Connection, params};
 use tracing::{info, warn};
 
-use crate::error::{Error, Result};
+use onair_core::error::{Error, Result};
 
 use super::inspector::{InspectorOutcome, InspectorRequestRecord};
 

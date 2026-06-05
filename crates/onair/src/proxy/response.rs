@@ -9,7 +9,7 @@ use futures_util::TryStreamExt;
 use tracing::{debug, warn};
 
 use crate::config::DebugCaptureConfig;
-use crate::error::ApiError;
+use onair_core::error::ApiError;
 use crate::metrics::MetricLabels;
 use crate::observe::debug_capture::{CaptureOutcome, RequestCapture};
 use crate::observe::{

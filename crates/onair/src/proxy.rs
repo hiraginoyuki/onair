@@ -14,7 +14,7 @@ use tracing::{Instrument, info_span, warn};
 use crate::app::AppState;
 use crate::auth::authenticate;
 use crate::config::{DebugCaptureConfig, DebugCaptureMode};
-use crate::error::ApiError;
+use onair_core::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
 use crate::observe::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
 use crate::observe::{

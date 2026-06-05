@@ -15,7 +15,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use crate::error::{Error, Result};
+use onair_core::error::{Error, Result};
 use crate::observe::{ContextSizeCache, IpCidr, debug_capture, inspector};
 
 const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
