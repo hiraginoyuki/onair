@@ -263,9 +263,8 @@ jobs:
           if ! git ls-remote --heads origin nix-metadata | grep -q nix-metadata; then
             echo "Bootstrapping nix-metadata branch"
             git checkout -b nix-metadata
-            mkdir -p nix
-            printf '{}\n' > nix/metadata.json
-            git add nix/metadata.json
+            printf '{}\n' > metadata.json
+            git add metadata.json
             git commit -m "chore(nix-metadata): initialize [skip ci]"
             git push -u origin nix-metadata
           fi
@@ -273,8 +272,8 @@ jobs:
           git fetch origin nix-metadata
           git checkout nix-metadata
 
-          if [ -f nix/metadata.json ]; then
-            existing="$(cat nix/metadata.json)"
+          if [ -f metadata.json ]; then
+            existing="$(cat metadata.json)"
           else
             existing='{}'
           fi
@@ -302,19 +301,17 @@ jobs:
             --argjson entry "$entry" \
             '. + {($key): $entry, default: (.default // "unstable")}')"
 
-          mkdir -p nix
-          printf '%s\n' "$new_metadata" | jq '.' > nix/metadata.json
+          printf '%s\n' "$new_metadata" | jq '.' > metadata.json
 
-          git add nix/metadata.json
+          git add metadata.json
           git commit -m "chore(nix-metadata): refresh after ${TAG} [skip ci]"
           git push origin nix-metadata
 
           if [ "$IS_STABLE" = "true" ]; then
             echo "Pinning metadata.json to release tag ${TAG}"
             git checkout "$TAG"
-            mkdir -p nix
-            printf '%s\n' "$new_metadata" | jq '.' > nix/metadata.json
-            git add nix/metadata.json
+            printf '%s\n' "$new_metadata" | jq '.' > metadata.json
+            git add metadata.json
             git commit --allow-empty -m "chore(nix-metadata): pin ${TAG} [skip ci]"
             git tag -f "$TAG"
             git push origin "tag" "$TAG" --force
