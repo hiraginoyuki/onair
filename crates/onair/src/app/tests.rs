@@ -21,9 +21,9 @@ use super::*;
 use onair_core::ContextSizeCache;
 use onair_core::config::{
     ChatStreamUsagePolicy, Config, ContextLengthPolicy, DebugCaptureConfig, DebugCaptureMode,
-    HealthConfig, InspectorConfig, InspectorPersistenceConfig, ModelRoute, ResolvedBackend,
-    ResolvedClient, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RoutingConfig,
-    RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
+    HealthConfig, InspectorConfig, InspectorPersistenceConfig, ResolvedBackend, ResolvedClient,
+    ResolvedRoute, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RouteBackendBinding,
+    RouteKey, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
 use onair_obs::observe::inspector_persisted_count;
 
@@ -134,8 +134,8 @@ async fn responses_translates_to_chat_completions_for_chat_backend() {
 async fn chat_stream_usage_policy_inserts_upstream_include_usage() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_chat_backend("backend-a", backend.base_url());
-    backend_config.chat_stream_usage = ChatStreamUsagePolicy::Insert;
-    backend_config.models[0].chat_stream_usage = ChatStreamUsagePolicy::Insert;
+    backend_config.backend.chat_stream_usage = ChatStreamUsagePolicy::Insert;
+    backend_config.route.chat_stream_usage = ChatStreamUsagePolicy::Insert;
     let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
     let app = router(state.clone());
 
@@ -212,8 +212,8 @@ async fn chat_stream_usage_requested_by_client_is_forwarded_to_client() {
 async fn responses_chat_compat_can_sanitize_tool_schema_for_backend() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_chat_backend("backend-a", backend.base_url());
-    backend_config.tool_schema_mode = ToolSchemaMode::LlamacppCompat;
-    backend_config.models[0].tool_schema_mode = ToolSchemaMode::LlamacppCompat;
+    backend_config.backend.tool_schema_mode = ToolSchemaMode::LlamacppCompat;
+    backend_config.route.tool_schema_mode = ToolSchemaMode::LlamacppCompat;
     let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
     let app = router(state);
 
@@ -259,8 +259,8 @@ async fn responses_chat_compat_can_sanitize_tool_schema_for_backend() {
 async fn responses_native_capability_uses_native_backend_path() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_chat_backend("backend-a", backend.base_url());
-    backend_config.capabilities = btree_set(["responses", "chat", "streaming", "tools"]);
-    backend_config.models[0].endpoints = btree_set(["responses", "chat", "tools"]);
+    backend_config.backend.supports = btree_set(["responses", "chat", "streaming", "tools"]);
+    backend_config.route.expose = btree_set(["responses", "chat", "tools"]);
     let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
     let app = router(state);
 
@@ -306,8 +306,8 @@ async fn responses_native_capability_uses_native_backend_path() {
 async fn chat_completions_translates_to_responses_for_responses_backend() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_backend("backend-a", backend.base_url());
-    backend_config.capabilities.insert("tools".to_owned());
-    backend_config.models[0].endpoints = btree_set(["chat_completions_via_responses", "tools"]);
+    backend_config.backend.supports.insert("tools".to_owned());
+    backend_config.route.expose = btree_set(["chat_completions_via_responses", "tools"]);
     let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
     let app = router(state);
 
@@ -369,7 +369,7 @@ async fn chat_completions_translates_to_responses_for_responses_backend() {
 async fn chat_completions_stream_translates_to_responses_stream_backend() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_backend("backend-a", backend.base_url());
-    backend_config.models[0].endpoints = btree_set(["chat_completions_via_responses"]);
+    backend_config.route.expose = btree_set(["chat_completions_via_responses"]);
     let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
     let app = router(state.clone());
 
@@ -412,7 +412,7 @@ async fn chat_completions_stream_translates_to_responses_stream_backend() {
 async fn chat_completions_stream_translates_mislabeled_responses_stream() {
     let backend = TestBackend::spawn_json_labeled_stream("backend-a").await;
     let mut backend_config = test_backend("backend-a", backend.base_url());
-    backend_config.models[0].endpoints = btree_set(["chat_completions_via_responses"]);
+    backend_config.route.expose = btree_set(["chat_completions_via_responses"]);
     let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
     let app = router(state.clone());
 
@@ -462,8 +462,8 @@ async fn chat_completions_stream_translates_mislabeled_responses_stream() {
 async fn native_responses_route_can_force_store_false() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_backend("backend-a", backend.base_url());
-    backend_config.responses_store = ResponsesStorePolicy::ForceFalse;
-    backend_config.models[0].responses_store = ResponsesStorePolicy::ForceFalse;
+    backend_config.backend.responses_store = ResponsesStorePolicy::ForceFalse;
+    backend_config.route.responses_store = ResponsesStorePolicy::ForceFalse;
     let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
     let app = router(state);
 
@@ -491,8 +491,8 @@ async fn native_responses_route_can_force_store_false() {
 async fn native_responses_route_can_drop_max_output_tokens() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_backend("backend-a", backend.base_url());
-    backend_config.responses_max_output_tokens = ResponsesMaxOutputTokensPolicy::Drop;
-    backend_config.models[0].responses_max_output_tokens = ResponsesMaxOutputTokensPolicy::Drop;
+    backend_config.backend.responses_max_output_tokens = ResponsesMaxOutputTokensPolicy::Drop;
+    backend_config.route.responses_max_output_tokens = ResponsesMaxOutputTokensPolicy::Drop;
     let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
     let app = router(state);
 
@@ -563,8 +563,8 @@ async fn native_responses_rejects_orphan_function_calls_before_backend() {
 async fn tool_request_requires_tool_capable_route() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_chat_backend("backend-a", backend.base_url());
-    backend_config.capabilities.remove("tools");
-    backend_config.models[0].endpoints.remove("tools");
+    backend_config.backend.supports.remove("tools");
+    backend_config.route.expose.remove("tools");
     let state = test_state(RoutingStrategy::Priority, vec![backend_config]);
     let app = router(state);
 
@@ -1018,8 +1018,8 @@ async fn debug_capture_records_stream_usage_diagnostics() {
     let backend = TestBackend::spawn("backend-a").await;
     let capture_dir = temp_capture_dir("stream-usage");
     let mut backend_config = test_chat_backend("backend-a", backend.base_url());
-    backend_config.chat_stream_usage = ChatStreamUsagePolicy::Insert;
-    backend_config.models[0].chat_stream_usage = ChatStreamUsagePolicy::Insert;
+    backend_config.backend.chat_stream_usage = ChatStreamUsagePolicy::Insert;
+    backend_config.route.chat_stream_usage = ChatStreamUsagePolicy::Insert;
     let state = test_state_with_debug_capture(
         RoutingStrategy::Priority,
         vec![backend_config],
@@ -1671,7 +1671,7 @@ async fn inspector_in_flight_record_persisted_as_interrupted_on_app_state_drop()
 async fn operator_endpoints_return_sanitized_snapshots() {
     let backend = TestBackend::spawn("backend-a").await;
     let mut backend_config = test_backend("backend-a", backend.base_url());
-    backend_config.api_key = Some("backend-secret".to_owned());
+    backend_config.backend.api_key = Some("backend-secret".to_owned());
     let state = test_state_with_inspector(
         RoutingStrategy::Sticky,
         vec![backend_config],
@@ -2070,6 +2070,7 @@ async fn inspector_rejects_remote_forwarded_clients_by_default() {
     let state = test_state_with_server_config_and_inspector(
         RoutingStrategy::Priority,
         vec![],
+        vec![],
         server,
         btree_set([PUBLIC_MODEL]),
         DebugCaptureConfig::default(),
@@ -2109,35 +2110,41 @@ async fn models_respect_context_length_output_policy() {
             base_url: "http://127.0.0.1:9".to_owned(),
             api_key: None,
             timeout: std::time::Duration::from_secs(5),
-            capabilities: btree_set(["responses"]),
+            supports: btree_set(["responses"]),
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
-            models: vec![
-                ModelRoute {
-                    public: PUBLIC_MODEL.to_owned(),
-                    backend: BACKEND_MODEL.to_owned(),
-                    context_length: ContextLengthPolicy::Static(131_072),
-                    tool_schema_mode: ToolSchemaMode::Preserve,
-                    responses_store: ResponsesStorePolicy::Preserve,
-                    responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                    chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                    endpoints: btree_set(["responses"]),
-                },
-                ModelRoute {
-                    public: "gpt-no-context".to_owned(),
-                    backend: "backend-no-context".to_owned(),
-                    context_length: ContextLengthPolicy::None,
-                    tool_schema_mode: ToolSchemaMode::Preserve,
-                    responses_store: ResponsesStorePolicy::Preserve,
-                    responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                    chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                    endpoints: btree_set(["responses"]),
-                },
-            ],
         }],
+        vec![
+            ResolvedRoute {
+                key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+                expose: btree_set(["responses"]),
+                context_length: ContextLengthPolicy::Static(131_072),
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                backends: vec![RouteBackendBinding {
+                    backend_id: "metadata-only".to_owned(),
+                    backend_model: BACKEND_MODEL.to_owned(),
+                }],
+            },
+            ResolvedRoute {
+                key: RouteKey::Public("gpt-no-context".to_owned()),
+                expose: btree_set(["responses"]),
+                context_length: ContextLengthPolicy::None,
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                backends: vec![RouteBackendBinding {
+                    backend_id: "metadata-only".to_owned(),
+                    backend_model: "backend-no-context".to_owned(),
+                }],
+            },
+        ],
         btree_set([PUBLIC_MODEL, "gpt-no-context"]),
     );
     let app = router(state);
@@ -2184,6 +2191,7 @@ async fn models_respect_context_length_output_policy() {
     let response = router(test_state_with_client_models(
         RoutingStrategy::Priority,
         vec![],
+        vec![],
         BTreeSet::new(),
     ))
     .oneshot(authed_get("/props"))
@@ -2206,24 +2214,27 @@ async fn upstream_context_size_is_forwarded_to_v1_models() {
             base_url: format!("http://{address}"),
             api_key: None,
             timeout: std::time::Duration::from_secs(5),
-            capabilities: btree_set(["responses"]),
+            supports: btree_set(["responses"]),
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
-            models: vec![ModelRoute {
-                public: PUBLIC_MODEL.to_owned(),
-                backend: BACKEND_MODEL.to_owned(),
-                context_length: ContextLengthPolicy::Upstream {
-                    backend_id: "backend-a".to_owned(),
-                    backend_model: BACKEND_MODEL.to_owned(),
-                },
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["responses"]),
+        }],
+        vec![ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["responses"]),
+            context_length: ContextLengthPolicy::Upstream {
+                backend_id: "backend-a".to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            },
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: "backend-a".to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
             }],
         }],
         btree_set([PUBLIC_MODEL]),
@@ -2268,24 +2279,27 @@ async fn upstream_context_size_is_forwarded_to_props() {
             base_url: format!("http://{address}"),
             api_key: None,
             timeout: std::time::Duration::from_secs(5),
-            capabilities: btree_set(["responses"]),
+            supports: btree_set(["responses"]),
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
-            models: vec![ModelRoute {
-                public: PUBLIC_MODEL.to_owned(),
-                backend: BACKEND_MODEL.to_owned(),
-                context_length: ContextLengthPolicy::Upstream {
-                    backend_id: "backend-a".to_owned(),
-                    backend_model: BACKEND_MODEL.to_owned(),
-                },
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["responses"]),
+        }],
+        vec![ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["responses"]),
+            context_length: ContextLengthPolicy::Upstream {
+                backend_id: "backend-a".to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            },
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: "backend-a".to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
             }],
         }],
         btree_set([PUBLIC_MODEL]),
@@ -2325,24 +2339,27 @@ async fn upstream_unreachable_hides_value() {
             base_url: "http://127.0.0.1:1".to_owned(),
             api_key: None,
             timeout: std::time::Duration::from_millis(50),
-            capabilities: btree_set(["responses"]),
+            supports: btree_set(["responses"]),
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
-            models: vec![ModelRoute {
-                public: PUBLIC_MODEL.to_owned(),
-                backend: BACKEND_MODEL.to_owned(),
-                context_length: ContextLengthPolicy::Upstream {
-                    backend_id: "backend-a".to_owned(),
-                    backend_model: BACKEND_MODEL.to_owned(),
-                },
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["responses"]),
+        }],
+        vec![ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["responses"]),
+            context_length: ContextLengthPolicy::Upstream {
+                backend_id: "backend-a".to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            },
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: "backend-a".to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
             }],
         }],
         btree_set([PUBLIC_MODEL]),
@@ -2377,20 +2394,22 @@ async fn operator_models_reports_upstream_source() {
     let address = TestBackend::spawn_props_only(8_192).await;
     let state = test_state_with_inspector(
         RoutingStrategy::Priority,
-        vec![ResolvedBackend {
-            id: "backend-a".to_owned(),
-            base_url: format!("http://{address}"),
-            api_key: None,
-            timeout: std::time::Duration::from_secs(5),
-            capabilities: btree_set(["responses"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: PUBLIC_MODEL.to_owned(),
-                backend: BACKEND_MODEL.to_owned(),
+        vec![TestEndpoint {
+            backend: ResolvedBackend {
+                id: "backend-a".to_owned(),
+                base_url: format!("http://{address}"),
+                api_key: None,
+                timeout: std::time::Duration::from_secs(5),
+                supports: btree_set(["responses"]),
+                tool_schema_mode: ToolSchemaMode::Preserve,
+                responses_store: ResponsesStorePolicy::Preserve,
+                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                weight: 1,
+            },
+            route: ResolvedRoute {
+                key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+                expose: btree_set(["responses"]),
                 context_length: ContextLengthPolicy::Upstream {
                     backend_id: "backend-a".to_owned(),
                     backend_model: BACKEND_MODEL.to_owned(),
@@ -2399,8 +2418,11 @@ async fn operator_models_reports_upstream_source() {
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
                 chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["responses"]),
-            }],
+                backends: vec![RouteBackendBinding {
+                    backend_id: "backend-a".to_owned(),
+                    backend_model: BACKEND_MODEL.to_owned(),
+                }],
+            },
         }],
         InspectorConfig {
             enabled: true,
@@ -2461,35 +2483,65 @@ async fn wait_for_cache_failure(cache: &ContextSizeCache, public_model: &str) {
     .unwrap_or_else(|_| panic!("timed out waiting for cache[{public_model}] to record a failure"));
 }
 
-fn test_state(strategy: RoutingStrategy, backends: Vec<ResolvedBackend>) -> Arc<AppState> {
-    test_state_with_client_models(strategy, backends, btree_set([PUBLIC_MODEL]))
+struct TestEndpoint {
+    backend: ResolvedBackend,
+    route: ResolvedRoute,
+}
+
+fn split_endpoints(endpoints: Vec<TestEndpoint>) -> (Vec<ResolvedBackend>, Vec<ResolvedRoute>) {
+    let mut backends: Vec<ResolvedBackend> = Vec::with_capacity(endpoints.len());
+    let mut routes: Vec<ResolvedRoute> = Vec::new();
+    for endpoint in endpoints {
+        let TestEndpoint { backend, route } = endpoint;
+        backends.push(backend);
+        if let Some(existing) = routes.iter_mut().find(|r| r.key == route.key) {
+            existing.backends.extend(route.backends);
+        } else {
+            routes.push(route);
+        }
+    }
+    (backends, routes)
+}
+
+fn test_state(strategy: RoutingStrategy, endpoints: Vec<TestEndpoint>) -> Arc<AppState> {
+    let (backends, routes) = split_endpoints(endpoints);
+    test_state_with_client_models(strategy, backends, routes, btree_set([PUBLIC_MODEL]))
 }
 
 fn test_state_with_debug_capture(
     strategy: RoutingStrategy,
-    backends: Vec<ResolvedBackend>,
+    endpoints: Vec<TestEndpoint>,
     debug_capture: DebugCaptureConfig,
 ) -> Arc<AppState> {
-    test_state_with_config(strategy, backends, btree_set([PUBLIC_MODEL]), debug_capture)
+    let (backends, routes) = split_endpoints(endpoints);
+    test_state_with_config(
+        strategy,
+        backends,
+        routes,
+        btree_set([PUBLIC_MODEL]),
+        debug_capture,
+    )
 }
 
 fn test_state_with_inspector(
     strategy: RoutingStrategy,
-    backends: Vec<ResolvedBackend>,
+    endpoints: Vec<TestEndpoint>,
     inspector: InspectorConfig,
 ) -> Arc<AppState> {
-    test_state_with_inspector_and_health(strategy, backends, inspector, HealthConfig::default())
+    test_state_with_inspector_and_health(strategy, endpoints, inspector, HealthConfig::default())
 }
 
 fn test_state_with_inspector_and_health(
     strategy: RoutingStrategy,
-    backends: Vec<ResolvedBackend>,
+    endpoints: Vec<TestEndpoint>,
     inspector: InspectorConfig,
     health: HealthConfig,
 ) -> Arc<AppState> {
+    let (backends, routes) = split_endpoints(endpoints);
     test_state_with_config_and_inspector(
         strategy,
         backends,
+        routes,
         btree_set([PUBLIC_MODEL]),
         DebugCaptureConfig::default(),
         inspector,
@@ -2500,11 +2552,13 @@ fn test_state_with_inspector_and_health(
 fn test_state_with_client_models(
     strategy: RoutingStrategy,
     backends: Vec<ResolvedBackend>,
+    routes: Vec<ResolvedRoute>,
     client_models: BTreeSet<String>,
 ) -> Arc<AppState> {
     test_state_with_config(
         strategy,
         backends,
+        routes,
         client_models,
         DebugCaptureConfig::default(),
     )
@@ -2513,12 +2567,14 @@ fn test_state_with_client_models(
 fn test_state_with_config(
     strategy: RoutingStrategy,
     backends: Vec<ResolvedBackend>,
+    routes: Vec<ResolvedRoute>,
     client_models: BTreeSet<String>,
     debug_capture: DebugCaptureConfig,
 ) -> Arc<AppState> {
     test_state_with_config_and_inspector(
         strategy,
         backends,
+        routes,
         client_models,
         debug_capture,
         InspectorConfig::default(),
@@ -2529,6 +2585,7 @@ fn test_state_with_config(
 fn test_state_with_config_and_inspector(
     strategy: RoutingStrategy,
     backends: Vec<ResolvedBackend>,
+    routes: Vec<ResolvedRoute>,
     client_models: BTreeSet<String>,
     debug_capture: DebugCaptureConfig,
     inspector: InspectorConfig,
@@ -2537,6 +2594,7 @@ fn test_state_with_config_and_inspector(
     test_state_with_server_config_and_inspector(
         strategy,
         backends,
+        routes,
         ServerConfig::default(),
         client_models,
         debug_capture,
@@ -2545,9 +2603,11 @@ fn test_state_with_config_and_inspector(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn test_state_with_server_config_and_inspector(
     strategy: RoutingStrategy,
     backends: Vec<ResolvedBackend>,
+    routes: Vec<ResolvedRoute>,
     server: ServerConfig,
     client_models: BTreeSet<String>,
     debug_capture: DebugCaptureConfig,
@@ -2572,6 +2632,7 @@ fn test_state_with_server_config_and_inspector(
                     models: client_models,
                 }],
                 backends,
+                routes,
             },
             Metrics::new(),
             watch::channel(false).0,
@@ -2580,53 +2641,63 @@ fn test_state_with_server_config_and_inspector(
     )
 }
 
-fn test_backend(id: &str, base_url: String) -> ResolvedBackend {
-    ResolvedBackend {
-        id: id.to_owned(),
-        base_url,
-        api_key: None,
-        timeout: std::time::Duration::from_secs(5),
-        capabilities: btree_set(["responses", "streaming"]),
-        tool_schema_mode: ToolSchemaMode::Preserve,
-        responses_store: ResponsesStorePolicy::Preserve,
-        responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-        chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-        weight: 1,
-        models: vec![ModelRoute {
-            public: PUBLIC_MODEL.to_owned(),
-            backend: BACKEND_MODEL.to_owned(),
+fn test_backend(id: &str, base_url: String) -> TestEndpoint {
+    TestEndpoint {
+        backend: ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            supports: btree_set(["responses", "streaming"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+        },
+        route: ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["responses"]),
             context_length: ContextLengthPolicy::None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            endpoints: btree_set(["responses"]),
-        }],
+            backends: vec![RouteBackendBinding {
+                backend_id: id.to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            }],
+        },
     }
 }
 
-fn test_chat_backend(id: &str, base_url: String) -> ResolvedBackend {
-    ResolvedBackend {
-        id: id.to_owned(),
-        base_url,
-        api_key: None,
-        timeout: std::time::Duration::from_secs(5),
-        capabilities: btree_set(["chat", "streaming", "tools"]),
-        tool_schema_mode: ToolSchemaMode::Preserve,
-        responses_store: ResponsesStorePolicy::Preserve,
-        responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-        chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-        weight: 1,
-        models: vec![ModelRoute {
-            public: PUBLIC_MODEL.to_owned(),
-            backend: BACKEND_MODEL.to_owned(),
+fn test_chat_backend(id: &str, base_url: String) -> TestEndpoint {
+    TestEndpoint {
+        backend: ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            supports: btree_set(["chat", "streaming", "tools"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+        },
+        route: ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["chat", "responses_via_chat_completions", "tools"]),
             context_length: ContextLengthPolicy::None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            endpoints: btree_set(["chat", "responses_via_chat_completions", "tools"]),
-        }],
+            backends: vec![RouteBackendBinding {
+                backend_id: id.to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            }],
+        },
     }
 }
 

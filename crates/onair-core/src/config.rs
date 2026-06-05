@@ -1262,21 +1262,24 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-upstream"
-            backend = "private-upstream"
+            expose = ["responses"]
+            backends = ["private-upstream@backend-a"]
             context_length = "upstream"
 
-            [[backend.model]]
+            [[route]]
             public = "public-specific"
-            backend = "private-specific"
+            expose = ["responses"]
+            backends = ["private-specific@backend-a"]
             context_length = 8192
 
-            [[backend.model]]
+            [[route]]
             public = "public-none"
-            backend = "private-none"
+            expose = ["responses"]
+            backends = ["private-none@backend-a"]
             context_length = "none"
             "#,
         );
@@ -1313,16 +1316,17 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-upstream"
-            backend = "private-upstream"
+            expose = ["responses"]
+            backends = ["private-upstream@backend-a"]
             context_length = "upstream"
             "#,
         );
 
-        let route = &config.backends[0].models[0];
+        let route = &config.routes[0];
         match &route.context_length {
             ContextLengthPolicy::Upstream {
                 backend_id,
@@ -1350,11 +1354,12 @@ mod tests {
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
             context_length = 131072
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
         let error = match result {
@@ -1368,11 +1373,11 @@ mod tests {
     }
 
     #[test]
-    fn tool_schema_mode_can_be_set_per_backend_and_model() {
+    fn tool_schema_mode_can_be_set_per_backend_and_route() {
         let config = parse_config(
             r#"
             [access]
-            default_models = ["public-inherit", "public-override"]
+            default_models = ["public-default", "public-override"]
 
             [[client]]
             id = "dev"
@@ -1381,37 +1386,39 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["chat", "tools"]
+            supports = ["chat", "tools"]
             tool_schema_mode = "llamacpp_compat"
 
-            [[backend.model]]
-            public = "public-inherit"
-            backend = "private-inherit"
-            endpoints = ["chat", "tools"]
+            [[route]]
+            public = "public-default"
+            expose = ["chat", "tools"]
+            backends = ["private-default@backend-a"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-override"
-            backend = "private-override"
-            endpoints = ["chat", "tools"]
-            tool_schema_mode = "preserve"
+            expose = ["chat", "tools"]
+            backends = ["private-override@backend-a"]
+            tool_schema_mode = "llamacpp_compat"
             "#,
         );
 
         let backend = &config.backends[0];
         assert_eq!(backend.tool_schema_mode, ToolSchemaMode::LlamacppCompat);
+        let default_route = route_by_public(&config, "public-default");
+        let override_route = route_by_public(&config, "public-override");
+        assert_eq!(default_route.tool_schema_mode, ToolSchemaMode::Preserve);
         assert_eq!(
-            backend.models[0].tool_schema_mode,
+            override_route.tool_schema_mode,
             ToolSchemaMode::LlamacppCompat
         );
-        assert_eq!(backend.models[1].tool_schema_mode, ToolSchemaMode::Preserve);
     }
 
     #[test]
-    fn responses_store_policy_can_be_set_per_backend_and_model() {
+    fn responses_store_policy_can_be_set_per_backend_and_route() {
         let config = parse_config(
             r#"
             [access]
-            default_models = ["public-inherit", "public-override"]
+            default_models = ["public-default", "public-override"]
 
             [[client]]
             id = "dev"
@@ -1420,40 +1427,42 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
             responses_store = "force_false"
 
-            [[backend.model]]
-            public = "public-inherit"
-            backend = "private-inherit"
-            endpoints = ["responses"]
+            [[route]]
+            public = "public-default"
+            expose = ["responses"]
+            backends = ["private-default@backend-a"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-override"
-            backend = "private-override"
-            responses_store = "preserve"
-            endpoints = ["responses"]
+            expose = ["responses"]
+            backends = ["private-override@backend-a"]
+            responses_store = "force_false"
             "#,
         );
 
         let backend = &config.backends[0];
         assert_eq!(backend.responses_store, ResponsesStorePolicy::ForceFalse);
+        let default_route = route_by_public(&config, "public-default");
+        let override_route = route_by_public(&config, "public-override");
         assert_eq!(
-            backend.models[0].responses_store,
-            ResponsesStorePolicy::ForceFalse
+            default_route.responses_store,
+            ResponsesStorePolicy::Preserve
         );
         assert_eq!(
-            backend.models[1].responses_store,
-            ResponsesStorePolicy::Preserve
+            override_route.responses_store,
+            ResponsesStorePolicy::ForceFalse
         );
     }
 
     #[test]
-    fn responses_max_output_tokens_policy_can_be_set_per_backend_and_model() {
+    fn responses_max_output_tokens_policy_can_be_set_per_backend_and_route() {
         let config = parse_config(
             r#"
             [access]
-            default_models = ["public-inherit", "public-override"]
+            default_models = ["public-default", "public-override"]
 
             [[client]]
             id = "dev"
@@ -1462,19 +1471,19 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
             responses_max_output_tokens = "rename_to_max_tokens"
 
-            [[backend.model]]
-            public = "public-inherit"
-            backend = "private-inherit"
-            endpoints = ["responses"]
+            [[route]]
+            public = "public-default"
+            expose = ["responses"]
+            backends = ["private-default@backend-a"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-override"
-            backend = "private-override"
+            expose = ["responses"]
+            backends = ["private-override@backend-a"]
             responses_max_output_tokens = "drop"
-            endpoints = ["responses"]
             "#,
         );
 
@@ -1483,22 +1492,24 @@ mod tests {
             backend.responses_max_output_tokens,
             ResponsesMaxOutputTokensPolicy::RenameToMaxTokens
         );
+        let default_route = route_by_public(&config, "public-default");
+        let override_route = route_by_public(&config, "public-override");
         assert_eq!(
-            backend.models[0].responses_max_output_tokens,
-            ResponsesMaxOutputTokensPolicy::RenameToMaxTokens
+            default_route.responses_max_output_tokens,
+            ResponsesMaxOutputTokensPolicy::Preserve
         );
         assert_eq!(
-            backend.models[1].responses_max_output_tokens,
+            override_route.responses_max_output_tokens,
             ResponsesMaxOutputTokensPolicy::Drop
         );
     }
 
     #[test]
-    fn chat_stream_usage_policy_can_be_set_per_backend_and_model() {
+    fn chat_stream_usage_policy_can_be_set_per_backend_and_route() {
         let config = parse_config(
             r#"
             [access]
-            default_models = ["public-inherit", "public-override"]
+            default_models = ["public-default", "public-override"]
 
             [[client]]
             id = "dev"
@@ -1507,31 +1518,33 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["chat", "streaming"]
+            supports = ["chat", "streaming"]
             chat_stream_usage = "force_true"
 
-            [[backend.model]]
-            public = "public-inherit"
-            backend = "private-inherit"
-            endpoints = ["chat"]
+            [[route]]
+            public = "public-default"
+            expose = ["chat"]
+            backends = ["private-default@backend-a"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-override"
-            backend = "private-override"
-            chat_stream_usage = "preserve"
-            endpoints = ["chat"]
+            expose = ["chat"]
+            backends = ["private-override@backend-a"]
+            chat_stream_usage = "insert"
             "#,
         );
 
         let backend = &config.backends[0];
         assert_eq!(backend.chat_stream_usage, ChatStreamUsagePolicy::ForceTrue);
+        let default_route = route_by_public(&config, "public-default");
+        let override_route = route_by_public(&config, "public-override");
         assert_eq!(
-            backend.models[0].chat_stream_usage,
-            ChatStreamUsagePolicy::ForceTrue
+            default_route.chat_stream_usage,
+            ChatStreamUsagePolicy::Preserve
         );
         assert_eq!(
-            backend.models[1].chat_stream_usage,
-            ChatStreamUsagePolicy::Preserve
+            override_route.chat_stream_usage,
+            ChatStreamUsagePolicy::Insert
         );
     }
 
@@ -1567,11 +1580,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
 
@@ -1603,11 +1617,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
 
@@ -1635,11 +1650,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
 
@@ -1664,11 +1680,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
         assert_eq!(config.routing.strategy, RoutingStrategy::RoundRobin);
@@ -1688,11 +1705,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
         assert_eq!(config.routing.strategy, RoutingStrategy::WeightedRandom);
@@ -1712,11 +1730,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
         assert_eq!(
@@ -1747,11 +1766,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
         assert_eq!(
@@ -1781,11 +1801,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
         let error = result
@@ -1811,16 +1832,17 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["chat", "streaming"]
+            supports = ["chat", "streaming"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
-            endpoints = ["chat", "responses_via_chat_completion"]
+            expose = ["chat", "responses_via_chat_completion"]
+            backends = ["private-model@backend-a"]
             "#,
         );
-        let endpoint_value = config.backends[0].models[0]
-            .endpoints
+        let route = route_by_public(&config, "public-model");
+        let endpoint_value = route
+            .expose
             .iter()
             .find(|value| value.as_str() == "responses_via_chat_completion")
             .expect("typo marker should be preserved under warn policy");
@@ -1844,12 +1866,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["chat", "streaming"]
+            supports = ["chat", "streaming"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
-            endpoints = ["chat", "responses_via_chat_completion"]
+            expose = ["chat", "responses_via_chat_completion"]
+            backends = ["private-model@backend-a"]
             "#,
         );
         let file = result.expect("config should parse at the toml level");
@@ -1858,7 +1880,7 @@ mod tests {
             .expect("expected unknown endpoint marker to fail under error policy");
         let message = error.to_string();
         assert!(
-            message.contains("backend 'backend-a' model 'public-model'"),
+            message.contains("route 'public=public-model'"),
             "missing location in error: {message}"
         );
         assert!(
@@ -1888,11 +1910,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["respons"]
+            supports = ["respons"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
         let file = result.expect("config should parse at the toml level");
@@ -1924,7 +1947,7 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = [
+            supports = [
                 "all",
                 "streaming",
                 "chat",
@@ -1951,19 +1974,19 @@ mod tests {
                 "uploads",
             ]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
-            endpoints = [
+            expose = [
                 "chat",
                 "responses_via_chat_completions",
                 "chat_completions_via_responses",
                 "tools",
                 "embeddings",
             ]
+            backends = ["private-model@backend-a"]
             "#,
         );
-        let capabilities = &config.backends[0].capabilities;
+        let supports = &config.backends[0].supports;
         for known in [
             "all",
             "streaming",
@@ -1991,11 +2014,11 @@ mod tests {
             "uploads",
         ] {
             assert!(
-                capabilities.contains(known),
+                supports.contains(known),
                 "expected capability '{known}' to be accepted"
             );
         }
-        let endpoints = &config.backends[0].models[0].endpoints;
+        let expose = &route_by_public(&config, "public-model").expose;
         for known in [
             "chat",
             "responses_via_chat_completions",
@@ -2004,7 +2027,7 @@ mod tests {
             "embeddings",
         ] {
             assert!(
-                endpoints.contains(known),
+                expose.contains(known),
                 "expected endpoint '{known}' to be accepted"
             );
         }
@@ -2028,12 +2051,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["respons"]
+            supports = ["respons"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
-            endpoints = ["responses_via_chat_completion"]
+            expose = ["responses_via_chat_completion"]
+            backends = ["private-model@backend-a"]
             "#,
         )
         .expect("config should parse at the toml level");
@@ -2060,11 +2083,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
         assert_eq!(config.backends[0].weight, 1);
@@ -2084,12 +2108,13 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
             weight = 5
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
         assert_eq!(config.backends[0].weight, 5);
@@ -2109,12 +2134,13 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
             weight = 0
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         )
         .unwrap();
@@ -2139,11 +2165,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         )
         .unwrap();
@@ -2171,11 +2198,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
 
@@ -2208,11 +2236,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
 
@@ -2240,11 +2269,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         )
         .unwrap();
@@ -2271,11 +2301,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         )
         .unwrap();
@@ -2302,11 +2333,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         )
         .unwrap();
@@ -2332,11 +2364,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         );
 
@@ -2363,11 +2396,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#,
         )
         .unwrap();
@@ -2473,19 +2507,19 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["chat", "streaming"]
+            supports = ["chat", "streaming"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
-            endpoints = ["chat"]
+            expose = ["chat"]
+            backends = ["private-model@backend-a"]
             "#;
         std::fs::write(&path, initial).unwrap();
         let store = ConfigStore::new(Config::load(&path).unwrap());
 
         assert!(
-            !store.snapshot().backends[0].models[0]
-                .endpoints
+            !store.snapshot().routes[0]
+                .expose
                 .iter()
                 .any(|value| value == "responses_via_chat_completion")
         );
@@ -2504,20 +2538,20 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["chat", "streaming"]
+            supports = ["chat", "streaming"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
-            endpoints = ["chat", "responses_via_chat_completion"]
+            expose = ["chat", "responses_via_chat_completion"]
+            backends = ["private-model@backend-a"]
             "#;
         std::fs::write(&path, updated).unwrap();
         reload_config(&path, &store);
 
         let snapshot = store.snapshot();
         assert!(
-            snapshot.backends[0].models[0]
-                .endpoints
+            snapshot.routes[0]
+                .expose
                 .iter()
                 .any(|value| value == "responses_via_chat_completion"),
             "warn policy should preserve the unknown endpoint marker across reload",
@@ -2604,11 +2638,12 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "{base_url}"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "public-model"
-            backend = "private-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
             "#
         ))
         .unwrap()
@@ -2627,12 +2662,21 @@ mod tests {
             [[backend]]
             id = "backend-a"
             base_url = "http://127.0.0.1:8000"
-            capabilities = ["responses"]
+            supports = ["responses"]
 
-            [[backend.model]]
+            [[route]]
             public = "{model}"
-            backend = "private-{model}"
+            expose = ["responses"]
+            backends = ["private-{model}@backend-a"]
             "#
         )
+    }
+
+    fn route_by_public<'a>(config: &'a Config, public: &str) -> &'a ResolvedRoute {
+        config
+            .routes
+            .iter()
+            .find(|route| matches!(&route.key, RouteKey::Public(name) if name == public))
+            .unwrap_or_else(|| panic!("no route with public={public}"))
     }
 }

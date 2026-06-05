@@ -5,8 +5,6 @@ use std::sync::{Arc, Mutex};
 use rand::Rng;
 
 use onair_core::compat::{CHAT_COMPLETIONS_VIA_RESPONSES, RESPONSES_VIA_CHAT_COMPLETIONS};
-#[cfg(test)]
-use onair_core::config::ContextLengthPolicy;
 use onair_core::config::{
     ChatStreamUsagePolicy, ResolvedBackend, ResolvedRoute, ResponsesMaxOutputTokensPolicy,
     ResponsesStorePolicy, RoutingStrategy, ToolSchemaMode,
@@ -554,7 +552,8 @@ mod tests {
     use std::time::Duration;
 
     use onair_core::config::{
-        ModelRoute, ResolvedBackend, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy,
+        ChatStreamUsagePolicy, ContextLengthPolicy, ResolvedBackend, ResolvedRoute,
+        ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RouteBackendBinding, RouteKey,
         ToolSchemaMode,
     };
 
@@ -567,6 +566,7 @@ mod tests {
             backend("backend-b"),
             backend("backend-c"),
         ];
+        let routes = default_routes(&backends);
         let sticky_key = sticky_routing_key(
             "client-a",
             "/v1/responses",
@@ -576,6 +576,7 @@ mod tests {
 
         let priority = select_backend_candidates(
             &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/responses",
             Some("public-model"),
@@ -587,6 +588,7 @@ mod tests {
         .unwrap();
         let sticky = select_backend_candidates(
             &backends,
+            &routes,
             RoutingStrategy::Sticky,
             "/v1/responses",
             Some("public-model"),
@@ -614,31 +616,16 @@ mod tests {
 
     #[test]
     fn responses_requires_explicit_chat_compat_marker() {
-        let backend = ResolvedBackend {
-            id: "chat-backend".to_owned(),
-            base_url: "http://chat-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["chat"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "backend-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["chat"]),
-            }],
-        };
+        let backends = vec![backend_with_supports("chat-backend", &["chat"])];
+        let routes = vec![route_for_public(
+            "public-model",
+            &["chat"],
+            &[("backend-private", "chat-backend")],
+        )];
 
         let error = match select_backend_candidates(
-            &[backend],
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/responses",
             Some("public-model"),
@@ -660,31 +647,16 @@ mod tests {
 
     #[test]
     fn responses_404_for_known_model_uses_endpoint_unavailable_code() {
-        let backend = ResolvedBackend {
-            id: "chat-backend".to_owned(),
-            base_url: "http://chat-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["chat"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "backend-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["chat"]),
-            }],
-        };
+        let backends = vec![backend_with_supports("chat-backend", &["chat"])];
+        let routes = vec![route_for_public(
+            "public-model",
+            &["chat"],
+            &[("backend-private", "chat-backend")],
+        )];
 
         let error = match select_backend_candidates(
-            &[backend],
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/responses",
             Some("public-model"),
@@ -705,31 +677,16 @@ mod tests {
 
     #[test]
     fn responses_404_for_unknown_model_uses_model_not_found_code() {
-        let backend = ResolvedBackend {
-            id: "chat-backend".to_owned(),
-            base_url: "http://chat-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["chat"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "configured-model".to_owned(),
-                backend: "backend-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["chat"]),
-            }],
-        };
+        let backends = vec![backend_with_supports("chat-backend", &["chat"])];
+        let routes = vec![route_for_public(
+            "configured-model",
+            &["chat"],
+            &[("backend-private", "chat-backend")],
+        )];
 
         let error = match select_backend_candidates(
-            &[backend],
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/responses",
             Some("unknown-model"),
@@ -750,31 +707,16 @@ mod tests {
 
     #[test]
     fn responses_can_route_to_explicit_chat_compat_backend() {
-        let backend = ResolvedBackend {
-            id: "chat-backend".to_owned(),
-            base_url: "http://chat-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["chat"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "backend-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set([RESPONSES_VIA_CHAT_COMPLETIONS]),
-            }],
-        };
+        let backends = vec![backend_with_supports("chat-backend", &["chat"])];
+        let routes = vec![route_for_public(
+            "public-model",
+            &[RESPONSES_VIA_CHAT_COMPLETIONS],
+            &[("backend-private", "chat-backend")],
+        )];
 
-        let routes = select_backend_candidates(
-            &[backend],
+        let selected = select_backend_candidates(
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/responses",
             Some("public-model"),
@@ -785,41 +727,29 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].backend_id, "chat-backend");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].backend_id, "chat-backend");
         assert_eq!(
-            routes[0].request_mode,
+            selected[0].request_mode,
             RequestMode::ResponsesViaChatCompletions
         );
     }
 
     #[test]
     fn native_responses_capability_prevents_chat_compat_mode() {
-        let backend = ResolvedBackend {
-            id: "native-backend".to_owned(),
-            base_url: "http://native-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["responses", "chat"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "backend-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["responses", "chat", RESPONSES_VIA_CHAT_COMPLETIONS]),
-            }],
-        };
+        let backends = vec![backend_with_supports(
+            "native-backend",
+            &["responses", "chat"],
+        )];
+        let routes = vec![route_for_public(
+            "public-model",
+            &["responses", "chat", RESPONSES_VIA_CHAT_COMPLETIONS],
+            &[("backend-private", "native-backend")],
+        )];
 
-        let routes = select_backend_candidates(
-            &[backend],
+        let selected = select_backend_candidates(
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/responses",
             Some("public-model"),
@@ -830,38 +760,26 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].backend_id, "native-backend");
-        assert_eq!(routes[0].request_mode, RequestMode::Native);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].backend_id, "native-backend");
+        assert_eq!(selected[0].request_mode, RequestMode::Native);
     }
 
     #[test]
     fn route_endpoint_can_force_chat_compat_without_responses() {
-        let backend = ResolvedBackend {
-            id: "mixed-backend".to_owned(),
-            base_url: "http://mixed-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["responses", "chat"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "backend-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set([RESPONSES_VIA_CHAT_COMPLETIONS]),
-            }],
-        };
+        let backends = vec![backend_with_supports(
+            "mixed-backend",
+            &["responses", "chat"],
+        )];
+        let routes = vec![route_for_public(
+            "public-model",
+            &[RESPONSES_VIA_CHAT_COMPLETIONS],
+            &[("backend-private", "mixed-backend")],
+        )];
 
-        let routes = select_backend_candidates(
-            &[backend],
+        let selected = select_backend_candidates(
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/responses",
             Some("public-model"),
@@ -872,41 +790,26 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].backend_id, "mixed-backend");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].backend_id, "mixed-backend");
         assert_eq!(
-            routes[0].request_mode,
+            selected[0].request_mode,
             RequestMode::ResponsesViaChatCompletions
         );
     }
 
     #[test]
     fn chat_completions_can_route_to_explicit_responses_compat_backend() {
-        let backend = ResolvedBackend {
-            id: "responses-backend".to_owned(),
-            base_url: "http://responses-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["responses"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "backend-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set([CHAT_COMPLETIONS_VIA_RESPONSES]),
-            }],
-        };
+        let backends = vec![backend_with_supports("responses-backend", &["responses"])];
+        let routes = vec![route_for_public(
+            "public-model",
+            &[CHAT_COMPLETIONS_VIA_RESPONSES],
+            &[("backend-private", "responses-backend")],
+        )];
 
-        let routes = select_backend_candidates(
-            &[backend],
+        let selected = select_backend_candidates(
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/chat/completions",
             Some("public-model"),
@@ -917,41 +820,29 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].backend_id, "responses-backend");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].backend_id, "responses-backend");
         assert_eq!(
-            routes[0].request_mode,
+            selected[0].request_mode,
             RequestMode::ChatCompletionsViaResponses
         );
     }
 
     #[test]
     fn native_chat_capability_prevents_responses_compat_mode() {
-        let backend = ResolvedBackend {
-            id: "native-chat-backend".to_owned(),
-            base_url: "http://native-chat-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["responses", "chat"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "backend-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["chat", CHAT_COMPLETIONS_VIA_RESPONSES]),
-            }],
-        };
+        let backends = vec![backend_with_supports(
+            "native-chat-backend",
+            &["responses", "chat"],
+        )];
+        let routes = vec![route_for_public(
+            "public-model",
+            &["chat", CHAT_COMPLETIONS_VIA_RESPONSES],
+            &[("backend-private", "native-chat-backend")],
+        )];
 
-        let routes = select_backend_candidates(
-            &[backend],
+        let selected = select_backend_candidates(
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/chat/completions",
             Some("public-model"),
@@ -962,38 +853,26 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].backend_id, "native-chat-backend");
-        assert_eq!(routes[0].request_mode, RequestMode::Native);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].backend_id, "native-chat-backend");
+        assert_eq!(selected[0].request_mode, RequestMode::Native);
     }
 
     #[test]
     fn route_endpoint_can_force_responses_compat_without_chat() {
-        let backend = ResolvedBackend {
-            id: "mixed-backend".to_owned(),
-            base_url: "http://mixed-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["responses", "chat"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "backend-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set([CHAT_COMPLETIONS_VIA_RESPONSES]),
-            }],
-        };
+        let backends = vec![backend_with_supports(
+            "mixed-backend",
+            &["responses", "chat"],
+        )];
+        let routes = vec![route_for_public(
+            "public-model",
+            &[CHAT_COMPLETIONS_VIA_RESPONSES],
+            &[("backend-private", "mixed-backend")],
+        )];
 
-        let routes = select_backend_candidates(
-            &[backend],
+        let selected = select_backend_candidates(
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/chat/completions",
             Some("public-model"),
@@ -1004,63 +883,32 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].backend_id, "mixed-backend");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].backend_id, "mixed-backend");
         assert_eq!(
-            routes[0].request_mode,
+            selected[0].request_mode,
             RequestMode::ChatCompletionsViaResponses
         );
     }
 
     #[test]
     fn tool_requests_require_backend_and_route_capability() {
-        let unsupported = ResolvedBackend {
-            id: "unsupported-backend".to_owned(),
-            base_url: "http://unsupported-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["responses", "chat"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "unsupported-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["responses", "chat"]),
-            }],
-        };
-        let supported = ResolvedBackend {
-            id: "supported-backend".to_owned(),
-            base_url: "http://supported-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["responses", "chat", "tools"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "supported-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["responses", "chat", "tools"]),
-            }],
-        };
+        let backends = vec![
+            backend_with_supports("unsupported-backend", &["responses", "chat"]),
+            backend_with_supports("supported-backend", &["responses", "chat", "tools"]),
+        ];
+        let routes = vec![route_for_public(
+            "public-model",
+            &["responses", "chat", "tools"],
+            &[
+                ("unsupported-private", "unsupported-backend"),
+                ("supported-private", "supported-backend"),
+            ],
+        )];
 
-        let routes = select_backend_candidates(
-            &[unsupported, supported],
+        let selected = select_backend_candidates(
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/responses",
             Some("public-model"),
@@ -1071,37 +919,25 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].backend_id, "supported-backend");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].backend_id, "supported-backend");
     }
 
     #[test]
     fn tool_requests_fail_when_only_endpoint_matches() {
-        let backend = ResolvedBackend {
-            id: "plain-backend".to_owned(),
-            base_url: "http://plain-backend.example.invalid".to_owned(),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: btree_set(["responses", "chat"]),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            weight: 1,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: "plain-private".to_owned(),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["responses", "chat"]),
-            }],
-        };
+        let backends = vec![backend_with_supports(
+            "plain-backend",
+            &["responses", "chat"],
+        )];
+        let routes = vec![route_for_public(
+            "public-model",
+            &["responses", "chat"],
+            &[("plain-private", "plain-backend")],
+        )];
 
         let error = match select_backend_candidates(
-            &[backend],
+            &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/responses",
             Some("public-model"),
@@ -1154,9 +990,11 @@ mod tests {
             backend("backend-b"),
             backend("backend-c"),
         ];
+        let routes = default_routes(&backends);
         let counters = RoundRobinCounters::new();
-        let routes = select_backend_candidates(
+        let selected = select_backend_candidates(
             &backends,
+            &routes,
             RoutingStrategy::RoundRobin,
             "/v1/responses",
             Some("public-model"),
@@ -1166,24 +1004,27 @@ mod tests {
             &counters,
         )
         .unwrap();
-        assert_eq!(routes.len(), 3);
-        let selected: BTreeSet<&str> = routes
+        assert_eq!(selected.len(), 3);
+        let selected_ids: BTreeSet<&str> = selected
             .iter()
             .map(|route| route.backend_id.as_str())
             .collect();
         let original: BTreeSet<&str> = backends.iter().map(|b| b.id.as_str()).collect();
-        assert_eq!(selected, original);
+        assert_eq!(selected_ids, original);
     }
 
     #[test]
     fn round_robin_uses_model_key() {
         let counters = RoundRobinCounters::new();
-        let routes_a = select_backend_candidates(
-            &[
-                backend_with_public_model("a", "model-a"),
-                backend_with_public_model("b", "model-a"),
-                backend_with_public_model("c", "model-a"),
-            ],
+        let backends_a = vec![backend("a"), backend("b"), backend("c")];
+        let routes_for_a = vec![route_for_public(
+            "model-a",
+            &["responses"],
+            &[("a-private", "a"), ("b-private", "b"), ("c-private", "c")],
+        )];
+        let selected_a = select_backend_candidates(
+            &backends_a,
+            &routes_for_a,
             RoutingStrategy::RoundRobin,
             "/v1/responses",
             Some("model-a"),
@@ -1193,11 +1034,15 @@ mod tests {
             &counters,
         )
         .unwrap();
-        let routes_b = select_backend_candidates(
-            &[
-                backend_with_public_model("a", "model-b"),
-                backend_with_public_model("b", "model-b"),
-            ],
+        let backends_b = vec![backend("a"), backend("b")];
+        let routes_for_b = vec![route_for_public(
+            "model-b",
+            &["responses"],
+            &[("a-private", "a"), ("b-private", "b")],
+        )];
+        let selected_b = select_backend_candidates(
+            &backends_b,
+            &routes_for_b,
             RoutingStrategy::RoundRobin,
             "/v1/responses",
             Some("model-b"),
@@ -1207,13 +1052,11 @@ mod tests {
             &counters,
         )
         .unwrap();
-        assert_eq!(routes_a[0].backend_id, "a");
-        assert_eq!(routes_b[0].backend_id, "a");
-        let routes_b_second = select_backend_candidates(
-            &[
-                backend_with_public_model("a", "model-b"),
-                backend_with_public_model("b", "model-b"),
-            ],
+        assert_eq!(selected_a[0].backend_id, "a");
+        assert_eq!(selected_b[0].backend_id, "a");
+        let selected_b_second = select_backend_candidates(
+            &backends_b,
+            &routes_for_b,
             RoutingStrategy::RoundRobin,
             "/v1/responses",
             Some("model-b"),
@@ -1223,7 +1066,7 @@ mod tests {
             &counters,
         )
         .unwrap();
-        assert_eq!(routes_b_second[0].backend_id, "b");
+        assert_eq!(selected_b_second[0].backend_id, "b");
     }
 
     #[test]
@@ -1231,6 +1074,7 @@ mod tests {
         let backends = vec![model_less_backend("a", &["embeddings", "streaming"])];
         let error = match select_backend_candidates(
             &backends,
+            &[],
             RoutingStrategy::Priority,
             "/v1/audio/transcriptions",
             None,
@@ -1256,8 +1100,9 @@ mod tests {
             model_less_backend("a", &["embeddings", "streaming"]),
             model_less_backend("b", &["embeddings", "streaming"]),
         ];
-        let routes_a = select_backend_candidates(
+        let selected_a = select_backend_candidates(
             &backends,
+            &[],
             RoutingStrategy::RoundRobin,
             "/v1/embeddings",
             None,
@@ -1267,8 +1112,9 @@ mod tests {
             &counters,
         )
         .unwrap();
-        let routes_b = select_backend_candidates(
+        let selected_b = select_backend_candidates(
             &backends,
+            &[],
             RoutingStrategy::RoundRobin,
             "/v1/embeddings",
             None,
@@ -1278,8 +1124,8 @@ mod tests {
             &counters,
         )
         .unwrap();
-        assert_eq!(routes_a[0].backend_id, "a");
-        assert_eq!(routes_b[0].backend_id, "b");
+        assert_eq!(selected_a[0].backend_id, "a");
+        assert_eq!(selected_b[0].backend_id, "b");
     }
 
     #[test]
@@ -1348,9 +1194,11 @@ mod tests {
             backend_with_weight("b", 0),
             backend_with_weight("c", 1),
         ];
+        let routes = default_routes(&backends);
         for _ in 0..200 {
-            let routes = select_backend_candidates(
+            let selected = select_backend_candidates(
                 &backends,
+                &routes,
                 RoutingStrategy::WeightedRandom,
                 "/v1/responses",
                 Some("public-model"),
@@ -1360,16 +1208,18 @@ mod tests {
                 &RoundRobinCounters::new(),
             )
             .unwrap();
-            assert!(routes[0].backend_id == "a" || routes[0].backend_id == "c");
+            assert!(selected[0].backend_id == "a" || selected[0].backend_id == "c");
         }
     }
 
     #[test]
     fn weighted_random_single_candidate_noop() {
         let backends = vec![backend_with_weight("only", 5)];
+        let routes = default_routes(&backends);
         for _ in 0..10 {
-            let routes = select_backend_candidates(
+            let selected = select_backend_candidates(
                 &backends,
+                &routes,
                 RoutingStrategy::WeightedRandom,
                 "/v1/responses",
                 Some("public-model"),
@@ -1379,7 +1229,7 @@ mod tests {
                 &RoundRobinCounters::new(),
             )
             .unwrap();
-            assert_eq!(routes[0].backend_id, "only");
+            assert_eq!(selected[0].backend_id, "only");
         }
     }
 
@@ -1390,8 +1240,10 @@ mod tests {
             backend_with_weight("backend-b", 1),
             backend_with_weight("backend-c", 1),
         ];
-        let routes = select_backend_candidates(
+        let routes = default_routes(&backends);
+        let selected = select_backend_candidates(
             &backends,
+            &routes,
             RoutingStrategy::WeightedRandom,
             "/v1/responses",
             Some("public-model"),
@@ -1401,20 +1253,22 @@ mod tests {
             &RoundRobinCounters::new(),
         )
         .unwrap();
-        assert_eq!(routes.len(), 3);
-        let selected: BTreeSet<&str> = routes
+        assert_eq!(selected.len(), 3);
+        let selected_ids: BTreeSet<&str> = selected
             .iter()
             .map(|route| route.backend_id.as_str())
             .collect();
         let original: BTreeSet<&str> = backends.iter().map(|b| b.id.as_str()).collect();
-        assert_eq!(selected, original);
+        assert_eq!(selected_ids, original);
     }
 
     #[test]
     fn strategy_round_robin_serializes_via_selected_route_weight() {
         let backends = vec![backend_with_weight("a", 7)];
-        let routes = select_backend_candidates(
+        let routes = default_routes(&backends);
+        let selected = select_backend_candidates(
             &backends,
+            &routes,
             RoutingStrategy::Priority,
             "/v1/responses",
             Some("public-model"),
@@ -1424,36 +1278,65 @@ mod tests {
             &RoundRobinCounters::new(),
         )
         .unwrap();
-        assert_eq!(routes[0].weight, 7);
+        assert_eq!(selected[0].weight, 7);
     }
 
     fn backend(id: &str) -> ResolvedBackend {
+        backend_with_supports(id, &["responses", "streaming"])
+    }
+
+    fn backend_with_supports(id: &str, supports: &[&str]) -> ResolvedBackend {
         ResolvedBackend {
             id: id.to_owned(),
             base_url: format!("http://{id}.example.invalid"),
             api_key: None,
             timeout: Duration::from_secs(5),
-            capabilities: btree_set(["responses", "streaming"]),
+            supports: btree_set_from(supports),
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            models: vec![ModelRoute {
-                public: "public-model".to_owned(),
-                backend: format!("{id}-private"),
-                context_length: ContextLengthPolicy::None,
-                tool_schema_mode: ToolSchemaMode::Preserve,
-                responses_store: ResponsesStorePolicy::Preserve,
-                responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                endpoints: btree_set(["responses"]),
-            }],
             weight: 1,
         }
     }
 
-    fn btree_set<const N: usize>(values: [&str; N]) -> BTreeSet<String> {
-        values.into_iter().map(str::to_owned).collect()
+    fn btree_set_from(values: &[&str]) -> BTreeSet<String> {
+        values.iter().copied().map(str::to_owned).collect()
+    }
+
+    fn default_routes(backends: &[ResolvedBackend]) -> Vec<ResolvedRoute> {
+        let bindings: Vec<(String, String)> = backends
+            .iter()
+            .map(|b| (format!("{}-private", b.id), b.id.clone()))
+            .collect();
+        let bindings_ref: Vec<(&str, &str)> = bindings
+            .iter()
+            .map(|(model, backend)| (model.as_str(), backend.as_str()))
+            .collect();
+        vec![route_for_public(
+            "public-model",
+            &["responses"],
+            &bindings_ref,
+        )]
+    }
+
+    fn route_for_public(public: &str, expose: &[&str], bindings: &[(&str, &str)]) -> ResolvedRoute {
+        ResolvedRoute {
+            key: RouteKey::Public(public.to_owned()),
+            expose: btree_set_from(expose),
+            context_length: ContextLengthPolicy::None,
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: bindings
+                .iter()
+                .map(|(model, backend_id)| RouteBackendBinding {
+                    backend_id: (*backend_id).to_owned(),
+                    backend_model: (*model).to_owned(),
+                })
+                .collect(),
+        }
     }
 
     #[test]
@@ -1536,25 +1419,7 @@ mod tests {
         }
     }
 
-    fn backend_with_public_model(id: &str, public_model: &str) -> ResolvedBackend {
-        let mut backend = backend(id);
-        backend.models[0].public = public_model.to_owned();
-        backend
-    }
-
     fn model_less_backend(id: &str, capabilities: &[&str]) -> ResolvedBackend {
-        ResolvedBackend {
-            id: id.to_owned(),
-            base_url: format!("http://{id}.example.invalid"),
-            api_key: None,
-            timeout: Duration::from_secs(5),
-            capabilities: capabilities.iter().map(|s| s.to_string()).collect(),
-            tool_schema_mode: ToolSchemaMode::Preserve,
-            responses_store: ResponsesStorePolicy::Preserve,
-            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            models: Vec::new(),
-            weight: 1,
-        }
+        backend_with_supports(id, capabilities)
     }
 }

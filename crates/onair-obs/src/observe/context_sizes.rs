@@ -10,8 +10,8 @@ use tracing::{debug, warn};
 #[cfg(test)]
 use onair_core::config::{
     ChatStreamUsagePolicy, DebugCaptureConfig, HealthConfig, InspectorConfig, ResolvedBackend,
-    ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RoutingConfig, ServerConfig,
-    TelemetryConfig, ToolSchemaMode,
+    ResolvedRoute, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RouteBackendBinding,
+    RoutingConfig, ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
 
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
@@ -261,41 +261,47 @@ mod tests {
                 base_url: "http://a".to_owned(),
                 api_key: None,
                 timeout: Duration::from_secs(5),
-                capabilities: BTreeSet::new(),
+                supports: BTreeSet::new(),
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
                 chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 weight: 1,
-                models: vec![
-                    ModelRoute {
-                        public: "shared".to_owned(),
-                        backend: "shared-a".to_owned(),
-                        context_length: ContextLengthPolicy::Upstream {
-                            backend_id: "backend-a".to_owned(),
-                            backend_model: "shared-a".to_owned(),
-                        },
-                        tool_schema_mode: ToolSchemaMode::Preserve,
-                        responses_store: ResponsesStorePolicy::Preserve,
-                        responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                        chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                        endpoints: BTreeSet::new(),
-                    },
-                    ModelRoute {
-                        public: "shared".to_owned(),
-                        backend: "shared-b".to_owned(),
-                        context_length: ContextLengthPolicy::Upstream {
-                            backend_id: "backend-b".to_owned(),
-                            backend_model: "shared-b".to_owned(),
-                        },
-                        tool_schema_mode: ToolSchemaMode::Preserve,
-                        responses_store: ResponsesStorePolicy::Preserve,
-                        responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
-                        chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-                        endpoints: BTreeSet::new(),
-                    },
-                ],
             }],
+            routes: vec![
+                ResolvedRoute {
+                    key: RouteKey::Public("shared".to_owned()),
+                    expose: BTreeSet::new(),
+                    context_length: ContextLengthPolicy::Upstream {
+                        backend_id: "backend-a".to_owned(),
+                        backend_model: "shared-a".to_owned(),
+                    },
+                    tool_schema_mode: ToolSchemaMode::Preserve,
+                    responses_store: ResponsesStorePolicy::Preserve,
+                    responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                    chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                    backends: vec![RouteBackendBinding {
+                        backend_id: "backend-a".to_owned(),
+                        backend_model: "shared-a".to_owned(),
+                    }],
+                },
+                ResolvedRoute {
+                    key: RouteKey::Public("shared".to_owned()),
+                    expose: BTreeSet::new(),
+                    context_length: ContextLengthPolicy::Upstream {
+                        backend_id: "backend-b".to_owned(),
+                        backend_model: "shared-b".to_owned(),
+                    },
+                    tool_schema_mode: ToolSchemaMode::Preserve,
+                    responses_store: ResponsesStorePolicy::Preserve,
+                    responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+                    chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+                    backends: vec![RouteBackendBinding {
+                        backend_id: "backend-b".to_owned(),
+                        backend_model: "shared-b".to_owned(),
+                    }],
+                },
+            ],
         };
         let targets = collect_upstream_targets(&config);
         assert_eq!(targets.len(), 1);
