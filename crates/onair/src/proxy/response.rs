@@ -8,7 +8,6 @@ use axum::http::{Response, StatusCode};
 use futures_util::TryStreamExt;
 use tracing::{debug, warn};
 
-use crate::metrics::MetricLabels;
 use crate::observe::debug_capture::{CaptureOutcome, RequestCapture};
 use crate::observe::{
     BackendHealthStore, ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
@@ -18,6 +17,7 @@ use crate::observe::{
 use onair_core::config::DebugCaptureConfig;
 use onair_core::error::ApiError;
 use onair_core::openai::{self, SseNormalizer, UsageDiagnostics, UsageTotals};
+use onair_obs::metrics::MetricLabels;
 
 use super::attempt::InspectorAttemptBuilder;
 use super::inspector::{InspectorRecord, inspector_tokens, record_inspector_request};
@@ -475,7 +475,7 @@ impl EitherNormalizer {
 }
 
 struct StreamMetrics {
-    metrics: crate::metrics::Metrics,
+    metrics: onair_obs::metrics::Metrics,
     health_store: BackendHealthStore,
     inspector_store: InspectorStore,
     inspector_enabled: bool,
@@ -506,7 +506,7 @@ struct StreamMetrics {
 }
 
 struct StreamMetricsInit {
-    metrics: crate::metrics::Metrics,
+    metrics: onair_obs::metrics::Metrics,
     health_store: BackendHealthStore,
     inspector_store: InspectorStore,
     inspector_base: InspectorRequestBase,

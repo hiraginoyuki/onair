@@ -1,5 +1,4 @@
 mod app;
-mod metrics;
 mod observe;
 mod operator;
 mod proxy;
@@ -20,7 +19,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::app::AppState;
-use crate::metrics::{Metrics, TelemetryGuard};
+use onair_obs::metrics::{Metrics, TelemetryGuard};
 
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 

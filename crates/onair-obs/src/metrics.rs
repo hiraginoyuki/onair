@@ -20,6 +20,12 @@ pub struct Metrics {
     stream_duration: Histogram<f64>,
 }
 
+impl Default for Metrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Metrics {
     pub fn new() -> Self {
         let meter = global::meter("onair");

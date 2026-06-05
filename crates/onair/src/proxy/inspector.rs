@@ -3,13 +3,13 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 
 use crate::app::AppState;
-use crate::metrics::MetricLabels;
 use crate::observe::{
     ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
     InspectorRequestRecord, InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts,
     RequestTimeline,
 };
 use onair_core::openai::UsageTotals;
+use onair_obs::metrics::MetricLabels;
 
 #[allow(unused_imports)]
 use super::attempt::InspectorAttemptBuilder;

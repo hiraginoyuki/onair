@@ -11,9 +11,9 @@ use bytes::Bytes;
 use serde::Serialize;
 use tracing::warn;
 
-use crate::metrics::MetricLabels;
 use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
 use onair_core::openai::UsageDiagnostics;
+use onair_obs::metrics::MetricLabels;
 
 const INBOUND_BODY_FILE: &str = "inbound.body";
 const UPSTREAM_BODY_FILE: &str = "upstream.body";
@@ -388,7 +388,7 @@ mod tests {
     use axum::http::Method;
 
     use super::*;
-    use crate::metrics::MetricLabels;
+    use onair_obs::metrics::MetricLabels;
 
     #[cfg(unix)]
     #[test]

@@ -930,6 +930,7 @@ dependencies = [
  "http-body-util",
  "notify",
  "onair-core",
+ "onair-obs",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -964,6 +965,20 @@ dependencies = [
  "toml",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "onair-obs"
+version = "0.1.0"
+dependencies = [
+ "onair-core",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
