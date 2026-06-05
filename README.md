@@ -59,6 +59,56 @@ current behavior and points to detailed operator/contributor references under
   default-off SQLite persistence restores the latest retained records
   after a process restart.
 
+## Installation
+
+Pick the path that matches your environment. Prebuilt binaries are produced
+for Linux (x86_64 and aarch64, both glibc and musl) and macOS (x86_64 and
+aarch64). A `THIRD_PARTY_LICENSES.md` is published alongside each release.
+
+### Prebuilt binary
+
+Download the binary for your platform from the
+[GitHub Releases](https://github.com/hiraginoyuki/onair/releases) page. The
+file is a single raw binary (no archive wrapper). On Linux musl and macOS:
+
+```sh
+# Detect the right asset for the current host
+target="$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/;s/arm64/aarch64/')-unknown"
+# On Linux, also choose gnu vs musl; on macOS, append -apple-darwin
+# (See the Releases page for the full list of asset names.)
+chmod +x onair-<target>
+sudo install -m 0755 onair-<target> /usr/local/bin/onair
+onair --version
+```
+
+### Nix
+
+```sh
+# Run the latest from main (the "unstable" rolling release)
+nix run github:hiraginoyuki/onair
+
+# Pin to a specific stable release
+nix run github:hiraginoyuki/onair/v0.1.0
+
+# Install into a profile
+nix profile install github:hiraginoyuki/onair
+```
+
+`nix run` downloads a prebuilt binary from GitHub Releases; nothing in the
+Rust toolchain or the 240 transitive crates enters your nix store. The
+flake is binary-only by design. SHA-256 hashes of the release assets are
+pinned in `nix/metadata.json` on a dedicated `nix-metadata` branch; the
+first release will populate that file.
+
+### From source
+
+```sh
+git clone https://github.com/hiraginoyuki/onair
+cd onair
+cargo install --path crates/onair --locked
+onair --version
+```
+
 ## Quick Start
 
 Start from `onair.example.toml`:
