@@ -991,7 +991,10 @@ dependencies = [
 name = "onair-proxy"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "axum",
+ "bytes",
+ "futures-util",
  "onair-core",
  "onair-obs",
  "rand 0.8.6",
@@ -1000,6 +1003,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]

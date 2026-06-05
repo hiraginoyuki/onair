@@ -3,9 +3,9 @@ use std::net::SocketAddr;
 use axum::http::StatusCode;
 use tracing::{debug, warn};
 
+use crate::routing::SelectedRoute;
 use onair_obs::observe::debug_capture::RequestCapture;
 use onair_obs::observe::{ClientInfo, RequestTimeline, TimelineSnapshot};
-use onair_proxy::routing::SelectedRoute;
 
 use super::ProxyContext;
 use super::upstream::backend_target;

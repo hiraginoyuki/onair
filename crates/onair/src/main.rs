@@ -1,6 +1,4 @@
 mod app;
-mod proxy;
-mod proxy_state;
 
 use std::future::IntoFuture;
 use std::net::SocketAddr;
