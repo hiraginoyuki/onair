@@ -46,6 +46,8 @@ pub struct ConfigFile {
     pub clients: Vec<ClientConfig>,
     #[serde(default, rename = "backend")]
     pub backends: Vec<BackendConfig>,
+    #[serde(default, rename = "route")]
+    pub routes: Vec<RouteConfig>,
 }
 
 #[derive(Clone)]
@@ -58,6 +60,7 @@ pub struct Config {
     pub routing: RoutingConfig,
     pub clients: Vec<ResolvedClient>,
     pub backends: Vec<ResolvedBackend>,
+    pub routes: Vec<ResolvedRoute>,
 }
 
 #[derive(Clone)]
@@ -393,10 +396,7 @@ pub struct BackendConfig {
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub chat_stream_usage: ChatStreamUsagePolicy,
-    #[serde(alias = "capability")]
-    pub capabilities: BTreeSet<String>,
-    #[serde(rename = "model")]
-    pub models: Vec<ModelRouteConfig>,
+    pub supports: BTreeSet<String>,
     #[serde(default = "one_u32")]
     pub weight: u32,
 }
@@ -413,8 +413,7 @@ impl Default for BackendConfig {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
-            capabilities: BTreeSet::new(),
-            models: Vec::new(),
+            supports: BTreeSet::new(),
             weight: 1,
         }
     }
@@ -461,9 +460,13 @@ pub enum ChatStreamUsagePolicy {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ModelRouteConfig {
-    pub public: String,
-    pub backend: Option<String>,
+pub struct RouteConfig {
+    pub public: Option<String>,
+    pub path: Option<String>,
+    #[serde(default)]
+    pub expose: BTreeSet<String>,
+    #[serde(default)]
+    pub backends: Vec<String>,
     #[serde(default)]
     pub context_length: ContextLengthConfig,
     #[serde(default)]
@@ -474,8 +477,22 @@ pub struct ModelRouteConfig {
     pub responses_max_output_tokens: Option<ResponsesMaxOutputTokensPolicy>,
     #[serde(default)]
     pub chat_stream_usage: Option<ChatStreamUsagePolicy>,
-    #[serde(default)]
-    pub endpoints: BTreeSet<String>,
+}
+
+impl RouteConfig {
+    pub fn route_key(&self) -> Option<RouteKey> {
+        match (self.public.as_deref(), self.path.as_deref()) {
+            (Some(public), None) => Some(RouteKey::Public(public.to_owned())),
+            (None, Some(path)) => Some(RouteKey::Path(path.to_owned())),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RouteKey {
+    Public(String),
+    Path(String),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -521,25 +538,30 @@ pub struct ResolvedBackend {
     pub base_url: String,
     pub api_key: Option<String>,
     pub timeout: Duration,
-    pub capabilities: BTreeSet<String>,
+    pub supports: BTreeSet<String>,
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub chat_stream_usage: ChatStreamUsagePolicy,
-    pub models: Vec<ModelRoute>,
     pub weight: u32,
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelRoute {
-    pub public: String,
-    pub backend: String,
+pub struct RouteBackendBinding {
+    pub backend_id: String,
+    pub backend_model: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedRoute {
+    pub key: RouteKey,
+    pub expose: BTreeSet<String>,
     pub context_length: ContextLengthPolicy,
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub chat_stream_usage: ChatStreamUsagePolicy,
-    pub endpoints: BTreeSet<String>,
+    pub backends: Vec<RouteBackendBinding>,
 }
 
 impl Config {
@@ -597,7 +619,6 @@ impl Config {
         }
 
         let mut backend_ids = BTreeSet::new();
-        let mut public_models = BTreeSet::new();
         let mut backends = Vec::with_capacity(file.backends.len());
         for backend in file.backends {
             if backend.id.trim().is_empty() {
@@ -618,66 +639,21 @@ impl Config {
             let base_url = normalize_backend_base_url(&backend.base_url, &backend.id)?;
             let api_key = resolve_optional_secret(backend.api_key, backend.api_key_env)?;
             validate_markers(
-                &backend.capabilities,
+                &backend.supports,
                 file.routing.unknown_capability_policy,
                 MarkerKind::Capability,
                 &format!("backend '{}'", backend.id),
             )?;
-            let models = backend
-                .models
-                .into_iter()
-                .map(|model| {
-                    if model.public.trim().is_empty() {
-                        return Err(Error::Config(format!(
-                            "backend '{}' has an empty public model name",
-                            backend.id
-                        )));
-                    }
-                    public_models.insert(model.public.clone());
-                    let backend_model = model
-                        .backend
-                        .clone()
-                        .unwrap_or_else(|| model.public.clone());
-                    let context_length = resolve_context_length_policy(
-                        &model.context_length,
-                        &backend.id,
-                        &backend_model,
-                    )?;
-                    validate_markers(
-                        &model.endpoints,
-                        file.routing.unknown_endpoint_policy,
-                        MarkerKind::Endpoint,
-                        &format!("backend '{}' model '{}'", backend.id, model.public),
-                    )?;
-                    Ok(ModelRoute {
-                        backend: model.backend.unwrap_or_else(|| model.public.clone()),
-                        public: model.public,
-                        context_length,
-                        tool_schema_mode: model
-                            .tool_schema_mode
-                            .unwrap_or(backend.tool_schema_mode),
-                        responses_store: model.responses_store.unwrap_or(backend.responses_store),
-                        responses_max_output_tokens: model
-                            .responses_max_output_tokens
-                            .unwrap_or(backend.responses_max_output_tokens),
-                        chat_stream_usage: model
-                            .chat_stream_usage
-                            .unwrap_or(backend.chat_stream_usage),
-                        endpoints: model.endpoints,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
             backends.push(ResolvedBackend {
                 id: backend.id,
                 base_url,
                 api_key,
                 timeout: Duration::from_millis(backend.timeout_ms),
-                capabilities: backend.capabilities,
+                supports: backend.supports,
                 tool_schema_mode: backend.tool_schema_mode,
                 responses_store: backend.responses_store,
                 responses_max_output_tokens: backend.responses_max_output_tokens,
                 chat_stream_usage: backend.chat_stream_usage,
-                models,
                 weight: backend.weight,
             });
         }
@@ -688,7 +664,9 @@ impl Config {
             ));
         }
 
-        validate_allowed_models(&clients, &public_models)?;
+        let routes = resolve_routes(&file.routes, &backends, &file.routing)?;
+
+        validate_allowed_routes(&clients, &routes)?;
 
         Ok(Self {
             server: file.server,
@@ -699,14 +677,15 @@ impl Config {
             routing: file.routing,
             clients,
             backends,
+            routes,
         })
     }
 
     pub fn public_model_context_lengths(&self) -> BTreeMap<String, ResolvedContextLength> {
         let mut models = BTreeMap::new();
-        for backend in &self.backends {
-            for model in &backend.models {
-                let resolved = match &model.context_length {
+        for route in &self.routes {
+            if let RouteKey::Public(public) = &route.key {
+                let resolved = match &route.context_length {
                     ContextLengthPolicy::None => ResolvedContextLength::None,
                     ContextLengthPolicy::Static(value) => {
                         ResolvedContextLength::Static { n_ctx: *value }
@@ -715,7 +694,7 @@ impl Config {
                         ResolvedContextLength::Upstream { n_ctx: None }
                     }
                 };
-                models.entry(model.public.clone()).or_insert(resolved);
+                models.entry(public.clone()).or_insert(resolved);
             }
         }
         models
@@ -726,22 +705,210 @@ impl Config {
         cache: &ContextSizeCache,
     ) -> BTreeMap<String, ResolvedContextLength> {
         let mut models = BTreeMap::new();
-        for backend in &self.backends {
-            for model in &backend.models {
-                let resolved = match &model.context_length {
+        for route in &self.routes {
+            if let RouteKey::Public(public) = &route.key {
+                let resolved = match &route.context_length {
                     ContextLengthPolicy::None => ResolvedContextLength::None,
                     ContextLengthPolicy::Static(value) => {
                         ResolvedContextLength::Static { n_ctx: *value }
                     }
                     ContextLengthPolicy::Upstream { .. } => ResolvedContextLength::Upstream {
-                        n_ctx: cache.lookup(&model.public),
+                        n_ctx: cache.lookup(public),
                     },
                 };
-                models.entry(model.public.clone()).or_insert(resolved);
+                models.entry(public.clone()).or_insert(resolved);
             }
         }
         models
     }
+}
+
+fn resolve_routes(
+    route_configs: &[RouteConfig],
+    backends: &[ResolvedBackend],
+    routing_config: &RoutingConfig,
+) -> Result<Vec<ResolvedRoute>> {
+    let mut seen_keys: std::collections::HashSet<RouteKey> = std::collections::HashSet::new();
+    let mut resolved_routes = Vec::with_capacity(route_configs.len());
+    for route_config in route_configs {
+        let key = route_config.route_key().ok_or_else(|| {
+            Error::Config(format!(
+                "each [[route]] must declare exactly one of `public` or `path`; got public={:?} path={:?}",
+                route_config.public, route_config.path
+            ))
+        })?;
+        if !seen_keys.insert(key.clone()) {
+            return Err(Error::Config(format!(
+                "duplicate route declaration for '{}'",
+                format_route_key(&key)
+            )));
+        }
+        validate_markers(
+            &route_config.expose,
+            routing_config.unknown_endpoint_policy,
+            MarkerKind::Endpoint,
+            &format!("route '{}'", format_route_key(&key)),
+        )?;
+        let mut bindings = Vec::with_capacity(route_config.backends.len());
+        for entry in &route_config.backends {
+            let (model, backend_id) = parse_route_backend(entry)?;
+            let backend = backends
+                .iter()
+                .find(|b| b.id == backend_id)
+                .ok_or_else(|| {
+                    Error::Config(format!(
+                        "route '{}' references unknown backend '{}'",
+                        format_route_key(&key),
+                        backend_id
+                    ))
+                })?;
+            let backend_model = model.clone().unwrap_or_else(|| match &key {
+                RouteKey::Public(public) => public.clone(),
+                RouteKey::Path(_) => backend_id.clone(),
+            });
+            bindings.push(RouteBackendBinding {
+                backend_id: backend.id.clone(),
+                backend_model,
+            });
+        }
+        let tool_schema_mode = route_config
+            .tool_schema_mode
+            .unwrap_or(ToolSchemaMode::Preserve);
+        let responses_store = route_config
+            .responses_store
+            .unwrap_or(ResponsesStorePolicy::Preserve);
+        let responses_max_output_tokens = route_config
+            .responses_max_output_tokens
+            .unwrap_or(ResponsesMaxOutputTokensPolicy::Preserve);
+        let chat_stream_usage = route_config
+            .chat_stream_usage
+            .unwrap_or(ChatStreamUsagePolicy::Preserve);
+        let expose = route_config.expose.clone();
+        for binding in &bindings {
+            let backend = backends
+                .iter()
+                .find(|b| b.id == binding.backend_id)
+                .expect("binding references a known backend");
+            if !route_can_serve(&expose, backend) {
+                let route_label = format_route_key(&key);
+                let backend_supports = sorted_marker_list(&backend.supports);
+                let route_exposes = sorted_marker_list(&expose);
+                warn!(
+                    route = %route_label,
+                    backend = %backend.id,
+                    route_expose = %route_exposes,
+                    backend_supports = %backend_supports,
+                    "route backend cannot serve any of the route's expose markers; it will never be selected",
+                );
+            }
+        }
+        let context_length = match &key {
+            RouteKey::Path(_) => ContextLengthPolicy::None,
+            RouteKey::Public(public) => {
+                let first = bindings.first();
+                let backend_id = first.map(|b| b.backend_id.as_str()).unwrap_or("");
+                let model_for_lookup = first
+                    .map(|b| b.backend_model.clone())
+                    .unwrap_or_else(|| public.clone());
+                resolve_context_length_policy(
+                    &route_config.context_length,
+                    backend_id,
+                    &model_for_lookup,
+                )?
+            }
+        };
+        resolved_routes.push(ResolvedRoute {
+            key: key.clone(),
+            expose,
+            context_length,
+            tool_schema_mode,
+            responses_store,
+            responses_max_output_tokens,
+            chat_stream_usage,
+            backends: bindings,
+        });
+    }
+    Ok(resolved_routes)
+}
+
+fn format_route_key(key: &RouteKey) -> String {
+    match key {
+        RouteKey::Public(p) => format!("public={p}"),
+        RouteKey::Path(p) => format!("path={p}"),
+    }
+}
+
+fn sorted_marker_list(set: &BTreeSet<String>) -> String {
+    let mut v: Vec<&str> = set.iter().map(String::as_str).collect();
+    v.sort_unstable();
+    v.join(",")
+}
+
+fn route_can_serve(expose: &BTreeSet<String>, backend: &ResolvedBackend) -> bool {
+    for marker in expose {
+        if backend.supports.contains(marker) {
+            return true;
+        }
+        if is_compat_marker_pair(marker, &backend.supports) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_compat_marker_pair(marker: &str, backend_supports: &BTreeSet<String>) -> bool {
+    if marker == crate::compat::RESPONSES_VIA_CHAT_COMPLETIONS {
+        return has_marker(backend_supports, "chat")
+            || has_marker(backend_supports, "chat_completions")
+            || has_marker(backend_supports, "completions");
+    }
+    if marker == crate::compat::CHAT_COMPLETIONS_VIA_RESPONSES {
+        return has_marker(backend_supports, "responses")
+            || has_marker(backend_supports, "response");
+    }
+    false
+}
+
+fn has_marker(set: &BTreeSet<String>, marker: &str) -> bool {
+    set.contains(marker) || set.contains("all")
+}
+
+fn parse_route_backend(entry: &str) -> Result<(Option<String>, String)> {
+    if let Some(at_pos) = entry.find('@') {
+        let model = entry[..at_pos].to_owned();
+        let backend_id = entry[at_pos + 1..].to_owned();
+        if backend_id.is_empty() {
+            return Err(Error::Config(format!(
+                "route backend entry '{entry}' is missing the backend id after '@'"
+            )));
+        }
+        if model.is_empty() {
+            return Err(Error::Config(format!(
+                "route backend entry '{entry}' uses '@' but the model part is empty; use a bare backend id for model-less routes"
+            )));
+        }
+        Ok((Some(model), backend_id))
+    } else {
+        Ok((None, entry.to_owned()))
+    }
+}
+
+fn validate_allowed_routes(clients: &[ResolvedClient], routes: &[ResolvedRoute]) -> Result<()> {
+    for client in clients {
+        for model in &client.models {
+            let found = routes.iter().any(|route| match &route.key {
+                RouteKey::Public(public) => public == model,
+                RouteKey::Path(_) => false,
+            });
+            if !found {
+                return Err(Error::Config(format!(
+                    "client '{}' references public model '{model}' which has no [[route]] declaration; add a [[route]] block or remove the model from the client",
+                    client.id
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn resolve_secret(
@@ -775,23 +942,6 @@ fn resolve_optional_secret(
             .map_err(|_| Error::MissingEnv(name)),
         _ => Ok(None),
     }
-}
-
-fn validate_allowed_models(
-    clients: &[ResolvedClient],
-    public_models: &BTreeSet<String>,
-) -> Result<()> {
-    for client in clients {
-        for model in &client.models {
-            if !public_models.contains(model) {
-                return Err(Error::Config(format!(
-                    "client '{}' allows unknown model '{}'",
-                    client.id, model
-                )));
-            }
-        }
-    }
-    Ok(())
 }
 
 fn validate_health_config(config: &HealthConfig) -> Result<()> {

@@ -2,16 +2,16 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use onair_core::ContextSizeCache;
-use onair_core::config::{Config, ConfigStore, ContextLengthPolicy};
+use onair_core::config::{Config, ConfigStore, ContextLengthPolicy, RouteKey};
 use reqwest::Client;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 #[cfg(test)]
 use onair_core::config::{
-    ChatStreamUsagePolicy, DebugCaptureConfig, HealthConfig, InspectorConfig, ModelRoute,
-    ResolvedBackend, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RoutingConfig,
-    ServerConfig, TelemetryConfig, ToolSchemaMode,
+    ChatStreamUsagePolicy, DebugCaptureConfig, HealthConfig, InspectorConfig, ResolvedBackend,
+    ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RoutingConfig, ServerConfig,
+    TelemetryConfig, ToolSchemaMode,
 };
 
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
@@ -90,20 +90,17 @@ pub async fn refresh_once(http: &Client, cache: &ContextSizeCache, config: &Conf
 fn collect_upstream_targets(config: &Config) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
-    for backend in &config.backends {
-        for model in &backend.models {
-            if let ContextLengthPolicy::Upstream {
+    for route in &config.routes {
+        if let (
+            RouteKey::Public(public),
+            ContextLengthPolicy::Upstream {
                 backend_id,
                 backend_model,
-            } = &model.context_length
-                && seen.insert(model.public.clone())
-            {
-                out.push((
-                    model.public.clone(),
-                    backend_id.clone(),
-                    backend_model.clone(),
-                ));
-            }
+            },
+        ) = (&route.key, &route.context_length)
+            && seen.insert(public.clone())
+        {
+            out.push((public.clone(), backend_id.clone(), backend_model.clone()));
         }
     }
     out

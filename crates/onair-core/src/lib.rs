@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod compat;
 pub mod config;
 pub mod context_size_cache;
 pub mod error;

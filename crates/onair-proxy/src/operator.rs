@@ -5,8 +5,8 @@ use serde::Serialize;
 
 use onair_core::config::{
     Config, ContextLengthPolicy, DebugCaptureConfig, HealthConfig, InspectorConfig,
-    ResolvedBackend, ResolvedClient, ResolvedContextLength, RoutingConfig, RoutingStrategy,
-    ServerConfig, TelemetryConfig, TelemetryExporter,
+    ResolvedBackend, ResolvedClient, ResolvedContextLength, ResolvedRoute, RouteKey, RoutingConfig,
+    RoutingStrategy, ServerConfig, TelemetryConfig, TelemetryExporter,
 };
 use onair_obs::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 
@@ -18,6 +18,7 @@ pub struct OperatorRuntimeSnapshot {
     pub clients: usize,
     pub backends: usize,
     pub public_models: usize,
+    pub routes: usize,
     pub inspector_retained_requests: usize,
     pub telemetry: TelemetrySnapshot,
 }
@@ -32,6 +33,7 @@ pub struct OperatorConfigSnapshot {
     pub routing: RoutingSnapshot,
     pub clients: Vec<ClientSnapshot>,
     pub backends: Vec<BackendSnapshot>,
+    pub routes: Vec<RouteSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +91,26 @@ pub struct RoutingSnapshot {
 }
 
 #[derive(Debug, Serialize)]
+pub struct RouteSnapshot {
+    pub public: Option<String>,
+    pub path: Option<String>,
+    pub expose: Vec<String>,
+    pub context_length: Option<u64>,
+    pub context_length_source: &'static str,
+    pub tool_schema_mode: onair_core::config::ToolSchemaMode,
+    pub responses_store: onair_core::config::ResponsesStorePolicy,
+    pub responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
+    pub chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
+    pub backends: Vec<RouteBindingSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RouteBindingSnapshot {
+    pub backend: String,
+    pub backend_model: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ClientSnapshot {
     pub id: String,
     pub models: Vec<String>,
@@ -104,22 +126,8 @@ pub struct BackendSnapshot {
     pub responses_store: onair_core::config::ResponsesStorePolicy,
     pub responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
     pub chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
-    pub capabilities: Vec<String>,
+    pub supports: Vec<String>,
     pub weight: u32,
-    pub models: Vec<BackendModelSnapshot>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct BackendModelSnapshot {
-    pub public: String,
-    pub backend: String,
-    pub context_length: Option<u64>,
-    pub context_length_source: &'static str,
-    pub tool_schema_mode: onair_core::config::ToolSchemaMode,
-    pub responses_store: onair_core::config::ResponsesStorePolicy,
-    pub responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
-    pub chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
-    pub endpoints: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -129,18 +137,7 @@ pub struct PublicModelSnapshot {
     pub context_length_source: &'static str,
     pub context_length_last_fetch_unix_ms: Option<u64>,
     pub clients: Vec<String>,
-    pub routes: Vec<ModelRouteSnapshot>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ModelRouteSnapshot {
-    pub backend: String,
-    pub backend_model: String,
-    pub tool_schema_mode: onair_core::config::ToolSchemaMode,
-    pub responses_store: onair_core::config::ResponsesStorePolicy,
-    pub responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
-    pub chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
-    pub endpoints: Vec<String>,
+    pub routes: Vec<RouteBindingSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,6 +173,7 @@ pub fn runtime_snapshot(
         clients: config.clients.len(),
         backends: config.backends.len(),
         public_models: config.public_model_context_lengths().len(),
+        routes: config.routes.len(),
         inspector_retained_requests,
         telemetry: telemetry_snapshot(&config.telemetry),
     }
@@ -199,6 +197,7 @@ pub fn config_snapshot(config: &Config) -> OperatorConfigSnapshot {
         routing: routing_snapshot(&config.routing),
         clients: clients_snapshot(&config.clients),
         backends: config.backends.iter().map(backend_snapshot).collect(),
+        routes: config.routes.iter().map(route_snapshot).collect(),
     }
 }
 
@@ -240,17 +239,14 @@ pub fn models_snapshot(
         }
     }
 
-    for backend in &config.backends {
-        for model in &backend.models {
-            if let Some(public_model) = models.get_mut(&model.public) {
-                public_model.routes.push(ModelRouteSnapshot {
-                    backend: backend.id.clone(),
-                    backend_model: model.backend.clone(),
-                    tool_schema_mode: model.tool_schema_mode,
-                    responses_store: model.responses_store,
-                    responses_max_output_tokens: model.responses_max_output_tokens,
-                    chat_stream_usage: model.chat_stream_usage,
-                    endpoints: sorted_strings(&model.endpoints),
+    for route in &config.routes {
+        if let RouteKey::Public(public) = &route.key
+            && let Some(public_model) = models.get_mut(public)
+        {
+            for binding in &route.backends {
+                public_model.routes.push(RouteBindingSnapshot {
+                    backend: binding.backend_id.clone(),
+                    backend_model: binding.backend_model.clone(),
                 });
             }
         }
@@ -355,21 +351,32 @@ fn backend_snapshot(backend: &ResolvedBackend) -> BackendSnapshot {
         responses_store: backend.responses_store,
         responses_max_output_tokens: backend.responses_max_output_tokens,
         chat_stream_usage: backend.chat_stream_usage,
-        capabilities: sorted_strings(&backend.capabilities),
+        supports: sorted_strings(&backend.supports),
         weight: backend.weight,
-        models: backend
-            .models
+    }
+}
+
+fn route_snapshot(route: &ResolvedRoute) -> RouteSnapshot {
+    let (public, path) = match &route.key {
+        RouteKey::Public(p) => (Some(p.clone()), None),
+        RouteKey::Path(p) => (None, Some(p.clone())),
+    };
+    RouteSnapshot {
+        public,
+        path,
+        expose: sorted_strings(&route.expose),
+        context_length: static_context_length(&route.context_length),
+        context_length_source: context_length_source(&route.context_length),
+        tool_schema_mode: route.tool_schema_mode,
+        responses_store: route.responses_store,
+        responses_max_output_tokens: route.responses_max_output_tokens,
+        chat_stream_usage: route.chat_stream_usage,
+        backends: route
+            .backends
             .iter()
-            .map(|model| BackendModelSnapshot {
-                public: model.public.clone(),
-                backend: model.backend.clone(),
-                context_length: static_context_length(&model.context_length),
-                context_length_source: context_length_source(&model.context_length),
-                tool_schema_mode: model.tool_schema_mode,
-                responses_store: model.responses_store,
-                responses_max_output_tokens: model.responses_max_output_tokens,
-                chat_stream_usage: model.chat_stream_usage,
-                endpoints: sorted_strings(&model.endpoints),
+            .map(|binding| RouteBindingSnapshot {
+                backend: binding.backend_id.clone(),
+                backend_model: binding.backend_model.clone(),
             })
             .collect(),
     }

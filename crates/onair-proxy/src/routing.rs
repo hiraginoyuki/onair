@@ -4,17 +4,15 @@ use std::sync::{Arc, Mutex};
 
 use rand::Rng;
 
+use onair_core::compat::{CHAT_COMPLETIONS_VIA_RESPONSES, RESPONSES_VIA_CHAT_COMPLETIONS};
 #[cfg(test)]
 use onair_core::config::ContextLengthPolicy;
 use onair_core::config::{
-    ChatStreamUsagePolicy, ResolvedBackend, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy,
-    RoutingStrategy, ToolSchemaMode,
+    ChatStreamUsagePolicy, ResolvedBackend, ResolvedRoute, ResponsesMaxOutputTokensPolicy,
+    ResponsesStorePolicy, RoutingStrategy, ToolSchemaMode,
 };
 use onair_core::error::ApiError;
 use onair_core::openai::RequestMode;
-
-const RESPONSES_VIA_CHAT_COMPLETIONS: &str = "responses_via_chat_completions";
-const CHAT_COMPLETIONS_VIA_RESPONSES: &str = "chat_completions_via_responses";
 
 #[cfg(test)]
 pub use onair_core::{KNOWN_MARKERS, is_known_marker};
@@ -80,6 +78,7 @@ impl RoundRobinCounters {
 #[allow(clippy::too_many_arguments)]
 pub fn select_backend_candidates(
     backends: &[ResolvedBackend],
+    routes: &[ResolvedRoute],
     strategy: RoutingStrategy,
     path: &str,
     model: Option<&str>,
@@ -92,25 +91,86 @@ pub fn select_backend_candidates(
     let mut candidates = Vec::new();
     let mut tool_incompatible_candidates = false;
 
-    for backend in backends {
-        if stream && !has_capability(&backend.capabilities, "streaming") {
-            continue;
+    if let Some(requested_model) = model {
+        let Some(route) = routes.iter().find(|r| matches!(&r.key, onair_core::config::RouteKey::Public(public) if public == requested_model)) else {
+            return Err(ApiError::model_not_found(requested_model));
+        };
+        for binding in &route.backends {
+            let Some(backend) = backends.iter().find(|b| b.id == binding.backend_id) else {
+                continue;
+            };
+            if stream && !has_capability(&backend.supports, "streaming") {
+                continue;
+            }
+            let Some(request_mode) = request_mode_for_route(
+                path,
+                &path_candidates,
+                &backend.supports,
+                Some(&route.expose),
+            ) else {
+                continue;
+            };
+            if tools && !supports_tools(&backend.supports, Some(&route.expose)) {
+                tool_incompatible_candidates = true;
+                continue;
+            }
+            candidates.push(SelectedRoute {
+                backend_id: backend.id.clone(),
+                base_url: backend.base_url.clone(),
+                api_key: backend.api_key.clone(),
+                timeout: backend.timeout,
+                public_model: Some(requested_model.to_owned()),
+                backend_model: Some(binding.backend_model.clone()),
+                request_mode,
+                tool_schema_mode: route.tool_schema_mode,
+                responses_store: route.responses_store,
+                responses_max_output_tokens: route.responses_max_output_tokens,
+                chat_stream_usage: route.chat_stream_usage,
+                weight: backend.weight,
+            });
         }
-
-        if let Some(requested_model) = model {
-            for route in &backend.models {
-                if route.public != requested_model {
+    } else {
+        let route = routes.iter().find(|r| matches!(&r.key, onair_core::config::RouteKey::Path(p) if p.trim_end_matches('/') == path.trim_end_matches('/')));
+        for backend in backends {
+            if stream && !has_capability(&backend.supports, "streaming") {
+                continue;
+            }
+            if let Some(route) = route {
+                if !route.backends.iter().any(|b| b.backend_id == backend.id) {
                     continue;
                 }
-                let Some(request_mode) = request_mode_for_route(
+                if let Some(request_mode) = request_mode_for_route(
                     path,
                     &path_candidates,
-                    &backend.capabilities,
-                    &route.endpoints,
-                ) else {
+                    &backend.supports,
+                    Some(&route.expose),
+                ) {
+                    if tools && !supports_tools(&backend.supports, Some(&route.expose)) {
+                        tool_incompatible_candidates = true;
+                        continue;
+                    }
+                    candidates.push(SelectedRoute {
+                        backend_id: backend.id.clone(),
+                        base_url: backend.base_url.clone(),
+                        api_key: backend.api_key.clone(),
+                        timeout: backend.timeout,
+                        public_model: None,
+                        backend_model: None,
+                        request_mode,
+                        tool_schema_mode: route.tool_schema_mode,
+                        responses_store: route.responses_store,
+                        responses_max_output_tokens: route.responses_max_output_tokens,
+                        chat_stream_usage: route.chat_stream_usage,
+                        weight: backend.weight,
+                    });
+                }
+            } else {
+                let Some(request_mode) =
+                    request_mode_for_backend(path, &path_candidates, &backend.supports)
+                else {
                     continue;
                 };
-                if tools && !supports_tools(&backend.capabilities, Some(&route.endpoints)) {
+                if tools && !supports_tools(&backend.supports, None) {
                     tool_incompatible_candidates = true;
                     continue;
                 }
@@ -119,42 +179,17 @@ pub fn select_backend_candidates(
                     base_url: backend.base_url.clone(),
                     api_key: backend.api_key.clone(),
                     timeout: backend.timeout,
-                    public_model: Some(route.public.clone()),
-                    backend_model: Some(route.backend.clone()),
+                    public_model: None,
+                    backend_model: None,
                     request_mode,
-                    tool_schema_mode: route.tool_schema_mode,
-                    responses_store: route.responses_store,
-                    responses_max_output_tokens: route.responses_max_output_tokens,
-                    chat_stream_usage: route.chat_stream_usage,
+                    tool_schema_mode: backend.tool_schema_mode,
+                    responses_store: backend.responses_store,
+                    responses_max_output_tokens: backend.responses_max_output_tokens,
+                    chat_stream_usage: backend.chat_stream_usage,
                     weight: backend.weight,
                 });
             }
-            continue;
         }
-
-        let Some(request_mode) =
-            request_mode_for_backend(path, &path_candidates, &backend.capabilities)
-        else {
-            continue;
-        };
-        if tools && !supports_tools(&backend.capabilities, None) {
-            tool_incompatible_candidates = true;
-            continue;
-        }
-        candidates.push(SelectedRoute {
-            backend_id: backend.id.clone(),
-            base_url: backend.base_url.clone(),
-            api_key: backend.api_key.clone(),
-            timeout: backend.timeout,
-            public_model: None,
-            backend_model: None,
-            request_mode,
-            tool_schema_mode: backend.tool_schema_mode,
-            responses_store: backend.responses_store,
-            responses_max_output_tokens: backend.responses_max_output_tokens,
-            chat_stream_usage: backend.chat_stream_usage,
-            weight: backend.weight,
-        });
     }
 
     if candidates.is_empty() {
@@ -165,10 +200,7 @@ pub fn select_backend_candidates(
             ));
         }
         if let Some(requested_model) = model {
-            if model_is_known(backends, requested_model) {
-                return Err(ApiError::endpoint_unavailable(path, Some(requested_model)));
-            }
-            return Err(ApiError::model_not_found(requested_model));
+            return Err(ApiError::endpoint_unavailable(path, Some(requested_model)));
         }
         return Err(ApiError::endpoint_unavailable(path, None));
     }
@@ -218,55 +250,41 @@ fn sticky_index(key: &str, count: usize) -> usize {
     (hasher.finish() as usize) % count
 }
 
-fn model_is_known(backends: &[ResolvedBackend], requested_model: &str) -> bool {
-    backends.iter().any(|backend| {
-        backend
-            .models
-            .iter()
-            .any(|route| route.public == requested_model)
-    })
-}
-
 fn request_mode_for_route(
     path: &str,
     path_candidates: &[String],
-    backend_capabilities: &BTreeSet<String>,
-    route_endpoints: &BTreeSet<String>,
+    backend_supports: &BTreeSet<String>,
+    route_expose: Option<&BTreeSet<String>>,
 ) -> Option<RequestMode> {
-    request_mode_for_path(
-        path,
-        path_candidates,
-        backend_capabilities,
-        Some(route_endpoints),
-    )
+    request_mode_for_path(path, path_candidates, backend_supports, route_expose)
 }
 
 fn request_mode_for_backend(
     path: &str,
     path_candidates: &[String],
-    backend_capabilities: &BTreeSet<String>,
+    backend_supports: &BTreeSet<String>,
 ) -> Option<RequestMode> {
-    request_mode_for_path(path, path_candidates, backend_capabilities, None)
+    request_mode_for_path(path, path_candidates, backend_supports, None)
 }
 
 fn request_mode_for_path(
     path: &str,
     path_candidates: &[String],
-    backend_capabilities: &BTreeSet<String>,
-    route_endpoints: Option<&BTreeSet<String>>,
+    backend_supports: &BTreeSet<String>,
+    route_expose: Option<&BTreeSet<String>>,
 ) -> Option<RequestMode> {
     match path.trim_end_matches('/') {
-        "/v1/responses" => request_mode_for_responses(backend_capabilities, route_endpoints),
+        "/v1/responses" => request_mode_for_responses(backend_supports, route_expose),
         "/v1/chat/completions" | "/v1/chat/completion" => {
-            request_mode_for_chat_completions(backend_capabilities, route_endpoints)
+            request_mode_for_chat_completions(backend_supports, route_expose)
         }
         _ => {
-            if !supports_candidates(backend_capabilities, path_candidates) {
+            if !supports_candidates(backend_supports, path_candidates) {
                 return None;
             }
-            if let Some(endpoints) = route_endpoints
-                && !endpoints.is_empty()
-                && !supports_candidates(endpoints, path_candidates)
+            if let Some(expose) = route_expose
+                && !expose.is_empty()
+                && !supports_candidates(expose, path_candidates)
             {
                 return None;
             }
@@ -276,16 +294,16 @@ fn request_mode_for_path(
 }
 
 fn request_mode_for_responses(
-    backend_capabilities: &BTreeSet<String>,
-    route_endpoints: Option<&BTreeSet<String>>,
+    backend_supports: &BTreeSet<String>,
+    route_expose: Option<&BTreeSet<String>>,
 ) -> Option<RequestMode> {
-    if supports_responses(backend_capabilities) && route_supports_responses(route_endpoints) {
+    if supports_responses(backend_supports) && route_supports_responses(route_expose) {
         return Some(RequestMode::Native);
     }
-    if supports_chat_compat(backend_capabilities)
+    if supports_chat_compat(backend_supports)
         && route_supports_compat_marker(
-            backend_capabilities,
-            route_endpoints,
+            backend_supports,
+            route_expose,
             RESPONSES_VIA_CHAT_COMPLETIONS,
         )
     {
@@ -295,16 +313,16 @@ fn request_mode_for_responses(
 }
 
 fn request_mode_for_chat_completions(
-    backend_capabilities: &BTreeSet<String>,
-    route_endpoints: Option<&BTreeSet<String>>,
+    backend_supports: &BTreeSet<String>,
+    route_expose: Option<&BTreeSet<String>>,
 ) -> Option<RequestMode> {
-    if supports_chat_compat(backend_capabilities) && route_supports_chat_compat(route_endpoints) {
+    if supports_chat_compat(backend_supports) && route_supports_chat_compat(route_expose) {
         return Some(RequestMode::Native);
     }
-    if supports_responses(backend_capabilities)
+    if supports_responses(backend_supports)
         && route_supports_compat_marker(
-            backend_capabilities,
-            route_endpoints,
+            backend_supports,
+            route_expose,
             CHAT_COMPLETIONS_VIA_RESPONSES,
         )
     {
@@ -313,55 +331,55 @@ fn request_mode_for_chat_completions(
     None
 }
 
-fn route_supports_responses(route_endpoints: Option<&BTreeSet<String>>) -> bool {
-    route_endpoints.is_none_or(|endpoints| {
-        endpoints.is_empty()
-            || has_capability(endpoints, "responses")
-            || has_capability(endpoints, "response")
+fn route_supports_responses(route_expose: Option<&BTreeSet<String>>) -> bool {
+    route_expose.is_none_or(|expose| {
+        expose.is_empty()
+            || has_capability(expose, "responses")
+            || has_capability(expose, "response")
     })
 }
 
-fn route_supports_chat_compat(route_endpoints: Option<&BTreeSet<String>>) -> bool {
-    route_endpoints.is_none_or(|endpoints| endpoints.is_empty() || supports_chat_compat(endpoints))
+fn route_supports_chat_compat(route_expose: Option<&BTreeSet<String>>) -> bool {
+    route_expose.is_none_or(|expose| expose.is_empty() || supports_chat_compat(expose))
 }
 
 fn route_supports_compat_marker(
-    backend_capabilities: &BTreeSet<String>,
-    route_endpoints: Option<&BTreeSet<String>>,
+    backend_supports: &BTreeSet<String>,
+    route_expose: Option<&BTreeSet<String>>,
     marker: &str,
 ) -> bool {
-    match route_endpoints {
-        Some(endpoints) if !endpoints.is_empty() => endpoints.contains(marker),
-        _ => backend_capabilities.contains(marker),
+    match route_expose {
+        Some(expose) if !expose.is_empty() => expose.contains(marker),
+        _ => backend_supports.contains(marker),
     }
 }
 
-fn supports_responses(capabilities: &BTreeSet<String>) -> bool {
-    has_capability(capabilities, "responses") || has_capability(capabilities, "response")
+fn supports_responses(supports: &BTreeSet<String>) -> bool {
+    has_capability(supports, "responses") || has_capability(supports, "response")
 }
 
-fn supports_chat_compat(capabilities: &BTreeSet<String>) -> bool {
-    has_capability(capabilities, "chat")
-        || has_capability(capabilities, "chat_completions")
-        || has_capability(capabilities, "completions")
+fn supports_chat_compat(supports: &BTreeSet<String>) -> bool {
+    has_capability(supports, "chat")
+        || has_capability(supports, "chat_completions")
+        || has_capability(supports, "completions")
 }
 
 fn supports_tools(
-    backend_capabilities: &BTreeSet<String>,
-    route_endpoints: Option<&BTreeSet<String>>,
+    backend_supports: &BTreeSet<String>,
+    route_expose: Option<&BTreeSet<String>>,
 ) -> bool {
-    has_tool_capability(backend_capabilities) && route_supports_tools(route_endpoints)
+    has_tool_capability(backend_supports) && route_supports_tools(route_expose)
 }
 
-fn route_supports_tools(route_endpoints: Option<&BTreeSet<String>>) -> bool {
-    route_endpoints.is_none_or(|endpoints| endpoints.is_empty() || has_tool_capability(endpoints))
+fn route_supports_tools(route_expose: Option<&BTreeSet<String>>) -> bool {
+    route_expose.is_none_or(|expose| expose.is_empty() || has_tool_capability(expose))
 }
 
-fn has_tool_capability(capabilities: &BTreeSet<String>) -> bool {
-    has_capability(capabilities, "tools")
-        || has_capability(capabilities, "tool_calls")
-        || has_capability(capabilities, "function_calling")
-        || has_capability(capabilities, "functions")
+fn has_tool_capability(supports: &BTreeSet<String>) -> bool {
+    has_capability(supports, "tools")
+        || has_capability(supports, "tool_calls")
+        || has_capability(supports, "function_calling")
+        || has_capability(supports, "functions")
 }
 
 #[derive(Default)]

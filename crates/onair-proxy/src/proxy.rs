@@ -215,6 +215,7 @@ pub async fn proxy_v1(
     );
     let routes = match routing::select_backend_candidates(
         &config.backends,
+        &config.routes,
         config.routing.strategy,
         &path,
         request_shape.model.as_deref(),
