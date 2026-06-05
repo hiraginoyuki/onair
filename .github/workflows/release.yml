@@ -152,7 +152,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-about
-        run: cargo install --locked cargo-about
+        run: cargo install --locked cargo-about --features cli
 
       - name: Generate THIRD_PARTY_LICENSES.md
         run: cargo about generate about.hbs -o THIRD_PARTY_LICENSES.md
