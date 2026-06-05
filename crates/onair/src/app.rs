@@ -20,6 +20,7 @@ use url::form_urlencoded;
 
 use crate::operator;
 use crate::proxy;
+use crate::proxy_state::ProxyState;
 use crate::routing::RoundRobinCounters;
 use onair_core::ContextSizeCache;
 use onair_core::auth::authenticate;
@@ -89,6 +90,18 @@ impl AppState {
 
     pub fn shutdown_receiver(&self) -> watch::Receiver<bool> {
         self.shutdown.subscribe()
+    }
+
+    pub fn proxy_state(&self) -> Arc<ProxyState> {
+        Arc::new(ProxyState::from_app_state(
+            Arc::new(self.config.clone()),
+            Arc::new(self.http.clone()),
+            Arc::new(self.inspector.clone()),
+            Arc::new(self.metrics.clone()),
+            Arc::new(self.health.clone()),
+            Arc::new(self.round_robin.clone()),
+            self.shutdown.subscribe(),
+        ))
     }
 }
 
@@ -315,7 +328,17 @@ async fn v1_proxy(
     OriginalUri(uri): OriginalUri,
     body: Bytes,
 ) -> Response<Body> {
-    match proxy::proxy_v1(state, Some(peer_addr), headers.clone(), method, uri, body).await {
+    let proxy_state = state.proxy_state();
+    match proxy::proxy_v1(
+        proxy_state,
+        Some(peer_addr),
+        headers.clone(),
+        method,
+        uri,
+        body,
+    )
+    .await
+    {
         Ok(response) => response,
         Err(error) => {
             warn!(status = error.status.as_u16(), kind = %error.kind, "request failed before proxy response");

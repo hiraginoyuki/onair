@@ -1,6 +1,7 @@
 mod app;
 mod operator;
 mod proxy;
+mod proxy_state;
 mod routing;
 
 use std::future::IntoFuture;

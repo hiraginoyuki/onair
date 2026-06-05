@@ -11,7 +11,7 @@ use axum::http::{HeaderMap, Method, Response, StatusCode, Uri};
 use tokio::sync::watch;
 use tracing::{Instrument, info_span, warn};
 
-use crate::app::AppState;
+use crate::proxy_state::ProxyState;
 use crate::routing::{self, SelectedRoute};
 use onair_core::auth::authenticate;
 use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
@@ -53,7 +53,7 @@ const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
 fn refresh_live_record(_record: &mut InspectorRequestRecord) {}
 
 pub async fn proxy_v1(
-    state: Arc<AppState>,
+    state: Arc<ProxyState>,
     peer_addr: Option<SocketAddr>,
     headers: HeaderMap,
     method: Method,
@@ -84,7 +84,7 @@ pub async fn proxy_v1(
     };
 
     let live_record = LiveRecord::new(
-        state.inspector.clone(),
+        (*state.inspector).clone(),
         observation.inspector_enabled,
         observation.inspector_retention_requests,
         initial_live_record(&observation, &timeline, &route_name),
@@ -316,7 +316,7 @@ pub async fn proxy_v1(
         content_type,
         stream: request_shape.stream,
     };
-    let shutdown = state.shutdown_receiver();
+    let shutdown = state.shutdown.clone();
     let context = ProxyContext {
         state,
         client_headers: headers,
@@ -360,7 +360,7 @@ struct ProxyRequest {
 }
 
 struct ProxyContext {
-    state: Arc<AppState>,
+    state: Arc<ProxyState>,
     client_headers: HeaderMap,
     debug_capture_config: DebugCaptureConfig,
     debug_capture: Option<RequestCapture>,
@@ -1035,7 +1035,7 @@ fn inspector_text(value: &str) -> String {
 }
 
 fn record_preflight_failure(
-    state: &AppState,
+    state: &ProxyState,
     route: &str,
     identity: &str,
     model: Option<&str>,

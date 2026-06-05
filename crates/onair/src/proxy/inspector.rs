@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 
-use crate::app::AppState;
+use crate::proxy_state::ProxyState;
 use onair_core::openai::UsageTotals;
 use onair_obs::metrics::MetricLabels;
 use onair_obs::observe::{
@@ -29,7 +29,7 @@ pub(super) struct RequestObservationBase {
 }
 
 pub(super) struct PreflightInspectorRecord<'a> {
-    pub(super) state: &'a Arc<AppState>,
+    pub(super) state: &'a Arc<ProxyState>,
     pub(super) observation: &'a RequestObservationBase,
     pub(super) timeline: &'a RequestTimeline,
     pub(super) route: &'a str,

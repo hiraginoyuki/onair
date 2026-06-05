@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rand::Rng;
 
@@ -36,7 +36,15 @@ pub struct SelectedRoute {
 }
 
 pub struct RoundRobinCounters {
-    inner: Mutex<HashMap<String, u64>>,
+    inner: Arc<Mutex<HashMap<String, u64>>>,
+}
+
+impl Clone for RoundRobinCounters {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 impl Default for RoundRobinCounters {
@@ -48,7 +56,7 @@ impl Default for RoundRobinCounters {
 impl RoundRobinCounters {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

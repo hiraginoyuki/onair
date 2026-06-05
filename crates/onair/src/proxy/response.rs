@@ -288,9 +288,9 @@ pub(super) fn streaming_response(
         });
     }
     let stream_metrics = StreamMetrics::new(StreamMetricsInit {
-        metrics: state.metrics.clone(),
-        health_store: state.health.clone(),
-        inspector_store: state.inspector.clone(),
+        metrics: (*state.metrics).clone(),
+        health_store: (*state.health).clone(),
+        inspector_store: (*state.inspector).clone(),
         inspector_base,
         inspector_enabled,
         inspector_retention_requests,
