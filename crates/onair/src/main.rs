@@ -1,7 +1,6 @@
 mod app;
 mod metrics;
 mod observe;
-mod openai;
 mod operator;
 mod proxy;
 mod routing;

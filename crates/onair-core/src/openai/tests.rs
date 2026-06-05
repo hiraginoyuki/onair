@@ -1,4 +1,4 @@
-use onair_core::config::{
+use crate::config::{
     ChatStreamUsagePolicy, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode,
 };
 use serde_json::{Value, json};

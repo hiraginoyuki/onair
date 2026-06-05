@@ -12,8 +12,8 @@ use serde::Serialize;
 use tracing::warn;
 
 use crate::metrics::MetricLabels;
-use crate::openai::UsageDiagnostics;
 use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
+use onair_core::openai::UsageDiagnostics;
 
 const INBOUND_BODY_FILE: &str = "inbound.body";
 const UPSTREAM_BODY_FILE: &str = "upstream.body";

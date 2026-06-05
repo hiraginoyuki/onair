@@ -9,7 +9,7 @@ use crate::observe::{
     InspectorRequestRecord, InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts,
     RequestTimeline,
 };
-use crate::openai::UsageTotals;
+use onair_core::openai::UsageTotals;
 
 #[allow(unused_imports)]
 use super::attempt::InspectorAttemptBuilder;

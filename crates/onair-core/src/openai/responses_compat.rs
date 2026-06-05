@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use onair_core::config::{
+use crate::config::{
     ChatStreamUsagePolicy, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode,
 };
 

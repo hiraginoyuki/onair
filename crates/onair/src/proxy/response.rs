@@ -15,9 +15,9 @@ use crate::observe::{
     InspectorRequestRecord, InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts,
     LiveRecord, RequestTimeline, TimelineEvent,
 };
-use crate::openai::{self, SseNormalizer, UsageDiagnostics, UsageTotals};
 use onair_core::config::DebugCaptureConfig;
 use onair_core::error::ApiError;
+use onair_core::openai::{self, SseNormalizer, UsageDiagnostics, UsageTotals};
 
 use super::attempt::InspectorAttemptBuilder;
 use super::inspector::{InspectorRecord, inspector_tokens, record_inspector_request};

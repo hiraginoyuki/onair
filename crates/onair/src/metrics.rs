@@ -7,9 +7,9 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 
-use crate::openai::UsageTotals;
 use onair_core::config::{TelemetryConfig, TelemetryExporter};
 use onair_core::error::{Error, Result};
+use onair_core::openai::UsageTotals;
 
 #[derive(Debug, Clone)]
 pub struct Metrics {

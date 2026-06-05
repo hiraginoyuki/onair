@@ -4,7 +4,6 @@ use std::sync::Mutex;
 
 use rand::Rng;
 
-use crate::openai::RequestMode;
 #[cfg(test)]
 use onair_core::config::ContextLengthPolicy;
 use onair_core::config::{
@@ -12,12 +11,13 @@ use onair_core::config::{
     RoutingStrategy, ToolSchemaMode,
 };
 use onair_core::error::ApiError;
+use onair_core::openai::RequestMode;
 
 const RESPONSES_VIA_CHAT_COMPLETIONS: &str = "responses_via_chat_completions";
 const CHAT_COMPLETIONS_VIA_RESPONSES: &str = "chat_completions_via_responses";
 
 #[cfg(test)]
-pub use onair_core::{is_known_marker, KNOWN_MARKERS};
+pub use onair_core::{KNOWN_MARKERS, is_known_marker};
 
 #[derive(Clone)]
 pub struct SelectedRoute {

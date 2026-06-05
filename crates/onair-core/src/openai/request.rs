@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 use url::form_urlencoded;
 
-use onair_core::config::{
+use crate::config::{
     ChatStreamUsagePolicy, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode,
 };
 

@@ -19,11 +19,11 @@ use crate::observe::{
     InspectorRequestRecord, InspectorStore, InspectorTokenCounts, LiveRecord, RequestTimeline,
     TimelineEvent,
 };
-use crate::openai;
 use crate::routing::{self, SelectedRoute};
 use onair_core::auth::authenticate;
 use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
 use onair_core::error::ApiError;
+use onair_core::openai;
 
 mod attempt;
 mod inspector;
