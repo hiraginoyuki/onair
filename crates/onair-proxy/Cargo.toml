@@ -1,0 +1,18 @@
+[package]
+name = "onair-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+onair-core = { path = "../onair-core" }
+onair-obs = { path = "../onair-obs" }
+
+axum = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

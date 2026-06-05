@@ -11,159 +11,159 @@ use onair_core::config::{
 use onair_obs::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 
 #[derive(Debug, Serialize)]
-pub(crate) struct OperatorRuntimeSnapshot {
-    pub(crate) now_unix_ms: u64,
-    pub(crate) started_at_unix_ms: u64,
-    pub(crate) uptime_ms: u64,
-    pub(crate) clients: usize,
-    pub(crate) backends: usize,
-    pub(crate) public_models: usize,
-    pub(crate) inspector_retained_requests: usize,
-    pub(crate) telemetry: TelemetrySnapshot,
+pub struct OperatorRuntimeSnapshot {
+    pub now_unix_ms: u64,
+    pub started_at_unix_ms: u64,
+    pub uptime_ms: u64,
+    pub clients: usize,
+    pub backends: usize,
+    pub public_models: usize,
+    pub inspector_retained_requests: usize,
+    pub telemetry: TelemetrySnapshot,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct OperatorConfigSnapshot {
-    pub(crate) server: ServerSnapshot,
-    pub(crate) telemetry: TelemetrySnapshot,
-    pub(crate) debug_capture: DebugCaptureSnapshot,
-    pub(crate) inspector: InspectorSnapshot,
-    pub(crate) health: HealthConfigSnapshot,
-    pub(crate) routing: RoutingSnapshot,
-    pub(crate) clients: Vec<ClientSnapshot>,
-    pub(crate) backends: Vec<BackendSnapshot>,
+pub struct OperatorConfigSnapshot {
+    pub server: ServerSnapshot,
+    pub telemetry: TelemetrySnapshot,
+    pub debug_capture: DebugCaptureSnapshot,
+    pub inspector: InspectorSnapshot,
+    pub health: HealthConfigSnapshot,
+    pub routing: RoutingSnapshot,
+    pub clients: Vec<ClientSnapshot>,
+    pub backends: Vec<BackendSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct OperatorModelsSnapshot {
-    pub(crate) public_models: Vec<PublicModelSnapshot>,
-    pub(crate) clients: Vec<ClientSnapshot>,
+pub struct OperatorModelsSnapshot {
+    pub public_models: Vec<PublicModelSnapshot>,
+    pub clients: Vec<ClientSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct OperatorHealthSnapshot {
-    pub(crate) backends: Vec<BackendHealthSnapshot>,
+pub struct OperatorHealthSnapshot {
+    pub backends: Vec<BackendHealthSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct ServerSnapshot {
-    pub(crate) bind: String,
-    pub(crate) request_body_limit_bytes: usize,
-    pub(crate) trusted_proxy_cidrs: Vec<String>,
+pub struct ServerSnapshot {
+    pub bind: String,
+    pub request_body_limit_bytes: usize,
+    pub trusted_proxy_cidrs: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct TelemetrySnapshot {
-    pub(crate) service_name: String,
-    pub(crate) exporter: &'static str,
-    pub(crate) otlp_endpoint_configured: bool,
-    pub(crate) export_interval_ms: u64,
+pub struct TelemetrySnapshot {
+    pub service_name: String,
+    pub exporter: &'static str,
+    pub otlp_endpoint_configured: bool,
+    pub export_interval_ms: u64,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct DebugCaptureSnapshot {
-    pub(crate) enabled: bool,
-    pub(crate) mode: onair_core::config::DebugCaptureMode,
-    pub(crate) directory: String,
+pub struct DebugCaptureSnapshot {
+    pub enabled: bool,
+    pub mode: onair_core::config::DebugCaptureMode,
+    pub directory: String,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct InspectorSnapshot {
-    pub(crate) enabled: bool,
-    pub(crate) retention_requests: usize,
-    pub(crate) allow_remote: bool,
+pub struct InspectorSnapshot {
+    pub enabled: bool,
+    pub retention_requests: usize,
+    pub allow_remote: bool,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct HealthConfigSnapshot {
-    pub(crate) active: bool,
-    pub(crate) interval_ms: u64,
-    pub(crate) timeout_ms: u64,
-    pub(crate) path: String,
+pub struct HealthConfigSnapshot {
+    pub active: bool,
+    pub interval_ms: u64,
+    pub timeout_ms: u64,
+    pub path: String,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct RoutingSnapshot {
-    pub(crate) strategy: &'static str,
-    pub(crate) fallback_attempts: usize,
+pub struct RoutingSnapshot {
+    pub strategy: &'static str,
+    pub fallback_attempts: usize,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct ClientSnapshot {
-    pub(crate) id: String,
-    pub(crate) models: Vec<String>,
+pub struct ClientSnapshot {
+    pub id: String,
+    pub models: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct BackendSnapshot {
-    pub(crate) id: String,
-    pub(crate) base_url: String,
-    pub(crate) api_key_configured: bool,
-    pub(crate) timeout_ms: u64,
-    pub(crate) tool_schema_mode: onair_core::config::ToolSchemaMode,
-    pub(crate) responses_store: onair_core::config::ResponsesStorePolicy,
-    pub(crate) responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
-    pub(crate) chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
-    pub(crate) capabilities: Vec<String>,
-    pub(crate) weight: u32,
-    pub(crate) models: Vec<BackendModelSnapshot>,
+pub struct BackendSnapshot {
+    pub id: String,
+    pub base_url: String,
+    pub api_key_configured: bool,
+    pub timeout_ms: u64,
+    pub tool_schema_mode: onair_core::config::ToolSchemaMode,
+    pub responses_store: onair_core::config::ResponsesStorePolicy,
+    pub responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
+    pub chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
+    pub capabilities: Vec<String>,
+    pub weight: u32,
+    pub models: Vec<BackendModelSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct BackendModelSnapshot {
-    pub(crate) public: String,
-    pub(crate) backend: String,
-    pub(crate) context_length: Option<u64>,
-    pub(crate) context_length_source: &'static str,
-    pub(crate) tool_schema_mode: onair_core::config::ToolSchemaMode,
-    pub(crate) responses_store: onair_core::config::ResponsesStorePolicy,
-    pub(crate) responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
-    pub(crate) chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
-    pub(crate) endpoints: Vec<String>,
+pub struct BackendModelSnapshot {
+    pub public: String,
+    pub backend: String,
+    pub context_length: Option<u64>,
+    pub context_length_source: &'static str,
+    pub tool_schema_mode: onair_core::config::ToolSchemaMode,
+    pub responses_store: onair_core::config::ResponsesStorePolicy,
+    pub responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
+    pub chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
+    pub endpoints: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct PublicModelSnapshot {
-    pub(crate) public: String,
-    pub(crate) context_length: Option<u64>,
-    pub(crate) context_length_source: &'static str,
-    pub(crate) context_length_last_fetch_unix_ms: Option<u64>,
-    pub(crate) clients: Vec<String>,
-    pub(crate) routes: Vec<ModelRouteSnapshot>,
+pub struct PublicModelSnapshot {
+    pub public: String,
+    pub context_length: Option<u64>,
+    pub context_length_source: &'static str,
+    pub context_length_last_fetch_unix_ms: Option<u64>,
+    pub clients: Vec<String>,
+    pub routes: Vec<ModelRouteSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct ModelRouteSnapshot {
-    pub(crate) backend: String,
-    pub(crate) backend_model: String,
-    pub(crate) tool_schema_mode: onair_core::config::ToolSchemaMode,
-    pub(crate) responses_store: onair_core::config::ResponsesStorePolicy,
-    pub(crate) responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
-    pub(crate) chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
-    pub(crate) endpoints: Vec<String>,
+pub struct ModelRouteSnapshot {
+    pub backend: String,
+    pub backend_model: String,
+    pub tool_schema_mode: onair_core::config::ToolSchemaMode,
+    pub responses_store: onair_core::config::ResponsesStorePolicy,
+    pub responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
+    pub chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
+    pub endpoints: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct BackendHealthSnapshot {
-    pub(crate) backend: String,
-    pub(crate) status: &'static str,
-    pub(crate) successes: u64,
-    pub(crate) failures: u64,
-    pub(crate) traffic_successes: u64,
-    pub(crate) traffic_failures: u64,
-    pub(crate) probe_successes: u64,
-    pub(crate) probe_failures: u64,
-    pub(crate) consecutive_failures: u64,
-    pub(crate) last_success_unix_ms: Option<u64>,
-    pub(crate) last_failure_unix_ms: Option<u64>,
-    pub(crate) last_observed_unix_ms: Option<u64>,
-    pub(crate) last_status: Option<u16>,
-    pub(crate) last_error_kind: Option<String>,
-    pub(crate) last_latency_ms: Option<u64>,
-    pub(crate) last_source: Option<&'static str>,
+pub struct BackendHealthSnapshot {
+    pub backend: String,
+    pub status: &'static str,
+    pub successes: u64,
+    pub failures: u64,
+    pub traffic_successes: u64,
+    pub traffic_failures: u64,
+    pub probe_successes: u64,
+    pub probe_failures: u64,
+    pub consecutive_failures: u64,
+    pub last_success_unix_ms: Option<u64>,
+    pub last_failure_unix_ms: Option<u64>,
+    pub last_observed_unix_ms: Option<u64>,
+    pub last_status: Option<u16>,
+    pub last_error_kind: Option<String>,
+    pub last_latency_ms: Option<u64>,
+    pub last_source: Option<&'static str>,
 }
 
-pub(crate) fn runtime_snapshot(
+pub fn runtime_snapshot(
     config: &Config,
     started_at_unix_ms: u64,
     uptime: Duration,
@@ -181,7 +181,7 @@ pub(crate) fn runtime_snapshot(
     }
 }
 
-pub(crate) fn context_length_source(policy: &ContextLengthPolicy) -> &'static str {
+pub fn context_length_source(policy: &ContextLengthPolicy) -> &'static str {
     match policy {
         ContextLengthPolicy::None => "none",
         ContextLengthPolicy::Static(_) => "static",
@@ -189,7 +189,7 @@ pub(crate) fn context_length_source(policy: &ContextLengthPolicy) -> &'static st
     }
 }
 
-pub(crate) fn config_snapshot(config: &Config) -> OperatorConfigSnapshot {
+pub fn config_snapshot(config: &Config) -> OperatorConfigSnapshot {
     OperatorConfigSnapshot {
         server: server_snapshot(&config.server),
         telemetry: telemetry_snapshot(&config.telemetry),
@@ -202,7 +202,7 @@ pub(crate) fn config_snapshot(config: &Config) -> OperatorConfigSnapshot {
     }
 }
 
-pub(crate) fn models_snapshot(
+pub fn models_snapshot(
     config: &Config,
     context_sizes: &onair_core::ContextSizeCache,
 ) -> OperatorModelsSnapshot {
@@ -262,10 +262,7 @@ pub(crate) fn models_snapshot(
     }
 }
 
-pub(crate) fn health_snapshot(
-    config: &Config,
-    health: &BackendHealthStore,
-) -> OperatorHealthSnapshot {
+pub fn health_snapshot(config: &Config, health: &BackendHealthStore) -> OperatorHealthSnapshot {
     let backend_ids = config
         .backends
         .iter()

@@ -8,7 +8,7 @@ use onair_obs::observe::{BackendHealthStore, InspectorStore};
 
 use onair_core::config::ConfigStore;
 
-use crate::routing::RoundRobinCounters;
+use onair_proxy::routing::RoundRobinCounters;
 
 pub struct ProxyState {
     pub config: Arc<ConfigStore>,

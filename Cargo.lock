@@ -931,6 +931,7 @@ dependencies = [
  "notify",
  "onair-core",
  "onair-obs",
+ "onair-proxy",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -984,6 +985,21 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "onair-proxy"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "onair-core",
+ "onair-obs",
+ "rand 0.8.6",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -18,10 +18,8 @@ use tower_http::trace::TraceLayer;
 use tracing::{debug, warn};
 use url::form_urlencoded;
 
-use crate::operator;
 use crate::proxy;
 use crate::proxy_state::ProxyState;
-use crate::routing::RoundRobinCounters;
 use onair_core::ContextSizeCache;
 use onair_core::auth::authenticate;
 use onair_core::config::{Config, ConfigStore, ResolvedContextLength};
@@ -32,6 +30,8 @@ use onair_obs::observe::{
     BackendHealthStore, ClientInfo, ContextSizeRefreshTask, HealthProbeTask,
     InspectorRequestRecord, InspectorStore, inspector,
 };
+use onair_proxy::operator;
+use onair_proxy::routing::RoundRobinCounters;
 
 const DEFAULT_INSPECTOR_SNAPSHOT_LIMIT: usize = 1_000;
 const MAX_INSPECTOR_SNAPSHOT_LIMIT: usize = 10_000;

@@ -12,7 +12,6 @@ use tokio::sync::watch;
 use tracing::{Instrument, info_span, warn};
 
 use crate::proxy_state::ProxyState;
-use crate::routing::{self, SelectedRoute};
 use onair_core::auth::authenticate;
 use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
 use onair_core::error::ApiError;
@@ -24,6 +23,7 @@ use onair_obs::observe::{
     InspectorRequestRecord, InspectorStore, InspectorTokenCounts, LiveRecord, RequestTimeline,
     TimelineEvent,
 };
+use onair_proxy::routing::{self, SelectedRoute};
 
 mod attempt;
 mod inspector;
