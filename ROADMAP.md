@@ -38,3 +38,27 @@ These items are ordered roughly by dependency and operator value, not by impleme
 - Request queueing, load shedding, and adaptive routing.
 - Multi-tenant policy packs and config provenance tracking.
 - Optional Prometheus exposition bridge.
+
+## Public Route Redesign
+
+- **Date:** 2026-06-05 JST
+- **Commit:** `cf28f57`
+
+The "what client API surface is exposed for a public model" decision is
+lifted out of `[[backend.model]]` and into a top-level `[[route]]` block.
+The new shape is route-driven: each `[[route]]` block declares one
+public-facing model (or one model-less path) and the backends that can
+serve it, so the exposure decision is made once per public model name
+instead of being duplicated per backend. `[[backend]].capabilities` is
+renamed to `[[backend]].supports` (the `capability` singular alias is
+removed), and the old `[[backend.model]]` block with its `endpoints`
+field is gone. Model-bearing routes use `public = "..."` with
+`backends = ["<model>@<backend>", ...]` (the `model@backend` syntax
+reads as "upstream model name `model` served by backend `backend`");
+model-less routes use `path = "..."` with bare backend ids in
+`backends`. `expose = [...]` lists the client API surfaces the route
+accepts. A strict-require-route rule rejects any public model that
+lacks a matching `[[route]]` (the operator's signal that the exposure
+decision was not made), and the validator emits a `tracing::warn!` when
+an entry in `route.backends` has no overlap between `backend.supports`
+and the markers implied by `route.expose`.

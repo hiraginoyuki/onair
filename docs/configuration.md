@@ -68,14 +68,14 @@ api_key_env = "ONAIR_DEV_API_KEY"
 id = "local-vllm"
 base_url = "http://127.0.0.1:8000"
 api_key_env = "LOCAL_VLLM_API_KEY"
-capabilities = ["chat", "responses", "streaming", "tools"]
+supports = ["chat", "responses", "streaming", "tools"]
 timeout_ms = 120000
 
-[[backend.model]]
+[[route]]
 public = "gpt-4o-mini"
-backend = "llama-3.1-8b-instruct"
+expose = ["chat", "responses"]
+backends = ["llama-3.1-8b-instruct@local-vllm"]
 context_length = "upstream"
-endpoints = ["chat", "responses"]
 ```
 
 onair interprets the file as routing and visibility policy:
@@ -86,14 +86,17 @@ onair interprets the file as routing and visibility policy:
 - Each `[[client]]` adds one authenticated identity and may extend that
   identity's model whitelist.
 - Each `[[backend]]` defines one upstream OpenAI-compatible service plus
-  capability markers that decide which `/v1/*` request families it can
+  `supports` markers that decide which `/v1/*` request families it can
   receive.
-- Each `[[backend.model]]` maps one public model name to the backend model name
-  that upstream should receive.
+- Each `[[route]]` declares one public-facing model (or one model-less path)
+  and the backends that can serve it. Model-bearing routes use
+  `public = "..."` and `backends = ["model@backend", ...]`; model-less
+  routes use `path = "..."` and bare backend ids in `backends`. `expose`
+  lists the client API surfaces this route accepts.
 - `[routing]` chooses how to select among multiple compatible backend routes
   and how many fallback attempts to allow before response commitment.
 
-See [routing.md](routing.md) for capability and endpoint marker semantics.
+See [routing.md](routing.md) for support and expose marker semantics.
 See [observability.md](observability.md) for telemetry, debug capture,
 inspector, and health details.
 
@@ -106,11 +109,12 @@ or invalid model/client/backend rules keep the previous config active.
 
 Reloaded immediately:
 
-- `[access]`, `[[client]]`, `[[backend]]`, `[[backend.model]]`,
-  `[routing]`, `[debug_capture]`, `[inspector]`, `[health]`,
-  `[server].trusted_proxy_cidrs`, backend auth, model mappings, capabilities,
-  timeouts, context metadata, client-address trust policy, debug capture
-  settings, inspector runtime settings, and health probe settings.
+- `[access]`, `[[client]]`, `[[backend]]`, `[[route]]`, `[routing]`,
+  `[debug_capture]`, `[inspector]`, `[health]`,
+  `[server].trusted_proxy_cidrs`, backend auth, route declarations, backend
+  `supports`, timeouts, context metadata, client-address trust policy,
+  debug capture settings, inspector runtime settings, and health probe
+  settings.
 
 Restart required:
 
@@ -155,14 +159,15 @@ chain and resolved the same way: the closest valid hop wins.
 
 ## Context Length
 
-- Omitting `[[backend.model]].context_length` or setting it to `"none"` hides
+- Omitting `[[route]].context_length` or setting it to `"none"` hides
   the value, which is the default OpenAI-compatible behavior. No metadata is
   exposed for that public model in `/v1/models` or `/props`.
-- `[[backend.model]].context_length = <integer>` returns a fixed value for
+- `[[route]].context_length = <integer>` returns a fixed value for
   that public model. `/v1/models` and `/v1/models/{model}` expose
   `meta.n_ctx` and `meta.n_ctx_train`, both equal to the configured integer.
-- `[[backend.model]].context_length = "upstream"` forwards the live context
-  size from the backend that owns this route. onair issues a background
+- `[[route]].context_length = "upstream"` forwards the live context
+  size from the first backend in `route.backends` (the one whose
+  `/props?model=<backend_model>` will be polled). onair issues a background
   `GET <backend.base_url>/props?model=<backend_model>` to the backend on a
   60 s interval and caches the `default_generation_settings.n_ctx` value.
   `/v1/models` and `/v1/models/{model}` expose the value as `meta.n_ctx`
@@ -177,15 +182,83 @@ chain and resolved the same way: the closest valid hop wins.
   single refresh tick; the next tick retries on its own schedule.
 - `[[backend]].context_length` is not a recognized field. Old configs that
   use it fail to load with a serde `unknown field` error pointing to the
-  exact field. Move the value to a `[[backend.model]].context_length` entry
+  exact field. Move the value to a `[[route]].context_length` entry
   (either an integer or `"upstream"`).
 - The old `"inherit"` mode is no longer accepted. Replace it with
   `"upstream"` to forward the live value, or with the desired integer if
   the value is known at config time.
 
+## `[[route]]` Schema
+
+`[[route]]` blocks are the operator's "what client API surface is exposed
+for this public model" declaration. A `[[route]]` is required for every
+public model referenced by `[access].default_models` or any
+`[[client]].models`, for synthetic `/v1/models` output, and for any
+model-bearing request. Model-less paths (such as `/v1/embeddings`) use
+`path = "..."` instead of `public = "..."`.
+
+Fields:
+
+- `public = "<model-name>"` (string, optional): the public model ID for
+  this route. Exactly one of `public` or `path` per block.
+- `path = "<request-path>"` (string, optional): the model-less request path
+  for this route. Must start with `/`. Exactly one of `public` or `path`
+  per block.
+- `expose = [...]` (string set, default `[]`): the client API surfaces
+  this route accepts. See [routing.md](routing.md#backend-supports) for
+  the marker vocabulary. Empty means "any native endpoint or feature
+  marker the backend supports"; compatibility paths always require an
+  explicit compat marker.
+- `backends = [...]` (string list, default `[]`): the upstreams that may
+  serve this route. For model-bearing routes each entry is
+  `"<model>@<backend>"` (the upstream model name `<model>` served by
+  backend `<backend>`); for model-less routes each entry is a bare
+  backend id. The list order is priority order for primary selection and
+  also seeds the fallback list. The referenced backend must exist in
+  `[[backend]]`; otherwise config load fails.
+- `context_length` (optional, model-bearing routes only): omitted or
+  `"none"` hides the value (the default); an integer literal sets a
+  fixed `n_ctx`; `"upstream"` forwards the live value from the first
+  backend's `/props?model=<backend_model>`. See
+  [Context Length](#context-length) above.
+- Per-route policy overrides (each defaults to the backend value):
+  `tool_schema_mode`, `responses_store`, `responses_max_output_tokens`,
+  `chat_stream_usage`. See [routing.md](routing.md#route-policies) for
+  the full semantics.
+
+The previous `[[backend.model]]` block and its `endpoints` field are
+removed. Any public model name that was previously listed in
+`[[backend.model]]` must be re-declared under `[[route]]`, or config
+load fails. The `capability` (singular) TOML alias for the backend
+marker field is also removed; use `supports = [...]`.
+
+### Strict-require-route
+
+Every public model referenced anywhere in the config (in
+`[access].default_models`, in any `[[client]].models`, or by name in a
+now-removed `[[backend.model]]`) must have a matching `[[route]]` block
+with `public = "<that name>"`, or config load fails. This is the
+operator's signal that the exposure decision was not made; add a
+`[[route]]` or remove the model from the client. For example, a client
+with `models = ["gpt-4o"]` and no `[[route]] public = "gpt-4o"` fails to
+load with:
+
+```text
+invalid config: client 'dev' references public model 'gpt-4o' which has
+no [[route]] declaration; add a [[route]] block or remove the model
+from the client
+```
+
+For each entry in `route.backends`, the validator also checks whether
+`backend.supports` overlaps with the union of "native markers" implied
+by `route.expose` (or the route's compat-marker combinations). When there
+is no overlap the validator emits a `tracing::warn!` and the config
+still loads; the operator can see the empty candidate set on
+`/_onair/operator/config` and act on the warning.
+
 ## Capability And Endpoint Marker Validation
 
-`[[backend]].capabilities` and `[[backend.model]].endpoints` accept a set of
+`[[backend]].supports` and `[[route]].expose` accept a set of
 marker strings that the router matches against `/v1/*` path families,
 streaming, tool use, and the two explicit compat paths
 (`responses_via_chat_completions`, `chat_completions_via_responses`).
@@ -221,9 +294,9 @@ Error messages name the location, the offending marker, and the full
 known list, for example:
 
 ```text
-invalid config: backend 'w1998-llamacpp' model 'qwen-3.6-35b-a3b' endpoint
-'responses_via_chat_completion' is not a recognized marker; allowed: all,
-streaming, chat, chat_completions, ...
+invalid config: route 'public=gpt-4o' endpoint 'responses_via_chat_completion'
+is not a recognized marker; allowed: all, streaming, chat, chat_completions,
+...
 ```
 
 Both policies are reloaded immediately when the config file changes.

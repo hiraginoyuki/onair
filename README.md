@@ -28,11 +28,11 @@ current behavior and points to detailed operator/contributor references under
 - Each authenticated identity sees only its configured public model whitelist.
 - Public model names are mapped to backend model names after access checks pass.
 - `/v1/*` requests that are not handled by onair itself can be forwarded to a
-  compatible backend when backend capabilities allow it.
+  compatible backend when backend supports allow it.
 - `POST /v1/chat/completion` is accepted as a typo-compatible alias and
   forwarded upstream as `/v1/chat/completions`.
 - Native Chat Completions and Responses requests use matching native backend
-  capabilities when available.
+  supports when available.
 - Explicit compatibility markers can bridge client `/v1/responses` through
   upstream `/v1/chat/completions`, or client `/v1/chat/completions` through
   upstream `/v1/responses`.
@@ -136,12 +136,12 @@ api_key_env = "ONAIR_DEV_API_KEY"
 id = "local-vllm"
 base_url = "http://127.0.0.1:8000"
 api_key_env = "LOCAL_VLLM_API_KEY"
-capabilities = ["chat", "responses", "streaming", "tools"]
+supports = ["chat", "responses", "streaming", "tools"]
 
-[[backend.model]]
+[[route]]
 public = "gpt-4o-mini"
-backend = "llama-3.1-8b-instruct"
-endpoints = ["chat", "responses"]
+expose = ["chat", "responses"]
+backends = ["llama-3.1-8b-instruct@local-vllm"]
 ```
 
 See [docs/configuration.md](docs/configuration.md) for the full config model,
@@ -153,12 +153,18 @@ logging, and API key guidance.
 Compatibility routing is explicit. A native endpoint marker does not imply a
 compatibility path.
 
-| Client endpoint | Upstream endpoint | Backend capability | Route marker |
+| Client endpoint | Upstream endpoint | Backend supports | Route expose |
 | --- | --- | --- | --- |
-| `/v1/chat/completions` | `/v1/chat/completions` | `chat` or `chat_completions` | `chat` or `chat_completions` when `endpoints` is non-empty |
-| `/v1/responses` | `/v1/responses` | `responses` | `responses` when `endpoints` is non-empty |
-| `/v1/responses` | `/v1/chat/completions` | `chat` or `chat_completions` | `responses_via_chat_completions` in backend `capabilities` or route `endpoints` |
-| `/v1/chat/completions` | `/v1/responses` | `responses` | `chat_completions_via_responses` in backend `capabilities` or route `endpoints` |
+| `/v1/chat/completions` | `/v1/chat/completions` | `chat` or `chat_completions` | `chat` or `chat_completions` when `expose` is non-empty |
+| `/v1/responses` | `/v1/responses` | `responses` | `responses` when `expose` is non-empty |
+| `/v1/responses` | `/v1/chat/completions` | `chat` or `chat_completions` | `responses_via_chat_completions` in backend `supports` or route `expose` |
+| `/v1/chat/completions` | `/v1/responses` | `responses` | `chat_completions_via_responses` in backend `supports` or route `expose` |
+
+A `[[route]]` block is required for every public model referenced in
+`[access].default_models` or any `[[client]].models`. The `model@backend`
+syntax binds an upstream model name to a configured backend; bare backend
+ids in `backends` are for model-less routes. See
+[docs/routing.md](docs/routing.md#public-routes) for the full syntax.
 
 For example, a Responses-native backend can expose a public Chat Completions
 route by using the explicit compatibility endpoint marker:
@@ -167,15 +173,15 @@ route by using the explicit compatibility endpoint marker:
 [[backend]]
 id = "responses-wrapper"
 base_url = "http://127.0.0.1:8001"
-capabilities = ["responses", "streaming", "tools"]
+supports = ["responses", "streaming", "tools"]
 
-[[backend.model]]
+[[route]]
 public = "gpt-4o"
-backend = "backend-responses-model"
-endpoints = ["chat_completions_via_responses", "tools"]
+expose = ["chat_completions_via_responses", "tools"]
+backends = ["backend-responses-model@responses-wrapper"]
 ```
 
-See [docs/routing.md](docs/routing.md) for capability markers, native
+See [docs/routing.md](docs/routing.md) for support / expose markers, native
 preference, compatibility conversions, route-level policies, sticky /
 round-robin / weighted-random strategies, fallback attempts, prompt caching,
 and tool-call constraints.
@@ -185,7 +191,7 @@ and tool-call constraints.
 - [docs/configuration.md](docs/configuration.md): config file structure,
   startup config path, hot reload, access rules, client address handling,
   context metadata, and API key guidance.
-- [docs/routing.md](docs/routing.md): endpoint/capability markers,
+- [docs/routing.md](docs/routing.md): endpoint/support/expose markers,
   compatibility routing, route policies, sticky / round-robin /
   weighted-random strategies, fallback attempts, prompt caching, and
   request conversion policy.

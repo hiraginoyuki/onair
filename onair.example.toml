@@ -46,11 +46,10 @@ path = "/v1/models"
 strategy = "priority"
 # Extra compatible backends to try after a pre-response connect/send/timeout failure. Set 0 to disable.
 fallback_attempts = 1
-# Behavior when [[backend]].capabilities or [[backend.model]].endpoints contain
-# a string the router does not recognize (for example a typo'd
-# "responses_via_chat_completion"). Default is "warn" (load succeeds, log a
-# warning at load and reload time). Use "error" to refuse to load the config
-# until the unknown marker is fixed.
+# Behavior when [[backend]].supports or [[route]].expose contain a string the
+# router does not recognize (for example a typo'd "responses_via_chat_completion").
+# Default is "warn" (load succeeds, log a warning at load and reload time). Use
+# "error" to refuse to load the config until the unknown marker is fixed.
 unknown_capability_policy = "warn"
 unknown_endpoint_policy = "warn"
 
@@ -64,6 +63,8 @@ id = "dev"
 api_key = "replace-with-generated-onair-client-key"
 models = ["gpt-4o"]
 
+# A `[[backend]]` block is a physical upstream. `supports` lists what the upstream
+# can receive; `[[route]]` blocks (below) decide what the proxy actually exposes.
 [[backend]]
 id = "local-vllm"
 base_url = "http://127.0.0.1:8000"
@@ -72,46 +73,64 @@ base_url = "http://127.0.0.1:8000"
 # Compatibility routes require explicit markers:
 # - "responses_via_chat_completions" for client /v1/responses -> upstream /v1/chat/completions.
 # - "chat_completions_via_responses" for client /v1/chat/completions -> upstream /v1/responses.
-# Typos in capability or endpoint marker names are reported at load and reload
-# time. The default policy is "warn" (log only). Set the routing policies below
-# to "error" to fail to load when a marker is not recognized.
-# Add "tools" here, and to a model route's endpoints when endpoints is non-empty, only if that backend/template supports function tools.
+# Typos in support or expose marker names are reported at load and reload time.
+# The default policy is "warn" (log only). Set the routing policies above to
+# "error" to fail to load when a marker is not recognized.
+# Add "tools" here, and to a [[route]]'s expose list when expose is non-empty, only if that backend/template supports function tools.
 # Optional: tool_schema_mode = "llamacpp_compat" can relax converted Responses tool schemas for llama.cpp chat templates.
 # Optional: responses_store = "force_false" adds store=false to upstream Responses requests when clients omit it.
 # Optional: responses_max_output_tokens = "drop" removes upstream Responses max_output_tokens for wrappers that reject it.
 # Optional: chat_stream_usage = "insert" asks Chat Completions backends for streaming usage chunks for metrics; injected usage chunks are filtered unless the client requested include_usage.
 # Use "force_true" only if operator telemetry should override explicit client include_usage=false upstream; client responses still honor the original opt-in.
-capabilities = ["chat", "responses", "streaming"]
+supports = ["chat", "responses", "streaming"]
 timeout_ms = 120000
 
-# Model routes are optional for model-less endpoints, but required for model-bearing requests and /v1/models output.
-[[backend.model]]
+# A `[[route]]` block declares one public-facing model (or path) and the backends
+# that can serve it. Each entry in `backends` is either "model@backend" (upstream
+# model name `model` served by backend `backend`) for model-bearing routes, or a
+# bare backend id for model-less routes. The order of `backends` is priority order
+# when several compatible backends match; the same order also seeds the fallback list.
+# `expose` lists the client API surfaces this public model accepts. It can further
+# restrict the route to endpoint keys such as `chat`, `chat_completions`,
+# `responses`, `responses_via_chat_completions`, `chat_completions_via_responses`,
+# `embeddings`, plus feature markers such as `tools`. If omitted or empty, the
+# route is allowed for native endpoints and feature markers supported by the
+# backend; compatibility still requires an exact compatibility marker.
+[[route]]
 public = "gpt-4o-mini"
-backend = "llama-3.1-8b-instruct"
+expose = ["chat", "responses"]
+backends = ["llama-3.1-8b-instruct@local-vllm"]
 # Optional: omitted or "none" hides the value, integer literal sets a fixed n_ctx, "upstream" forwards the
-# live n_ctx from this backend's /props?model=<backend>. See docs/configuration.md for details.
+# live n_ctx from the first backend's /props?model=<backend>. See docs/configuration.md for details.
 context_length = "upstream"
-endpoints = ["chat", "responses"]
-# endpoints = ["chat", "responses", "tools"] # if this model route supports function tools
+# expose = ["chat", "responses", "tools"] # if this route supports function tools
 
-[[backend.model]]
+[[route]]
 public = "gpt-4o"
-backend = "llama-3.1-70b-instruct"
-endpoints = ["chat"]
-# endpoints = ["chat", "tools"] # if this chat-compat route supports function tools
-# endpoints = ["responses_via_chat_completions"] # client /v1/responses -> upstream /v1/chat/completions
-# tool_schema_mode = "llamacpp_compat" # optional per-model override for Responses-to-Chat tool schemas
-# responses_store = "force_false" # optional per-model override for upstream Responses wrappers that require it
-# responses_max_output_tokens = "drop" # optional per-model override for upstream Responses wrappers that reject max_output_tokens
-# chat_stream_usage = "insert" # optional per-model override for Chat Completions stream usage requests
+expose = ["chat"]
+backends = ["llama-3.1-70b-instruct@local-vllm"]
+# expose = ["chat", "tools"] # if this chat-compat route supports function tools
+# expose = ["responses_via_chat_completions"] # client /v1/responses -> upstream /v1/chat/completions
+# tool_schema_mode = "llamacpp_compat" # optional per-route override for Responses-to-Chat tool schemas
+# responses_store = "force_false" # optional per-route override for upstream Responses wrappers that require it
+# responses_max_output_tokens = "drop" # optional per-route override for upstream Responses wrappers that reject max_output_tokens
+# chat_stream_usage = "insert" # optional per-route override for Chat Completions stream usage requests
+
+# Model-less route: a `path = "..."` block exposes a non-model endpoint (such as
+# /v1/embeddings) to clients. The entries in `backends` are bare backend ids
+# (no `@`) because there is no model name to bind.
+[[route]]
+path = "/v1/embeddings"
+expose = ["embeddings"]
+backends = ["local-vllm"]
 
 # Example for a Responses-native backend exposed to Chat Completions clients:
 # [[backend]]
 # id = "responses-wrapper"
 # base_url = "http://127.0.0.1:8001"
-# capabilities = ["responses", "streaming", "tools"]
+# supports = ["responses", "streaming", "tools"]
 #
-# [[backend.model]]
+# [[route]]
 # public = "gpt-4o"
-# backend = "backend-responses-model"
-# endpoints = ["chat_completions_via_responses", "tools"]
+# expose = ["chat_completions_via_responses", "tools"]
+# backends = ["backend-responses-model@responses-wrapper"]

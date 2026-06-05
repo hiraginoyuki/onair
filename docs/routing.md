@@ -1,8 +1,8 @@
 # Routing
 
-onair routes by public model, endpoint family, capability markers, and
-per-model endpoint markers. Native endpoint support is preferred when a route
-explicitly supports the requested native endpoint. Compatibility paths require
+onair routes by public model, endpoint family, support markers, and
+per-route expose markers. Native endpoint support is preferred when a route
+explicitly exposes the requested native endpoint. Compatibility paths require
 explicit compatibility markers.
 
 ## Terminology
@@ -10,28 +10,29 @@ explicit compatibility markers.
 - Public model: the model ID visible to clients.
 - Backend model: the model ID sent to the upstream backend after auth/access
   checks pass.
-- Backend capability: a `[[backend]].capabilities` marker saying what an
-  upstream can receive.
-- Model endpoint: a `[[backend.model]].endpoints` marker saying what a public
-  model may expose.
+- Backend supports: a `[[backend]].supports` marker saying what an upstream
+  can receive.
+- Route expose: a `[[route]].expose` marker saying what client API surfaces
+  a public model (or model-less path) may accept.
 - Compatibility marker: an explicit marker that chooses a request/response
   translation path for a public model.
 
 ## Endpoint Matrix
 
-| Client endpoint | Upstream endpoint | Backend capability | Route marker |
+| Client endpoint | Upstream endpoint | Backend supports | Route expose |
 | --- | --- | --- | --- |
-| `/v1/chat/completions` | `/v1/chat/completions` | `chat` or `chat_completions` | `chat` or `chat_completions` when `endpoints` is non-empty |
-| `/v1/responses` | `/v1/responses` | `responses` | `responses` when `endpoints` is non-empty |
-| `/v1/responses` | `/v1/chat/completions` | `chat` or `chat_completions` | `responses_via_chat_completions` in backend `capabilities` or route `endpoints` |
-| `/v1/chat/completions` | `/v1/responses` | `responses` | `chat_completions_via_responses` in backend `capabilities` or route `endpoints` |
+| `/v1/chat/completions` | `/v1/chat/completions` | `chat` or `chat_completions` | `chat` or `chat_completions` when `expose` is non-empty |
+| `/v1/responses` | `/v1/responses` | `responses` | `responses` when `expose` is non-empty |
+| `/v1/responses` | `/v1/chat/completions` | `chat` or `chat_completions` | `responses_via_chat_completions` in backend `supports` or route `expose` |
+| `/v1/chat/completions` | `/v1/responses` | `responses` | `chat_completions_via_responses` in backend `supports` or route `expose` |
 
-## Backend Capabilities
+## Backend Supports
 
-`[[backend]].capabilities` is a backend-wide marker list. `capability` is
-accepted as a TOML alias.
+`[[backend]].supports` is a backend-wide marker list. It is the only field
+that controls what an upstream can receive; there is no `capability` (singular)
+alias and the old `[[backend.model]].endpoints` field is gone.
 
-Capability markers are matched against `/v1/*` path families and common
+Support markers are matched against `/v1/*` path families and common
 aliases:
 
 - `chat` or `chat_completions` for native `/v1/chat/completions`.
@@ -50,12 +51,12 @@ aliases:
   `uploads`, and similar first path segments.
 - `streaming` for `stream: true` requests.
 - `tools`, `tool_calls`, `function_calling`, or `functions` for requests with
-  a non-empty `tools` array. If a model route has a non-empty `endpoints`
-  list, that route must also include a tool marker before tool-bearing
-  requests are forwarded.
+  a non-empty `tools` array. If a route has a non-empty `expose` list, that
+  route must also include a tool marker before tool-bearing requests are
+  forwarded.
 - `all` as a broad marker for native `/v1/*` paths and optional feature
   markers. Compatibility paths still require an exact compatibility marker on
-  the backend or model route.
+  the backend or route.
 
 For a backend that should receive any OpenAI-compatible HTTP route it supports,
 use:
@@ -65,44 +66,123 @@ use:
 id = "openai"
 base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
-capabilities = ["all", "streaming"]
+supports = ["all", "streaming"]
 ```
 
-## Model Endpoints
+## Public Routes
 
-`[[backend.model]]` entries are optional for backends that only serve
-model-less endpoints. They are required for model-bearing requests, synthetic
-`/v1/models` output, and public-to-backend model rewrites.
+`[[route]]` blocks declare one public-facing model (or one model-less path)
+and the backends that can serve it. A `[[route]]` is required for every
+model-bearing request, for synthetic `/v1/models` output, for public-to-backend
+model rewrites, and for any model name referenced by a `[[client]]` model
+whitelist or `[access].default_models`. Model-less paths (such as
+`/v1/embeddings`) opt in by setting `path = "..."` instead of `public = "..."`.
 
-`[[backend.model]].endpoints` can further restrict a model route to endpoint
-keys such as `chat`, `chat_completions`, `responses`,
-`responses_via_chat_completions`, `chat_completions_via_responses`, `audio`,
-or `embeddings`, plus feature markers such as `tools`.
+A `[[route]]` block has the following shape:
 
-If omitted or empty, the model route is allowed for native endpoints and
-feature markers supported by the backend; compatibility still requires an
-exact compatibility marker at backend level.
+- `public = "..."` for model-bearing routes, or `path = "..."` for
+  model-less routes. Exactly one of `public` / `path` per block.
+- `expose = [...]` lists the client API surfaces this route accepts. It can
+  further restrict the route to endpoint keys such as `chat`,
+  `chat_completions`, `responses`, `responses_via_chat_completions`,
+  `chat_completions_via_responses`, `embeddings`, plus feature markers such
+  as `tools`. If omitted or empty, the route is allowed for native endpoints
+  and feature markers supported by the backend; compatibility still requires
+  an exact compatibility marker.
+- `backends = [...]` lists the upstreams that may serve this route. For
+  model-bearing routes each entry is `"model@backend"`: the upstream model
+  name `model` served by backend `backend`. For model-less routes each entry
+  is a bare backend id (no `@`) because there is no model name to bind.
+- Optional per-route policy overrides:
+  `tool_schema_mode`, `responses_store`, `responses_max_output_tokens`,
+  `chat_stream_usage`. These override the backend defaults for that route
+  only.
+- Optional `context_length` for model-bearing routes: `omitted` or `"none"`
+  hides the value, an integer literal sets a fixed `n_ctx`, and `"upstream"`
+  forwards the live `n_ctx` from the first backend's
+  `/props?model=<backend_model>`. See
+  [configuration.md](configuration.md#context-length) for the full behavior.
 
-Backend order is priority order when multiple compatible routes match, and
-also for model-less requests.
+### `model@backend` syntax
+
+The `model@backend` form is read as "upstream model name `model` served by
+backend `backend`". The model comes first because in the routing context the
+model is the primary noun: the operator asks "where does GPT-5 go?", and
+`gpt-5@openai` reads as "GPT-5 at OpenAI". Model-less routes drop the
+`model@` prefix entirely and use bare backend ids.
+
+```toml
+# Model-bearing route: public "gpt-4o" maps to upstream "gpt-4o" on backend
+# "openai", with chat/responses/tools allowed.
+[[route]]
+public = "gpt-4o"
+expose = ["chat", "responses", "tools"]
+backends = ["gpt-4o@openai"]
+
+# Model-bearing route: same public model, but the client /v1/responses is
+# translated to upstream /v1/chat/completions (no native "responses" support
+# on this backend). The upstream model name is "llama-3".
+[[route]]
+public = "llama-3-frontend"
+expose = ["responses_via_chat_completions"]
+backends = ["llama-3@llama"]
+
+# Model-less route: client /v1/embeddings is served by backend "llama" with
+# no model rewrite.
+[[route]]
+path = "/v1/embeddings"
+expose = ["embeddings"]
+backends = ["llama"]
+```
+
+The order of `backends` is priority order when multiple compatible backends
+match, and it also seeds the fallback list.
+
+### Strict-require-route
+
+Every public model referenced anywhere in the config (in
+`[access].default_models`, in any `[[client]].models`, or by name in a
+now-removed `[[backend.model]]`) must have a matching `[[route]]` block with
+`public = "<that name>"`, or config load fails with an error. This is the
+operator's signal that the exposure decision was not made; add a `[[route]]`
+or remove the model from the client.
+
+For each entry in `route.backends`, the validator also checks whether
+`backend.supports` overlaps with the union of "native markers" implied by
+`route.expose` (or the route's compat-marker combinations). When there is no
+overlap the validator emits a `tracing::warn!` and the config still loads;
+the operator can see the empty candidate set on `/_onair/operator/config`
+and act on the warning. This warning is intentional: removing it or
+promoting it to a load-time error would be a behavior change.
+
+### Compat-marker semantics
+
+`route.expose` does NOT implicitly include compat markers. Concretely,
+`expose = ["chat"]` does not imply `chat_completions_via_responses` is
+available. Compat markers must be explicit in `expose`. The compat-marker
+decision logic in `request_mode_for_responses` and
+`request_mode_for_chat_completions` is unchanged by the schema refactor;
+only the field name it reads from changed.
 
 Quick mental model:
 
-- `[[backend]].capabilities` says what the upstream backend can do.
-- `[[backend.model]].endpoints` says what this public model may expose.
-- A compatibility marker chooses a translation path for that public model.
+- `[[backend]].supports` says what the upstream backend can do.
+- `[[route]].expose` says what this public model (or path) may accept.
+- A compatibility marker chooses a translation path for that route.
 - Native routing wins when the native endpoint marker is also allowed.
+- A public model with no `[[route]]` is a config error, not a silent 404.
 
 Examples:
 
-- `capabilities = ["responses"]`: upstream can receive `/v1/responses`.
-- `endpoints = ["chat"]`: this public model accepts client Chat Completions
+- `supports = ["responses"]`: upstream can receive `/v1/responses`.
+- `expose = ["chat"]`: this public model accepts client Chat Completions
   requests natively.
-- `endpoints = ["chat_completions_via_responses"]`: this public model accepts
+- `expose = ["chat_completions_via_responses"]`: this public model accepts
   client Chat Completions requests and sends upstream Responses requests.
-- To force Chat-to-Responses compatibility, omit `chat` from that model route.
+- To force Chat-to-Responses compatibility, omit `chat` from that route's
+  `expose` list.
 
-onair validates the strings in `capabilities` and `endpoints` against the
+onair validates the strings in `supports` and `expose` against the
 known marker set at load and reload time. See
 [configuration.md](configuration.md#capability-and-endpoint-marker-validation)
 for the `unknown_capability_policy` / `unknown_endpoint_policy` settings
@@ -120,8 +200,8 @@ A route that allows `chat_completions_via_responses` serves client
 `/v1/chat/completions` by translating the request to upstream `/v1/responses`
 and translating successful responses back to Chat Completions shape.
 
-Routes with only `endpoints = ["chat"]` must not serve client `/v1/responses`
-through compatibility. Routes with only `endpoints = ["responses"]` must not
+Routes with only `expose = ["chat"]` must not serve client `/v1/responses`
+through compatibility. Routes with only `expose = ["responses"]` must not
 serve client `/v1/chat/completions` through compatibility.
 
 ## Route Policies
@@ -141,8 +221,8 @@ tools into Chat Completions format. Use `llamacpp_compat` only for a
 llama.cpp-style chat backend/template that rejects common JSON Schema
 fragments: it recursively removes `default`, collapses simple nullable
 `type = ["...", "null"]`, and collapses simple nullable `anyOf`/`oneOf` pairs
-in converted tool `parameters`. A `[[backend.model]].tool_schema_mode` value
-overrides the backend default for that model route. Native `responses` routes
+in converted tool `parameters`. A `[[route]].tool_schema_mode` value
+overrides the backend default for that route. Native `responses` routes
 and direct chat requests are not schema-sanitized by this setting.
 
 `[[backend]].responses_store` controls upstream Responses-compatible
@@ -151,8 +231,8 @@ untouched. Use `force_false` for a backend or wrapper that requires explicit
 non-storage: onair adds `"store": false` when forwarding native `/v1/responses`
 or Chat-to-Responses compatibility requests and only when the client omitted
 `store`; explicit client values are preserved. A
-`[[backend.model]].responses_store` value overrides the backend default for
-that model route. This setting does not affect direct chat requests or
+`[[route]].responses_store` value overrides the backend default for that
+route. This setting does not affect direct chat requests or
 Responses-to-Chat compatibility requests.
 
 `[[backend]].responses_max_output_tokens` controls upstream
@@ -161,8 +241,8 @@ generated or client-supplied `max_output_tokens` field unchanged. Use `drop`
 for a backend or wrapper that rejects the Responses field entirely, or use
 `rename_to_max_tokens` / `rename_to_max_completion_tokens` only if the backend
 explicitly expects one of those alternate names. A
-`[[backend.model]].responses_max_output_tokens` value overrides the backend
-default for that model route. This setting applies to native `/v1/responses`
+`[[route]].responses_max_output_tokens` value overrides the backend default
+for that route. This setting applies to native `/v1/responses`
 and Chat-to-Responses compatibility requests; it does not affect direct chat
 requests or Responses-to-Chat compatibility requests.
 
@@ -180,8 +260,8 @@ telemetry should override client request fidelity: onair enables
 `include_usage`, preserves other `stream_options` object fields, and replaces a
 non-object `stream_options` value with an object containing only
 `include_usage`; client responses still hide usage unless the original client
-request opted in. A `[[backend.model]].chat_stream_usage` value overrides the
-backend default for that model route. This setting applies to direct
+request opted in. A `[[route]].chat_stream_usage` value overrides the backend
+default for that route. This setting applies to direct
 `/v1/chat/completions` forwarding and to the Responses-to-Chat compatibility
 path because that path forwards upstream as Chat Completions; it does not
 apply to native `/v1/responses` or Chat-to-Responses compatibility requests.
