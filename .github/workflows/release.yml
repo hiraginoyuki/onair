@@ -260,15 +260,6 @@ jobs:
 
           now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-          if ! git ls-remote --heads origin nix-metadata | grep -q nix-metadata; then
-            echo "Bootstrapping nix-metadata branch"
-            git checkout -b nix-metadata
-            printf '{}\n' > metadata.json
-            git add metadata.json
-            git commit -m "chore(nix-metadata): initialize [skip ci]"
-            git push -u origin nix-metadata
-          fi
-
           git fetch origin nix-metadata
           git checkout nix-metadata
 
