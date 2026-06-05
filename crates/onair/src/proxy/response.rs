@@ -8,8 +8,6 @@ use axum::http::{Response, StatusCode};
 use futures_util::TryStreamExt;
 use tracing::{debug, warn};
 
-use crate::config::DebugCaptureConfig;
-use onair_core::error::ApiError;
 use crate::metrics::MetricLabels;
 use crate::observe::debug_capture::{CaptureOutcome, RequestCapture};
 use crate::observe::{
@@ -18,6 +16,8 @@ use crate::observe::{
     LiveRecord, RequestTimeline, TimelineEvent,
 };
 use crate::openai::{self, SseNormalizer, UsageDiagnostics, UsageTotals};
+use onair_core::config::DebugCaptureConfig;
+use onair_core::error::ApiError;
 
 use super::attempt::InspectorAttemptBuilder;
 use super::inspector::{InspectorRecord, inspector_tokens, record_inspector_request};

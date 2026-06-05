@@ -12,9 +12,6 @@ use tokio::sync::watch;
 use tracing::{Instrument, info_span, warn};
 
 use crate::app::AppState;
-use crate::auth::authenticate;
-use crate::config::{DebugCaptureConfig, DebugCaptureMode};
-use onair_core::error::ApiError;
 use crate::metrics::{MetricLabels, RequestTimer};
 use crate::observe::debug_capture::{self, CaptureOutcome, CaptureRequest, RequestCapture};
 use crate::observe::{
@@ -24,6 +21,9 @@ use crate::observe::{
 };
 use crate::openai;
 use crate::routing::{self, SelectedRoute};
+use onair_core::auth::authenticate;
+use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
+use onair_core::error::ApiError;
 
 mod attempt;
 mod inspector;

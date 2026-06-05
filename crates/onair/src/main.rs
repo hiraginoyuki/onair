@@ -1,6 +1,4 @@
 mod app;
-mod auth;
-mod config;
 mod metrics;
 mod observe;
 mod openai;
@@ -15,6 +13,7 @@ use std::time::Duration;
 
 use axum::Router;
 use clap::Parser;
+use onair_core::config::{Config, ConfigWatcher};
 use onair_core::error::Result;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -22,7 +21,6 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::app::AppState;
-use crate::config::{Config, ConfigWatcher};
 use crate::metrics::{Metrics, TelemetryGuard};
 
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);

@@ -4,8 +4,8 @@ use reqwest::Client;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::config::{ConfigStore, HealthConfig, ResolvedBackend};
 use crate::observe::BackendHealthStore;
+use onair_core::config::{ConfigStore, HealthConfig, ResolvedBackend};
 
 const INACTIVE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 

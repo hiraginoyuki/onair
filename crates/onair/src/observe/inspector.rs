@@ -8,13 +8,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::error;
 
-use crate::config::InspectorConfig;
-use onair_core::error::{Error, Result};
 use crate::observe::TimelineSnapshot;
+use onair_core::config::InspectorConfig;
+use onair_core::error::{Error, Result};
 
 use super::inspector_persistence::{InspectorPersistenceWriter, restore_records};
 
-const DEFAULT_RETENTION_REQUESTS: usize = 10_000;
 const MAX_RETENTION_REQUESTS: usize = 100_000;
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -520,36 +519,6 @@ pub(crate) struct InspectorTokenCounts {
     pub(crate) output: u64,
 }
 
-pub(crate) fn validate_config(config: &InspectorConfig) -> Result<()> {
-    if config.retention_requests == 0 {
-        return Err(Error::Config(
-            "inspector.retention_requests must be greater than zero".to_owned(),
-        ));
-    }
-    if config.retention_requests > MAX_RETENTION_REQUESTS {
-        return Err(Error::Config(format!(
-            "inspector.retention_requests must be at most {MAX_RETENTION_REQUESTS}"
-        )));
-    }
-    if config.persistence.enabled {
-        let Some(path) = config.persistence.path.as_ref() else {
-            return Err(Error::Config(
-                "inspector.persistence.path is required when persistence is enabled".to_owned(),
-            ));
-        };
-        if path.as_os_str().is_empty() {
-            return Err(Error::Config(
-                "inspector.persistence.path must not be empty".to_owned(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn default_retention_requests() -> usize {
-    DEFAULT_RETENTION_REQUESTS
-}
-
 fn unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -580,7 +549,7 @@ fn safe_segment(value: &str) -> Option<String> {
 mod tests {
     use super::super::inspector_persistence::stored_count;
     use super::*;
-    use crate::config::InspectorPersistenceConfig;
+    use onair_core::config::InspectorPersistenceConfig;
 
     fn temp_database_path(label: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()

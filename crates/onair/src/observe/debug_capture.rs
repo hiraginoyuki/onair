@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,9 +11,9 @@ use bytes::Bytes;
 use serde::Serialize;
 use tracing::warn;
 
-use crate::config::{DebugCaptureConfig, DebugCaptureMode};
 use crate::metrics::MetricLabels;
 use crate::openai::UsageDiagnostics;
+use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
 
 const INBOUND_BODY_FILE: &str = "inbound.body";
 const UPSTREAM_BODY_FILE: &str = "upstream.body";
@@ -203,40 +203,6 @@ pub enum CaptureOutcome {
         cached_input_tokens: u64,
         output_tokens: u64,
     },
-}
-
-pub fn validate_config(config: &DebugCaptureConfig) -> onair_core::error::Result<()> {
-    if !config.enabled {
-        return Ok(());
-    }
-
-    if config.directory.as_os_str().is_empty() {
-        return Err(onair_core::error::Error::Config(
-            "debug_capture.directory must not be empty when debug capture is enabled".to_owned(),
-        ));
-    }
-
-    if config
-        .directory
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err(onair_core::error::Error::Config(
-            "debug_capture.directory must not contain '..' components".to_owned(),
-        ));
-    }
-
-    if !config
-        .directory
-        .components()
-        .any(|component| matches!(component, Component::Normal(_)))
-    {
-        return Err(onair_core::error::Error::Config(
-            "debug_capture.directory must include a directory name".to_owned(),
-        ));
-    }
-
-    Ok(())
 }
 
 pub fn capture_request(

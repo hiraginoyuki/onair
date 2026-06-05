@@ -954,12 +954,16 @@ name = "onair-core"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "notify",
  "reqwest",
  "serde",
  "serde_json",
  "subtle",
  "thiserror",
+ "tokio",
  "toml",
+ "tracing",
+ "url",
 ]
 
 [[package]]

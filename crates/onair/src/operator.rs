@@ -3,12 +3,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::config::{
+use crate::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
+use onair_core::config::{
     Config, ContextLengthPolicy, DebugCaptureConfig, HealthConfig, InspectorConfig,
     ResolvedBackend, ResolvedClient, ResolvedContextLength, RoutingConfig, RoutingStrategy,
     ServerConfig, TelemetryConfig, TelemetryExporter,
 };
-use crate::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct OperatorRuntimeSnapshot {
@@ -63,7 +63,7 @@ pub(crate) struct TelemetrySnapshot {
 #[derive(Debug, Serialize)]
 pub(crate) struct DebugCaptureSnapshot {
     pub(crate) enabled: bool,
-    pub(crate) mode: crate::config::DebugCaptureMode,
+    pub(crate) mode: onair_core::config::DebugCaptureMode,
     pub(crate) directory: String,
 }
 
@@ -100,10 +100,10 @@ pub(crate) struct BackendSnapshot {
     pub(crate) base_url: String,
     pub(crate) api_key_configured: bool,
     pub(crate) timeout_ms: u64,
-    pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
-    pub(crate) responses_store: crate::config::ResponsesStorePolicy,
-    pub(crate) responses_max_output_tokens: crate::config::ResponsesMaxOutputTokensPolicy,
-    pub(crate) chat_stream_usage: crate::config::ChatStreamUsagePolicy,
+    pub(crate) tool_schema_mode: onair_core::config::ToolSchemaMode,
+    pub(crate) responses_store: onair_core::config::ResponsesStorePolicy,
+    pub(crate) responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
+    pub(crate) chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
     pub(crate) capabilities: Vec<String>,
     pub(crate) weight: u32,
     pub(crate) models: Vec<BackendModelSnapshot>,
@@ -115,10 +115,10 @@ pub(crate) struct BackendModelSnapshot {
     pub(crate) backend: String,
     pub(crate) context_length: Option<u64>,
     pub(crate) context_length_source: &'static str,
-    pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
-    pub(crate) responses_store: crate::config::ResponsesStorePolicy,
-    pub(crate) responses_max_output_tokens: crate::config::ResponsesMaxOutputTokensPolicy,
-    pub(crate) chat_stream_usage: crate::config::ChatStreamUsagePolicy,
+    pub(crate) tool_schema_mode: onair_core::config::ToolSchemaMode,
+    pub(crate) responses_store: onair_core::config::ResponsesStorePolicy,
+    pub(crate) responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
+    pub(crate) chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
     pub(crate) endpoints: Vec<String>,
 }
 
@@ -136,10 +136,10 @@ pub(crate) struct PublicModelSnapshot {
 pub(crate) struct ModelRouteSnapshot {
     pub(crate) backend: String,
     pub(crate) backend_model: String,
-    pub(crate) tool_schema_mode: crate::config::ToolSchemaMode,
-    pub(crate) responses_store: crate::config::ResponsesStorePolicy,
-    pub(crate) responses_max_output_tokens: crate::config::ResponsesMaxOutputTokensPolicy,
-    pub(crate) chat_stream_usage: crate::config::ChatStreamUsagePolicy,
+    pub(crate) tool_schema_mode: onair_core::config::ToolSchemaMode,
+    pub(crate) responses_store: onair_core::config::ResponsesStorePolicy,
+    pub(crate) responses_max_output_tokens: onair_core::config::ResponsesMaxOutputTokensPolicy,
+    pub(crate) chat_stream_usage: onair_core::config::ChatStreamUsagePolicy,
     pub(crate) endpoints: Vec<String>,
 }
 
@@ -204,7 +204,7 @@ pub(crate) fn config_snapshot(config: &Config) -> OperatorConfigSnapshot {
 
 pub(crate) fn models_snapshot(
     config: &Config,
-    context_sizes: &crate::observe::ContextSizeCache,
+    context_sizes: &onair_core::ContextSizeCache,
 ) -> OperatorModelsSnapshot {
     let mut models = BTreeMap::<String, PublicModelSnapshot>::new();
     for (public, resolved) in config.public_model_context_lengths_with_cache(context_sizes) {

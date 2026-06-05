@@ -4,69 +4,20 @@ use std::sync::Mutex;
 
 use rand::Rng;
 
+use crate::openai::RequestMode;
 #[cfg(test)]
-use crate::config::ContextLengthPolicy;
-use crate::config::{
+use onair_core::config::ContextLengthPolicy;
+use onair_core::config::{
     ChatStreamUsagePolicy, ResolvedBackend, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy,
     RoutingStrategy, ToolSchemaMode,
 };
 use onair_core::error::ApiError;
-use crate::openai::RequestMode;
 
 const RESPONSES_VIA_CHAT_COMPLETIONS: &str = "responses_via_chat_completions";
 const CHAT_COMPLETIONS_VIA_RESPONSES: &str = "chat_completions_via_responses";
 
-/// Recognized capability and endpoint marker strings.
-///
-/// The set is consulted by the config-side validator to flag typos like
-/// `responses_via_chat_completion` (missing trailing `s`). It mirrors the
-/// literals checked by `has_capability`, `supports_responses`,
-/// `supports_chat_compat`, `has_tool_capability`, and the two compat
-/// constants above, plus the path-family names enumerated in
-/// `path_capability_candidates` and the routing reference docs.
-///
-/// Keep this list in sync with new structural markers; it intentionally
-/// only contains the typo-prone structural set, not every possible
-/// forward-compatible path family.
-pub const KNOWN_MARKERS: &[&str] = &[
-    "all",
-    "streaming",
-    "chat",
-    "chat_completions",
-    "completions",
-    "responses",
-    "response",
-    "tools",
-    "tool_calls",
-    "function_calling",
-    "functions",
-    "responses_via_chat_completions",
-    "chat_completions_via_responses",
-    "embeddings",
-    "embedding",
-    "images",
-    "image",
-    "audio",
-    "files",
-    "file",
-    "models",
-    "model",
-    "batches",
-    "batch",
-    "fine_tuning",
-    "assistants",
-    "assistant",
-    "threads",
-    "thread",
-    "vector_stores",
-    "vector_store",
-    "uploads",
-    "upload",
-];
-
-pub fn is_known_marker(value: &str) -> bool {
-    KNOWN_MARKERS.contains(&value)
-}
+#[cfg(test)]
+pub use onair_core::{is_known_marker, KNOWN_MARKERS};
 
 #[derive(Clone)]
 pub struct SelectedRoute {
@@ -576,7 +527,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::time::Duration;
 
-    use crate::config::{
+    use onair_core::config::{
         ModelRoute, ResolvedBackend, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy,
         ToolSchemaMode,
     };

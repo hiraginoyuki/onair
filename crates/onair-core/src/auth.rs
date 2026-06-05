@@ -1,8 +1,8 @@
 use axum::http::HeaderMap;
-use onair_core::error::ApiError;
 use subtle::ConstantTimeEq;
 
 use crate::config::ResolvedClient;
+use crate::error::ApiError;
 
 #[derive(Debug, Clone)]
 pub struct Identity {

@@ -15,13 +15,15 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use onair_core::error::{Error, Result};
-use crate::observe::{ContextSizeCache, IpCidr, debug_capture, inspector};
+use crate::error::{Error, Result};
+use crate::{ContextSizeCache, IpCidr};
 
 const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_MAX_ATTEMPTS: usize = 5;
 const MAX_FALLBACK_ATTEMPTS: usize = 16;
+const MAX_INSPECTOR_RETENTION_REQUESTS: usize = 1_000_000;
+const DEFAULT_INSPECTOR_RETENTION_REQUESTS: usize = 10_000;
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -311,7 +313,7 @@ impl Default for InspectorConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            retention_requests: inspector::default_retention_requests(),
+            retention_requests: DEFAULT_INSPECTOR_RETENTION_REQUESTS,
             allow_remote: false,
             persistence: InspectorPersistenceConfig::default(),
         }
@@ -556,8 +558,8 @@ impl Config {
     }
 
     fn resolve(file: ConfigFile) -> Result<Self> {
-        debug_capture::validate_config(&file.debug_capture)?;
-        inspector::validate_config(&file.inspector)?;
+        validate_debug_capture_config(&file.debug_capture)?;
+        validate_inspector_config(&file.inspector)?;
         validate_health_config(&file.health)?;
         validate_routing_config(&file.routing)?;
 
@@ -821,6 +823,68 @@ fn validate_health_config(config: &HealthConfig) -> Result<()> {
     Ok(())
 }
 
+fn validate_inspector_config(config: &InspectorConfig) -> Result<()> {
+    if config.retention_requests == 0 {
+        return Err(Error::Config(
+            "inspector.retention_requests must be greater than zero".to_owned(),
+        ));
+    }
+    if config.retention_requests > MAX_INSPECTOR_RETENTION_REQUESTS {
+        return Err(Error::Config(format!(
+            "inspector.retention_requests must be at most {MAX_INSPECTOR_RETENTION_REQUESTS}"
+        )));
+    }
+    if config.persistence.enabled {
+        let Some(path) = config.persistence.path.as_ref() else {
+            return Err(Error::Config(
+                "inspector.persistence.path is required when persistence is enabled".to_owned(),
+            ));
+        };
+        if path.as_os_str().is_empty() {
+            return Err(Error::Config(
+                "inspector.persistence.path must not be empty".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_debug_capture_config(config: &DebugCaptureConfig) -> Result<()> {
+    use std::path::Component;
+
+    if !config.enabled {
+        return Ok(());
+    }
+
+    if config.directory.as_os_str().is_empty() {
+        return Err(Error::Config(
+            "debug_capture.directory must not be empty when debug capture is enabled".to_owned(),
+        ));
+    }
+
+    if config
+        .directory
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(Error::Config(
+            "debug_capture.directory must not contain '..' components".to_owned(),
+        ));
+    }
+
+    if !config
+        .directory
+        .components()
+        .any(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err(Error::Config(
+            "debug_capture.directory must include a directory name".to_owned(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_routing_config(config: &RoutingConfig) -> Result<()> {
     if config.fallback_attempts > MAX_FALLBACK_ATTEMPTS {
         return Err(Error::Config(format!(
@@ -852,7 +916,7 @@ fn validate_markers(
     location: &str,
 ) -> Result<()> {
     for value in values {
-        if crate::routing::is_known_marker(value) {
+        if crate::is_known_marker(value) {
             continue;
         }
         match policy {
@@ -868,7 +932,7 @@ fn validate_markers(
                 return Err(Error::Config(format!(
                     "{location} {} '{value}' is not a recognized marker; allowed: {}",
                     kind.as_str(),
-                    crate::routing::KNOWN_MARKERS.join(", "),
+                    crate::KNOWN_MARKERS.join(", "),
                 )));
             }
         }
@@ -1067,7 +1131,7 @@ mod tests {
             "#,
         );
 
-        let cache = crate::observe::ContextSizeCache::new();
+        let cache = ContextSizeCache::new();
         let models = config.public_model_context_lengths_with_cache(&cache);
         match models.get("public-upstream").unwrap() {
             ResolvedContextLength::Upstream { n_ctx } => assert_eq!(*n_ctx, None),
