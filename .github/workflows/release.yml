@@ -231,7 +231,7 @@ jobs:
           for t in "${targets[@]}"; do
             url="https://github.com/${REPO}/releases/download/${TAG}/onair-${t}"
             nix_hash=$(nix-prefetch-url --type sha256 "$url")
-            sha=$(nix hash convert --to sha256 --hash-algo sha256 "$nix_hash")
+            sha=$(nix hash convert --to sri --hash-algo sha256 "$nix_hash")
             printf '%s -> %s\n' "$t" "$sha"
             if [ "$first" = "true" ]; then first=false; else hash_obj+=","; fi
             hash_obj+="\"${t}\":\"${sha}\""
