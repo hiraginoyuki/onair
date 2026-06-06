@@ -12,6 +12,7 @@ use serde::Serialize;
 use tracing::warn;
 
 use crate::metrics::MetricLabels;
+use crate::util::sanitize_for_storage;
 use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
 use onair_core::openai::UsageDiagnostics;
 
@@ -291,28 +292,11 @@ fn create_capture(
 fn capture_id(captured_at_unix_ms: u128, request_id: Option<&str>) -> String {
     let sequence = CAPTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut id = format!("{captured_at_unix_ms}-{}-{sequence}", std::process::id());
-    if let Some(request_id) = request_id.and_then(safe_request_id_segment) {
+    if let Some(request_id) = request_id.and_then(|value| sanitize_for_storage(value, 80)) {
         id.push('-');
         id.push_str(&request_id);
     }
     id
-}
-
-fn safe_request_id_segment(request_id: &str) -> Option<String> {
-    let segment = request_id
-        .chars()
-        .filter_map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                Some(character)
-            } else if character.is_ascii_graphic() {
-                Some('_')
-            } else {
-                None
-            }
-        })
-        .take(80)
-        .collect::<String>();
-    (!segment.is_empty()).then_some(segment)
 }
 
 fn unix_millis() -> u128 {

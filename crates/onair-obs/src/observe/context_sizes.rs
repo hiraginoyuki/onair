@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
+use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
+use futures_util::FutureExt;
 use onair_core::ContextSizeCache;
 use onair_core::config::{Config, ConfigStore, ContextLengthPolicy, RouteKey};
 use reqwest::Client;
@@ -42,49 +44,90 @@ impl Drop for ContextSizeRefreshTask {
 
 pub async fn refresh_once(http: &Client, cache: &ContextSizeCache, config: &Config) {
     let targets = collect_upstream_targets(config);
-    let mut active = BTreeSet::new();
+    let active: BTreeSet<String> = targets
+        .iter()
+        .map(|(public, _, _)| public.clone())
+        .collect();
+
+    let mut handles = Vec::with_capacity(targets.len());
     for (public, backend_id, backend_model) in &targets {
-        active.insert(public.clone());
-        let backend = match config.backends.iter().find(|b| &b.id == backend_id) {
-            Some(backend) => backend,
-            None => {
-                warn!(
-                    public = %public,
-                    backend = %backend_id,
-                    "context-size refresh skipped: backend not found"
-                );
-                continue;
-            }
+        let Some(backend) = config.backends.iter().find(|b| &b.id == backend_id) else {
+            warn!(
+                public = %public,
+                backend = %backend_id,
+                "context-size refresh skipped: backend not found"
+            );
+            continue;
         };
-        let result = fetch_upstream_n_ctx(
-            http,
-            &backend.base_url,
-            backend.api_key.as_deref(),
-            backend_model,
-        )
-        .await;
-        match result {
-            FetchResult::Ok(value) => {
-                debug!(
-                    public = %public,
-                    backend = %backend_id,
-                    n_ctx = value,
-                    "context-size refresh succeeded"
-                );
-                cache.set(public, Some(value), None);
+        let backend_url = backend.base_url.clone();
+        let backend_api_key = backend.api_key.clone();
+        let backend_id = backend_id.clone();
+        let public = public.clone();
+        let backend_model = backend_model.clone();
+        let http = http.clone();
+        let cache = cache.clone();
+        handles.push(tokio::spawn(async move {
+            let public = public;
+            let backend_id = backend_id;
+            let backend_model = backend_model;
+            let result = AssertUnwindSafe(fetch_upstream_n_ctx(
+                &http,
+                &backend_url,
+                backend_api_key.as_deref(),
+                &backend_model,
+            ))
+            .catch_unwind()
+            .await;
+            match result {
+                Ok(FetchResult::Ok(value)) => {
+                    debug!(
+                        public = %public,
+                        backend = %backend_id,
+                        n_ctx = value,
+                        "context-size refresh succeeded"
+                    );
+                    cache.set(&public, Some(value), None);
+                }
+                Ok(FetchResult::Err(kind)) => {
+                    warn!(
+                        public = %public,
+                        backend = %backend_id,
+                        error_kind = %kind,
+                        "context-size refresh failed"
+                    );
+                    cache.set(&public, None, Some(kind));
+                }
+                Err(panic) => {
+                    let message = panic_message(&panic);
+                    warn!(
+                        public = %public,
+                        backend = %backend_id,
+                        panic = %message,
+                        "context-size refresh panicked; isolating the failure"
+                    );
+                    cache.set(&public, None, Some("panic"));
+                }
             }
-            FetchResult::Err(kind) => {
-                warn!(
-                    public = %public,
-                    backend = %backend_id,
-                    error_kind = %kind,
-                    "context-size refresh failed"
-                );
-                cache.set(public, None, Some(kind));
-            }
+        }));
+    }
+
+    for handle in handles {
+        if let Err(error) = handle.await {
+            warn!(?error, "context-size refresh task join failed");
         }
     }
+
     cache.prune(&active);
+}
+
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = panic.downcast_ref::<&'static str>() {
+        (*message).to_owned()
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_owned()
+    }
 }
 
 fn collect_upstream_targets(config: &Config) -> Vec<(String, String, String)> {
