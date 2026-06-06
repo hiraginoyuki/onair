@@ -84,13 +84,10 @@ impl ProxyContext {
         }
     }
 
-    pub fn live_upsert(&self, mutate: impl FnOnce(&mut InspectorRequestRecord)) {
+    pub fn live_upsert(&self) {
         if let Some(live) = &self.live_record {
-            live.update(|record| {
-                let mut snapshot = build_live_record_from_context(self);
-                mutate(&mut snapshot);
-                *record = snapshot;
-            });
+            let snapshot = build_live_record_from_context(self);
+            live.update(|record| *record = snapshot);
         }
     }
 
@@ -103,7 +100,7 @@ impl ProxyContext {
     pub fn record_retried_attempt(&mut self, attempt: InspectorAttemptRecord) {
         self.backend_attempts.push(attempt.clone());
         self.retried_attempts.push(attempt);
-        self.live_upsert(refresh_live_record);
+        self.live_upsert();
     }
 
     pub fn record_final_attempt(
@@ -122,7 +119,7 @@ impl ProxyContext {
                 error_kind,
                 ended_us,
             ));
-            self.live_upsert(refresh_live_record);
+            self.live_upsert();
         }
     }
 }

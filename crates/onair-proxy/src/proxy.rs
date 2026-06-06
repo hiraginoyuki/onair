@@ -33,7 +33,6 @@ pub mod upstream;
 use self::attempt::{InspectorAttemptBuilder, InspectorAttemptInit};
 pub(super) use self::context::{
     ModelLogFields, PendingDebugCapture, ProxyContext, ProxyRequest, ensure_failure_debug_capture,
-    refresh_live_record,
 };
 use self::inspector::{
     PreflightInspectorRecord, RequestObservationBase, initial_live_record,
@@ -352,7 +351,7 @@ async fn do_proxy(
                 context.backend_remote_addr = response.remote_addr();
                 attempt_record.set_backend_remote_addr(context.backend_remote_addr);
                 context.current_attempt = Some(attempt_record);
-                context.live_upsert(refresh_live_record);
+                context.live_upsert();
                 break response;
             }
             Err(UpstreamSendError::Shutdown) => {
@@ -639,7 +638,7 @@ fn prepare_outbound(
     )
     .map_err(|error| ApiError::bad_request(error.message(), error.param()))?;
     attempt_record.mark_request_rewritten(context.timeline.mark(TimelineEvent::RequestRewritten));
-    context.live_upsert(refresh_live_record);
+    context.live_upsert();
     let upstream_query =
         openai::rewrite_query_model(request_query, context.route.backend_model.as_deref())
             .filter(|query| !query.is_empty());
@@ -679,7 +678,7 @@ fn prepare_outbound(
     if context.debug_capture.is_some() {
         attempt_record
             .mark_debug_capture_done(context.timeline.mark(TimelineEvent::DebugCaptureDone));
-        context.live_upsert(refresh_live_record);
+        context.live_upsert();
     }
 
     let mut upstream_request = context
@@ -711,7 +710,7 @@ fn prepare_outbound(
 
     attempt_record
         .mark_backend_forward_start(context.timeline.mark(TimelineEvent::BackendForwardStart));
-    context.live_upsert(refresh_live_record);
+    context.live_upsert();
 
     Ok(Outbound {
         attempt_record,
