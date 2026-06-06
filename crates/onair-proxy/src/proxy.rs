@@ -264,7 +264,9 @@ pub async fn proxy_v1(
         }
     };
     let mut routes = routes.into_iter();
-    let route = routes.next().expect("candidate list is not empty");
+    let route = routes
+        .next()
+        .expect("NonEmptyVec::into_iter yields the head element");
     let fallback_routes = routes
         .take(config.routing.fallback_attempts)
         .collect::<Vec<_>>();

@@ -31,6 +31,51 @@ pub struct SelectedRoute {
     pub weight: u32,
 }
 
+pub struct NonEmptyVec<T> {
+    head: T,
+    tail: Vec<T>,
+}
+
+impl<T> NonEmptyVec<T> {
+    pub fn from_vec(vec: Vec<T>) -> Option<Self> {
+        let mut iter = vec.into_iter();
+        let head = iter.next()?;
+        Some(Self {
+            head,
+            tail: iter.collect(),
+        })
+    }
+
+    pub fn head(&self) -> &T {
+        &self.head
+    }
+
+    pub fn tail(&self) -> &[T] {
+        &self.tail
+    }
+
+    pub fn len(&self) -> usize {
+        1 + self.tail.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    pub fn iter(&self) -> std::iter::Chain<std::iter::Once<&T>, std::slice::Iter<'_, T>> {
+        std::iter::once(&self.head).chain(self.tail.iter())
+    }
+}
+
+impl<T> IntoIterator for NonEmptyVec<T> {
+    type Item = T;
+    type IntoIter = std::iter::Chain<std::iter::Once<T>, std::vec::IntoIter<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(self.head).chain(self.tail)
+    }
+}
+
 pub struct RoundRobinCounters {
     inner: Arc<Mutex<HashMap<String, u64>>>,
 }
@@ -84,7 +129,7 @@ pub fn select_backend_candidates(
     tools: bool,
     sticky_key: Option<&str>,
     round_robin: &RoundRobinCounters,
-) -> Result<Vec<SelectedRoute>, ApiError> {
+) -> Result<NonEmptyVec<SelectedRoute>, ApiError> {
     let path_candidates = path_capability_candidates(path);
     let mut candidates = Vec::new();
     let mut tool_incompatible_candidates = false;
@@ -219,7 +264,11 @@ pub fn select_backend_candidates(
         }
     }
 
-    Ok(candidates)
+    debug_assert!(
+        !candidates.is_empty(),
+        "candidates remained non-empty after rotation"
+    );
+    Ok(NonEmptyVec::from_vec(candidates).expect("candidates is non-empty"))
 }
 
 fn weighted_rotate(candidates: &mut [SelectedRoute]) {
@@ -600,7 +649,8 @@ mod tests {
         .unwrap();
 
         let selected_index = sticky_index(&sticky_key, priority.len());
-        assert_eq!(sticky[0].backend_id, priority[selected_index].backend_id);
+        let expected = priority.iter().nth(selected_index).unwrap();
+        assert_eq!(sticky.head().backend_id, expected.backend_id);
         assert_eq!(sticky.len(), priority.len());
         assert_eq!(
             sticky
@@ -728,9 +778,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "chat-backend");
+        assert_eq!(selected.head().backend_id, "chat-backend");
         assert_eq!(
-            selected[0].request_mode,
+            selected.head().request_mode,
             RequestMode::ResponsesViaChatCompletions
         );
     }
@@ -761,8 +811,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "native-backend");
-        assert_eq!(selected[0].request_mode, RequestMode::Native);
+        assert_eq!(selected.head().backend_id, "native-backend");
+        assert_eq!(selected.head().request_mode, RequestMode::Native);
     }
 
     #[test]
@@ -791,9 +841,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "mixed-backend");
+        assert_eq!(selected.head().backend_id, "mixed-backend");
         assert_eq!(
-            selected[0].request_mode,
+            selected.head().request_mode,
             RequestMode::ResponsesViaChatCompletions
         );
     }
@@ -821,9 +871,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "responses-backend");
+        assert_eq!(selected.head().backend_id, "responses-backend");
         assert_eq!(
-            selected[0].request_mode,
+            selected.head().request_mode,
             RequestMode::ChatCompletionsViaResponses
         );
     }
@@ -854,8 +904,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "native-chat-backend");
-        assert_eq!(selected[0].request_mode, RequestMode::Native);
+        assert_eq!(selected.head().backend_id, "native-chat-backend");
+        assert_eq!(selected.head().request_mode, RequestMode::Native);
     }
 
     #[test]
@@ -884,9 +934,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "mixed-backend");
+        assert_eq!(selected.head().backend_id, "mixed-backend");
         assert_eq!(
-            selected[0].request_mode,
+            selected.head().request_mode,
             RequestMode::ChatCompletionsViaResponses
         );
     }
@@ -920,7 +970,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "supported-backend");
+        assert_eq!(selected.head().backend_id, "supported-backend");
     }
 
     #[test]
@@ -1052,8 +1102,8 @@ mod tests {
             &counters,
         )
         .unwrap();
-        assert_eq!(selected_a[0].backend_id, "a");
-        assert_eq!(selected_b[0].backend_id, "a");
+        assert_eq!(selected_a.head().backend_id, "a");
+        assert_eq!(selected_b.head().backend_id, "a");
         let selected_b_second = select_backend_candidates(
             &backends_b,
             &routes_for_b,
@@ -1066,7 +1116,7 @@ mod tests {
             &counters,
         )
         .unwrap();
-        assert_eq!(selected_b_second[0].backend_id, "b");
+        assert_eq!(selected_b_second.head().backend_id, "b");
     }
 
     #[test]
@@ -1124,8 +1174,8 @@ mod tests {
             &counters,
         )
         .unwrap();
-        assert_eq!(selected_a[0].backend_id, "a");
-        assert_eq!(selected_b[0].backend_id, "b");
+        assert_eq!(selected_a.head().backend_id, "a");
+        assert_eq!(selected_b.head().backend_id, "b");
     }
 
     #[test]
@@ -1208,7 +1258,7 @@ mod tests {
                 &RoundRobinCounters::new(),
             )
             .unwrap();
-            assert!(selected[0].backend_id == "a" || selected[0].backend_id == "c");
+            assert!(selected.head().backend_id == "a" || selected.head().backend_id == "c");
         }
     }
 
@@ -1229,7 +1279,7 @@ mod tests {
                 &RoundRobinCounters::new(),
             )
             .unwrap();
-            assert_eq!(selected[0].backend_id, "only");
+            assert_eq!(selected.head().backend_id, "only");
         }
     }
 
@@ -1278,7 +1328,7 @@ mod tests {
             &RoundRobinCounters::new(),
         )
         .unwrap();
-        assert_eq!(selected[0].weight, 7);
+        assert_eq!(selected.head().weight, 7);
     }
 
     fn backend(id: &str) -> ResolvedBackend {
