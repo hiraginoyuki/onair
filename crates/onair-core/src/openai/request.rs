@@ -28,6 +28,39 @@ pub struct RequestRewritePolicies {
     pub chat_stream_usage: ChatStreamUsagePolicy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewriteParam {
+    Input,
+    Model,
+    Messages,
+    Tools,
+    ToolChoice,
+    PreviousResponseId,
+    N,
+    Logprobs,
+    TopLogprobs,
+    Stream,
+    FunctionCallId,
+}
+
+impl RewriteParam {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Model => "model",
+            Self::Messages => "messages",
+            Self::Tools => "tools",
+            Self::ToolChoice => "tool_choice",
+            Self::PreviousResponseId => "previous_response_id",
+            Self::N => "n",
+            Self::Logprobs => "logprobs",
+            Self::TopLogprobs => "top_logprobs",
+            Self::Stream => "stream",
+            Self::FunctionCallId => "function_call_id",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestRewriteError {
     message: String,
@@ -40,6 +73,10 @@ impl RequestRewriteError {
             message: message.into(),
             param: param.map(str::to_owned),
         }
+    }
+
+    pub fn with_param(message: impl Into<String>, param: RewriteParam) -> Self {
+        Self::new(message, Some(param.as_str()))
     }
 
     pub fn message(&self) -> &str {

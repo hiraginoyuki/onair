@@ -12,8 +12,9 @@ pub use models::{
 
 #[allow(unused_imports)]
 pub use request::{
-    RequestMode, RequestRewriteError, RequestRewritePolicies, RequestShape, inspect_request,
-    rewrite_query_model, rewrite_request_body_for_mode_with_policies, upstream_path_for_mode,
+    RequestMode, RequestRewriteError, RequestRewritePolicies, RequestShape, RewriteParam,
+    inspect_request, rewrite_query_model, rewrite_request_body_for_mode_with_policies,
+    upstream_path_for_mode,
 };
 
 #[allow(unused_imports)]
