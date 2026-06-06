@@ -88,6 +88,7 @@ impl Clone for RoundRobinCounters {
     }
 }
 
+#[cfg(test)]
 impl Default for RoundRobinCounters {
     fn default() -> Self {
         Self::new()
@@ -95,6 +96,7 @@ impl Default for RoundRobinCounters {
 }
 
 impl RoundRobinCounters {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
