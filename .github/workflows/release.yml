@@ -309,6 +309,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Commit and push updated flake.nix
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
         run: |
           set -euo pipefail
           git add flake.nix
