@@ -92,6 +92,12 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14
             method: native
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            method: native
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+            method: native
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -119,6 +125,7 @@ jobs:
 
       - name: Build (native)
         if: ${{ matrix.method == 'native' }}
+        shell: bash
         run: cargo build --release --target ${{ matrix.target }} -p onair --locked
 
       - name: Build (zigbuild)
@@ -126,18 +133,23 @@ jobs:
         run: cargo zigbuild --release --target ${{ matrix.target }} -p onair --locked
 
       - name: Stage binary
+        shell: bash
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/onair dist/onair-${{ matrix.target }}
-          chmod +x dist/onair-${{ matrix.target }}
-          file dist/onair-${{ matrix.target }} || true
+          if [[ "${{ matrix.os }}" == windows-* ]]; then
+            cp target/${{ matrix.target }}/release/onair.exe dist/onair-${{ matrix.target }}.exe
+          else
+            cp target/${{ matrix.target }}/release/onair dist/onair-${{ matrix.target }}
+            chmod +x dist/onair-${{ matrix.target }}
+          fi
+          file dist/onair-${{ matrix.target }}* 2>/dev/null || true
           ls -la dist/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: onair-${{ matrix.target }}
-          path: dist/onair-${{ matrix.target }}
+          path: dist/onair-${{ matrix.target }}*
           if-no-files-found: error
 
   licenses:
@@ -193,6 +205,8 @@ jobs:
             dist/onair-aarch64-unknown-linux-musl
             dist/onair-x86_64-apple-darwin
             dist/onair-aarch64-apple-darwin
+            dist/onair-x86_64-pc-windows-msvc.exe
+            dist/onair-aarch64-pc-windows-msvc.exe
             dist/THIRD_PARTY_LICENSES.md
 
   flake:
