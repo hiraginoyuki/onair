@@ -195,8 +195,8 @@ jobs:
             dist/onair-aarch64-apple-darwin
             dist/THIRD_PARTY_LICENSES.md
 
-  nix-metadata:
-    name: update nix-metadata
+  flake:
+    name: record release in flake.nix
     needs: [meta, release]
     runs-on: ubuntu-latest
     steps:

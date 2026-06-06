@@ -94,11 +94,21 @@ nix run github:hiraginoyuki/onair/v0.1.0
 nix profile install github:hiraginoyuki/onair
 ```
 
-`nix run` downloads a prebuilt binary from GitHub Releases; nothing in the
-Rust toolchain or the 240 transitive crates enters your nix store. The
-flake is binary-only by design. SHA-256 hashes of the release assets are
-pinned in `nix/metadata.json` on a dedicated `nix-metadata` branch; the
-first release will populate that file.
+`nix run` downloads a prebuilt binary from GitHub Releases; nothing in
+the Rust toolchain or the 240 transitive crates enters your nix store.
+The flake is binary-only by design.
+
+The release metadata (version, tag, and sha256 hashes) is inlined in
+`flake.nix` itself, so the ref you pin determines which release's
+binaries are downloaded:
+
+| Command | Behavior |
+| --- | --- |
+| `nix run github:hiraginoyuki/onair?ref=v0.1.0` | Immutable — pinned to v0.1.0 |
+| `nix run github:hiraginoyuki/onair?ref=v0` | Moving — latest v0.x |
+| `nix run github:hiraginoyuki/onair?ref=latest` | Moving — newest release |
+| `nix run github:hiraginoyuki/onair/unstable` | Moving — rolling unstable (force-pushed to main HEAD on every release) |
+| `nix run github:hiraginoyuki/onair` (no ref) | Following main HEAD |
 
 ### From source
 
