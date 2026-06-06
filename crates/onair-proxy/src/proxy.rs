@@ -282,7 +282,7 @@ pub async fn proxy_v1(
         inspector_base,
         inspector_enabled: observation.inspector_enabled,
         inspector_retention_requests: observation.inspector_retention_requests,
-        live_record: Some(live_record),
+        live_record,
         client_info,
         shutdown,
         backend_target,

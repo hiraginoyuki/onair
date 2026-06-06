@@ -148,11 +148,9 @@ pub(super) async fn buffered_response(
         route.request_mode,
     );
     timeline.mark(TimelineEvent::ResponseRewritten);
-    if let Some(live) = live_record.as_ref() {
-        live.update(|r| {
-            r.timeline = timeline.snapshot();
-        });
-    }
+    live_record.update(|r| {
+        r.timeline = timeline.snapshot();
+    });
 
     state.metrics.record_usage(&labels, usage);
     state
@@ -198,12 +196,10 @@ pub(super) async fn buffered_response(
         ));
     }
     timeline.mark(TimelineEvent::ClientResponseReady);
-    if let Some(live) = live_record.as_ref() {
-        live.update(|r| {
-            r.timeline = timeline.snapshot();
-            r.backend_attempts = backend_attempts.clone();
-        });
-    }
+    live_record.update(|r| {
+        r.timeline = timeline.snapshot();
+        r.backend_attempts = backend_attempts.clone();
+    });
     let mut final_inspector_base = inspector_base;
     final_inspector_base.backend_remote_addr =
         backend_remote_addr.map(|address| address.to_string());
@@ -282,11 +278,9 @@ pub(super) fn streaming_response(
         .metrics
         .record_request(&labels, upstream_status.as_u16(), request_timer.elapsed());
     timeline.mark(TimelineEvent::ClientResponseReady);
-    if let Some(live) = live_record.as_ref() {
-        live.update(|r| {
-            r.timeline = timeline.snapshot();
-        });
-    }
+    live_record.update(|r| {
+        r.timeline = timeline.snapshot();
+    });
     let stream_metrics = StreamMetrics::new(StreamMetricsInit {
         metrics: (*state.metrics).clone(),
         health_store: (*state.health).clone(),
@@ -310,7 +304,7 @@ pub(super) fn streaming_response(
         backend_attempts,
         retried_attempts,
         current_attempt,
-        live_record: live_record.expect("streaming response always has a live record"),
+        live_record,
     });
     debug!(
         upstream_status = upstream_status.as_u16(),
