@@ -1,5 +1,8 @@
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Instant;
 
 use axum::body::{Body, Bytes};
@@ -7,7 +10,9 @@ use axum::http::header::{
     ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderName,
     HeaderValue,
 };
-use axum::http::{HeaderMap, Method, Response, StatusCode, Uri};
+use axum::http::{HeaderMap, Method, Request, Response, StatusCode, Uri};
+use tower::Layer;
+use tower::Service;
 use tracing::{Instrument, info_span, warn};
 
 use crate::proxy_state::ProxyState;
@@ -543,6 +548,63 @@ pub fn attach_request_id(
         response.headers_mut().insert(X_REQUEST_ID, request_id);
     }
     response
+}
+
+/// `tower::Layer` that copies the inbound `X-Request-Id` (if any) from the
+/// request headers to the response headers. Replaces the per-handler
+/// `attach_request_id` ceremony at every call site.
+#[derive(Clone, Default)]
+pub struct PropagateRequestIdLayer;
+
+impl<S> Layer<S> for PropagateRequestIdLayer
+where
+    S: Service<Request<Body>, Response = Response<Body>> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+    S::Error: Send + 'static,
+{
+    type Service = PropagateRequestIdService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        PropagateRequestIdService { inner }
+    }
+}
+
+#[derive(Clone)]
+pub struct PropagateRequestIdService<S> {
+    inner: S,
+}
+
+impl<S> Service<Request<Body>> for PropagateRequestIdService<S>
+where
+    S: Service<Request<Body>, Response = Response<Body>> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+    S::Error: Send + 'static,
+{
+    type Response = Response<Body>;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Response<Body>, S::Error>> + Send + 'static>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request<Body>) -> Self::Future {
+        let request_id = request
+            .headers()
+            .get(X_REQUEST_ID)
+            .and_then(valid_header_value)
+            .cloned();
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+        let fut = inner.call(request);
+        Box::pin(async move {
+            let mut response = fut.await?;
+            if let Some(request_id) = request_id {
+                response.headers_mut().insert(X_REQUEST_ID, request_id);
+            }
+            Ok(response)
+        })
+    }
 }
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &HeaderName) -> Option<&'a str> {
