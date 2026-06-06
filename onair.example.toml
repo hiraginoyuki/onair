@@ -33,6 +33,9 @@ allow_remote = false
 enabled = false
 # Use a private, ignored local path. SQLite sidecar files may be created next to this file.
 # path = ".local/inspector.sqlite"
+# Maximum time the persistence writer will spend draining its queue on shutdown
+# before dropping any remaining records. Must be in 1..=60000.
+# drain_timeout_ms = 500
 
 [health]
 # Disabled by default because probes send requests to each configured backend.

@@ -24,7 +24,9 @@ const CONFIG_RELOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_MAX_ATTEMPTS: usize = 5;
 const MAX_FALLBACK_ATTEMPTS: usize = 16;
 const MAX_INSPECTOR_RETENTION_REQUESTS: usize = 1_000_000;
+const MAX_INSPECTOR_PERSISTENCE_DRAIN_TIMEOUT_MS: u64 = 60_000;
 const DEFAULT_INSPECTOR_RETENTION_REQUESTS: usize = 10_000;
+const DEFAULT_INSPECTOR_PERSISTENCE_DRAIN_TIMEOUT_MS: u64 = 500;
 const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_TELEMETRY_EXPORT_INTERVAL_MS: u64 = 30_000;
 const DEFAULT_BACKEND_TIMEOUT_MS: u64 = 120_000;
@@ -288,11 +290,22 @@ pub struct InspectorConfig {
     pub persistence: InspectorPersistenceConfig,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct InspectorPersistenceConfig {
     pub enabled: bool,
     pub path: Option<PathBuf>,
+    pub drain_timeout_ms: u64,
+}
+
+impl Default for InspectorPersistenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: None,
+            drain_timeout_ms: DEFAULT_INSPECTOR_PERSISTENCE_DRAIN_TIMEOUT_MS,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1108,6 +1121,16 @@ fn validate_inspector_config(config: &InspectorConfig) -> Result<()> {
                 "inspector.persistence.path must not be empty".to_owned(),
             )));
         }
+    }
+    if config.persistence.drain_timeout_ms == 0 {
+        return Err(Error::Config(ConfigError::Message(
+            "inspector.persistence.drain_timeout_ms must be greater than zero".to_owned(),
+        )));
+    }
+    if config.persistence.drain_timeout_ms > MAX_INSPECTOR_PERSISTENCE_DRAIN_TIMEOUT_MS {
+        return Err(Error::Config(ConfigError::Message(format!(
+            "inspector.persistence.drain_timeout_ms must be at most {MAX_INSPECTOR_PERSISTENCE_DRAIN_TIMEOUT_MS}"
+        ))));
     }
     Ok(())
 }
@@ -2477,6 +2500,129 @@ mod tests {
 
         let error = resolve_error(file);
         assert!(error.contains("inspector.retention_requests must be greater than zero"));
+    }
+
+    #[test]
+    fn inspector_persistence_drain_timeout_defaults_to_500ms() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        assert_eq!(config.inspector.persistence.drain_timeout_ms, 500);
+    }
+
+    #[test]
+    fn inspector_persistence_drain_timeout_accepts_explicit_value() {
+        let config = parse_config(
+            r#"
+            [inspector.persistence]
+            drain_timeout_ms = 1500
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        assert_eq!(config.inspector.persistence.drain_timeout_ms, 1500);
+    }
+
+    #[test]
+    fn inspector_persistence_rejects_zero_drain_timeout() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [inspector.persistence]
+            drain_timeout_ms = 0
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        )
+        .unwrap();
+
+        let error = resolve_error(file);
+        assert!(
+            error.contains("inspector.persistence.drain_timeout_ms must be greater than zero"),
+            "error={error}"
+        );
+    }
+
+    #[test]
+    fn inspector_persistence_rejects_drain_timeout_above_maximum() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [inspector.persistence]
+            drain_timeout_ms = 60_001
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        )
+        .unwrap();
+
+        let error = resolve_error(file);
+        assert!(
+            error.contains("inspector.persistence.drain_timeout_ms must be at most 60000"),
+            "error={error}"
+        );
     }
 
     #[test]
