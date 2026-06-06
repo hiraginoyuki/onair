@@ -126,6 +126,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/models/{*model}", get(model))
         .route("/v1/{*path}", any(v1_proxy))
         .fallback(fallback)
+        .layer(PropagateRequestIdLayer::default())
         .layer(DefaultBodyLimit::max(body_limit))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -262,7 +263,7 @@ where
             error.into_response()
         }
     };
-    proxy::attach_request_id(response, headers)
+    response
 }
 
 async fn v1_proxy(
@@ -287,7 +288,7 @@ async fn v1_proxy(
         Ok(response) => response,
         Err(error) => {
             warn!(status = error.status.as_u16(), kind = %error.kind, "request failed before proxy response");
-            proxy::attach_request_id(error.into_response(), &headers)
+            error.into_response()
         }
     }
 }
@@ -538,7 +539,7 @@ fn unix_millis() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-async fn fallback(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response<Body> {
+async fn fallback(State(state): State<Arc<AppState>>) -> Response<Body> {
     let timer = RequestTimer::start();
     let error = ApiError::not_found("The requested endpoint does not exist.");
     state.metrics.record_request(
@@ -546,7 +547,7 @@ async fn fallback(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Res
         error.status.as_u16(),
         timer.elapsed(),
     );
-    proxy::attach_request_id(error.into_response(), &headers)
+    error.into_response()
 }
 
 fn model_route_labels(route: &str, identity: &str, model: &str) -> MetricLabels {
