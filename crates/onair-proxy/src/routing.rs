@@ -161,7 +161,7 @@ pub struct BackendSelectionRequest<'a> {
 
 pub struct BackendSelector<'a> {
     request: BackendSelectionRequest<'a>,
-    path_candidates: Vec<String>,
+    path_candidates: BTreeSet<String>,
 }
 
 impl<'a> BackendSelector<'a> {
@@ -367,7 +367,7 @@ fn sticky_index(key: &str, count: usize) -> usize {
 
 fn request_mode_for_route(
     path: &str,
-    path_candidates: &[String],
+    path_candidates: &BTreeSet<String>,
     backend_supports: &BTreeSet<String>,
     route_expose: Option<&BTreeSet<String>>,
 ) -> Option<RequestMode> {
@@ -376,7 +376,7 @@ fn request_mode_for_route(
 
 fn request_mode_for_backend(
     path: &str,
-    path_candidates: &[String],
+    path_candidates: &BTreeSet<String>,
     backend_supports: &BTreeSet<String>,
 ) -> Option<RequestMode> {
     request_mode_for_path(path, path_candidates, backend_supports, None)
@@ -384,7 +384,7 @@ fn request_mode_for_backend(
 
 fn request_mode_for_path(
     path: &str,
-    path_candidates: &[String],
+    path_candidates: &BTreeSet<String>,
     backend_supports: &BTreeSet<String>,
     route_expose: Option<&BTreeSet<String>>,
 ) -> Option<RequestMode> {
@@ -555,9 +555,9 @@ pub fn path_metric_name(path: &str) -> String {
     if path.ends_with("/responses") {
         return "responses".to_owned();
     }
-    let candidates = path_capability_candidates(path);
-    candidates
-        .first()
+    path_capability_candidates(path)
+        .iter()
+        .next()
         .cloned()
         .unwrap_or_else(|| "unknown".to_owned())
 }
@@ -578,13 +578,13 @@ pub fn path_requires_model(path: &str) -> bool {
     )
 }
 
-pub fn path_capability_candidates(path: &str) -> Vec<String> {
+pub fn path_capability_candidates(path: &str) -> BTreeSet<String> {
     let trimmed = path
         .strip_prefix("/v1/")
         .unwrap_or(path)
         .trim_start_matches('/');
     if trimmed.is_empty() {
-        return Vec::new();
+        return BTreeSet::new();
     }
 
     let segments = trimmed
@@ -593,48 +593,42 @@ pub fn path_capability_candidates(path: &str) -> Vec<String> {
         .map(normalize_segment)
         .collect::<Vec<_>>();
     if segments.is_empty() {
-        return Vec::new();
+        return BTreeSet::new();
     }
 
-    let mut candidates = Vec::new();
-    push_unique(&mut candidates, segments[0].clone());
+    let mut candidates = BTreeSet::new();
+    candidates.insert(segments[0].clone());
     if segments[0].ends_with('s') && segments[0].len() > 1 {
-        push_unique(&mut candidates, singularize(&segments[0]));
+        candidates.insert(singularize(&segments[0]));
     }
     if let Some(second_segment) = segments.get(1) {
-        push_unique(&mut candidates, second_segment.clone());
-        push_unique(
-            &mut candidates,
-            format!("{}_{}", segments[0], second_segment),
-        );
+        candidates.insert(second_segment.clone());
+        candidates.insert(format!("{}_{}", segments[0], second_segment));
     }
     if let Some(third_segment) = segments.get(2) {
-        push_unique(
-            &mut candidates,
-            format!("{}_{}", segments[0], third_segment),
-        );
-        push_unique(&mut candidates, third_segment.clone());
+        candidates.insert(format!("{}_{}", segments[0], third_segment));
+        candidates.insert(third_segment.clone());
     }
 
     match segments[0].as_str() {
         "chat" => {
-            push_unique(&mut candidates, "chat_completions".to_owned());
-            push_unique(&mut candidates, "completions".to_owned());
+            candidates.insert("chat_completions".to_owned());
+            candidates.insert("completions".to_owned());
         }
         "responses" => {
-            push_unique(&mut candidates, RESPONSES_VIA_CHAT_COMPLETIONS.to_owned());
+            candidates.insert(RESPONSES_VIA_CHAT_COMPLETIONS.to_owned());
         }
         "images" => {
-            push_unique(&mut candidates, "image".to_owned());
+            candidates.insert("image".to_owned());
         }
         "files" => {
-            push_unique(&mut candidates, "file".to_owned());
+            candidates.insert("file".to_owned());
         }
         "models" => {
-            push_unique(&mut candidates, "model".to_owned());
+            candidates.insert("model".to_owned());
         }
         "audio" => {
-            push_unique(&mut candidates, "audio".to_owned());
+            candidates.insert("audio".to_owned());
         }
         _ => {}
     }
@@ -642,7 +636,7 @@ pub fn path_capability_candidates(path: &str) -> Vec<String> {
     candidates
 }
 
-fn supports_candidates(capabilities: &BTreeSet<String>, candidates: &[String]) -> bool {
+fn supports_candidates(capabilities: &BTreeSet<String>, candidates: &BTreeSet<String>) -> bool {
     candidates
         .iter()
         .any(|candidate| has_capability(capabilities, candidate))
@@ -664,12 +658,6 @@ fn normalize_segment(segment: &str) -> String {
 
 fn singularize(segment: &str) -> String {
     segment.strip_suffix('s').unwrap_or(segment).to_owned()
-}
-
-fn push_unique(candidates: &mut Vec<String>, candidate: String) {
-    if !candidate.is_empty() && !candidates.iter().any(|value| value == &candidate) {
-        candidates.push(candidate);
-    }
 }
 
 #[cfg(test)]
