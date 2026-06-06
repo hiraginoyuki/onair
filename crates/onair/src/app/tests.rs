@@ -20,7 +20,7 @@ use tower::ServiceExt;
 use super::*;
 use onair_core::ContextSizeCache;
 use onair_core::config::{
-    ChatStreamUsagePolicy, Config, ContextLengthPolicy, DebugCaptureConfig, DebugCaptureMode,
+    ChatStreamUsagePolicy, Config, ContextLengthSpec, DebugCaptureConfig, DebugCaptureMode,
     HealthConfig, InspectorConfig, InspectorPersistenceConfig, ResolvedBackend, ResolvedClient,
     ResolvedRoute, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RouteBackendBinding,
     RouteKey, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
@@ -2124,7 +2124,7 @@ async fn models_respect_context_length_output_policy() {
             ResolvedRoute {
                 key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
                 expose: btree_set(["responses"]),
-                context_length: ContextLengthPolicy::Static(131_072),
+                context_length: ContextLengthSpec::Static { n_ctx: 131_072 },
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -2137,7 +2137,7 @@ async fn models_respect_context_length_output_policy() {
             ResolvedRoute {
                 key: RouteKey::Public("gpt-no-context".to_owned()),
                 expose: btree_set(["responses"]),
-                context_length: ContextLengthPolicy::None,
+                context_length: ContextLengthSpec::None,
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -2227,9 +2227,10 @@ async fn upstream_context_size_is_forwarded_to_v1_models() {
         vec![ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
             expose: btree_set(["responses"]),
-            context_length: ContextLengthPolicy::Upstream {
+            context_length: ContextLengthSpec::Upstream {
                 backend_id: "backend-a".to_owned(),
                 backend_model: BACKEND_MODEL.to_owned(),
+                n_ctx: None,
             },
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
@@ -2292,9 +2293,10 @@ async fn upstream_context_size_is_forwarded_to_props() {
         vec![ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
             expose: btree_set(["responses"]),
-            context_length: ContextLengthPolicy::Upstream {
+            context_length: ContextLengthSpec::Upstream {
                 backend_id: "backend-a".to_owned(),
                 backend_model: BACKEND_MODEL.to_owned(),
+                n_ctx: None,
             },
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
@@ -2352,9 +2354,10 @@ async fn upstream_unreachable_hides_value() {
         vec![ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
             expose: btree_set(["responses"]),
-            context_length: ContextLengthPolicy::Upstream {
+            context_length: ContextLengthSpec::Upstream {
                 backend_id: "backend-a".to_owned(),
                 backend_model: BACKEND_MODEL.to_owned(),
+                n_ctx: None,
             },
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
@@ -2413,9 +2416,10 @@ async fn operator_models_reports_upstream_source() {
             route: ResolvedRoute {
                 key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
                 expose: btree_set(["responses"]),
-                context_length: ContextLengthPolicy::Upstream {
+                context_length: ContextLengthSpec::Upstream {
                     backend_id: "backend-a".to_owned(),
                     backend_model: BACKEND_MODEL.to_owned(),
+                    n_ctx: None,
                 },
                 tool_schema_mode: ToolSchemaMode::Preserve,
                 responses_store: ResponsesStorePolicy::Preserve,
@@ -2661,7 +2665,7 @@ fn test_backend(id: &str, base_url: String) -> TestEndpoint {
         route: ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
             expose: btree_set(["responses"]),
-            context_length: ContextLengthPolicy::None,
+            context_length: ContextLengthSpec::None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -2691,7 +2695,7 @@ fn test_chat_backend(id: &str, base_url: String) -> TestEndpoint {
         route: ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
             expose: btree_set(["chat", "responses_via_chat_completions", "tools"]),
-            context_length: ContextLengthPolicy::None,
+            context_length: ContextLengthSpec::None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,

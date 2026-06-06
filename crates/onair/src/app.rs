@@ -21,7 +21,7 @@ use url::form_urlencoded;
 
 use onair_core::ContextSizeCache;
 use onair_core::auth::{Identity, authenticate};
-use onair_core::config::{Config, ConfigStore, ResolvedContextLength};
+use onair_core::config::{Config, ConfigStore, ContextLengthSpec};
 use onair_core::error::{ApiError, Result};
 use onair_core::openai;
 use onair_obs::metrics::{MetricLabels, Metrics, RequestTimer};
@@ -143,14 +143,14 @@ async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
             .cloned()
             .filter_map(|model| {
                 available.get(&model).map(|resolved| match resolved {
-                    ResolvedContextLength::None => openai::ModelObject::new(model, None),
-                    ResolvedContextLength::Static { n_ctx } => {
+                    ContextLengthSpec::None => openai::ModelObject::new(model, None),
+                    ContextLengthSpec::Static { n_ctx } => {
                         openai::ModelObject::new_static(model, *n_ctx)
                     }
-                    ResolvedContextLength::Upstream { n_ctx: Some(n_ctx) } => {
-                        openai::ModelObject::new(model, Some(*n_ctx))
-                    }
-                    ResolvedContextLength::Upstream { n_ctx: None } => {
+                    ContextLengthSpec::Upstream {
+                        n_ctx: Some(n_ctx), ..
+                    } => openai::ModelObject::new(model, Some(*n_ctx)),
+                    ContextLengthSpec::Upstream { n_ctx: None, .. } => {
                         openai::ModelObject::new(model, None)
                     }
                 })
@@ -172,13 +172,13 @@ async fn model(
         "models_retrieve",
         &model,
         |_identity, available| match available.get(&model) {
-            Some(ResolvedContextLength::None) => {
+            Some(ContextLengthSpec::None) => {
                 openai::model_response(model.clone(), None).into_response()
             }
-            Some(ResolvedContextLength::Static { n_ctx }) => {
+            Some(ContextLengthSpec::Static { n_ctx }) => {
                 openai::model_response_with_n_ctx_train(model.clone(), *n_ctx).into_response()
             }
-            Some(ResolvedContextLength::Upstream { n_ctx }) => {
+            Some(ContextLengthSpec::Upstream { n_ctx, .. }) => {
                 openai::model_response(model.clone(), *n_ctx).into_response()
             }
             None => ApiError::model_not_found(&model).into_response(),
@@ -207,9 +207,9 @@ async fn props(
             Some(model) => match available.get(model) {
                 Some(resolved) => {
                     let n_ctx = match resolved {
-                        ResolvedContextLength::None => 0,
-                        ResolvedContextLength::Static { n_ctx, .. } => *n_ctx,
-                        ResolvedContextLength::Upstream { n_ctx } => n_ctx.unwrap_or(0),
+                        ContextLengthSpec::None => 0,
+                        ContextLengthSpec::Static { n_ctx, .. } => *n_ctx,
+                        ContextLengthSpec::Upstream { n_ctx, .. } => n_ctx.unwrap_or(0),
                     };
                     openai::props_response(Some("router"), Some(model.to_owned()), n_ctx)
                         .into_response()
@@ -231,7 +231,7 @@ async fn authed_handler<F>(
     handle: F,
 ) -> Response<Body>
 where
-    F: FnOnce(&Identity, &BTreeMap<String, ResolvedContextLength>) -> Response<Body>,
+    F: FnOnce(&Identity, &BTreeMap<String, ContextLengthSpec>) -> Response<Body>,
 {
     let timer = RequestTimer::start();
     let config = state.config.snapshot();

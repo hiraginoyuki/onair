@@ -666,7 +666,7 @@ mod tests {
     use std::time::Duration;
 
     use onair_core::config::{
-        ChatStreamUsagePolicy, ContextLengthPolicy, ResolvedBackend, ResolvedRoute,
+        ChatStreamUsagePolicy, ContextLengthSpec, ResolvedBackend, ResolvedRoute,
         ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RouteBackendBinding, RouteKey,
         ToolSchemaMode,
     };
@@ -1439,7 +1439,7 @@ mod tests {
         ResolvedRoute {
             key: RouteKey::Public(public.to_owned()),
             expose: btree_set_from(expose),
-            context_length: ContextLengthPolicy::None,
+            context_length: ContextLengthSpec::None,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,

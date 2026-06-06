@@ -8,9 +8,9 @@ use axum::response::IntoResponse;
 use serde::Serialize;
 
 use onair_core::config::{
-    Config, ContextLengthPolicy, DebugCaptureConfig, HealthConfig, InspectorConfig,
-    ResolvedBackend, ResolvedClient, ResolvedContextLength, ResolvedRoute, RouteKey, RoutingConfig,
-    RoutingStrategy, ServerConfig, TelemetryConfig, TelemetryExporter,
+    Config, ContextLengthSpec, DebugCaptureConfig, HealthConfig, InspectorConfig, ResolvedBackend,
+    ResolvedClient, ResolvedRoute, RouteKey, RoutingConfig, RoutingStrategy, ServerConfig,
+    TelemetryConfig, TelemetryExporter,
 };
 use onair_obs::observe::{BackendHealthSnapshot as ObservedBackendHealth, BackendHealthStore};
 
@@ -183,11 +183,11 @@ pub fn runtime_snapshot(
     }
 }
 
-pub fn context_length_source(policy: &ContextLengthPolicy) -> &'static str {
+pub fn context_length_source(policy: &ContextLengthSpec) -> &'static str {
     match policy {
-        ContextLengthPolicy::None => "none",
-        ContextLengthPolicy::Static(_) => "static",
-        ContextLengthPolicy::Upstream { .. } => "upstream",
+        ContextLengthSpec::None => "none",
+        ContextLengthSpec::Static { .. } => "static",
+        ContextLengthSpec::Upstream { .. } => "upstream",
     }
 }
 
@@ -213,9 +213,9 @@ pub fn models_snapshot(
     for (public, resolved) in config.public_model_context_lengths_with_cache(context_sizes) {
         let (context_length, context_length_source, context_length_last_fetch_unix_ms) =
             match &resolved {
-                ResolvedContextLength::None => (None, "none", None),
-                ResolvedContextLength::Static { n_ctx } => (Some(*n_ctx), "static", None),
-                ResolvedContextLength::Upstream { n_ctx } => {
+                ContextLengthSpec::None => (None, "none", None),
+                ContextLengthSpec::Static { n_ctx } => (Some(*n_ctx), "static", None),
+                ContextLengthSpec::Upstream { n_ctx, .. } => {
                     let last_fetch = context_sizes
                         .entry(&public)
                         .and_then(|entry| entry.last_success_unix_ms);
@@ -418,11 +418,11 @@ fn sorted_strings(values: &std::collections::BTreeSet<String>) -> Vec<String> {
     values.iter().cloned().collect()
 }
 
-fn static_context_length(policy: &ContextLengthPolicy) -> Option<u64> {
+fn static_context_length(policy: &ContextLengthSpec) -> Option<u64> {
     match policy {
-        ContextLengthPolicy::None => None,
-        ContextLengthPolicy::Static(value) => Some(*value),
-        ContextLengthPolicy::Upstream { .. } => None,
+        ContextLengthSpec::None => None,
+        ContextLengthSpec::Static { n_ctx } => Some(*n_ctx),
+        ContextLengthSpec::Upstream { .. } => None,
     }
 }
 
