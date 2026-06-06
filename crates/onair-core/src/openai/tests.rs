@@ -20,7 +20,7 @@ fn rewrite_request_body_for_mode_with_tool_schema_mode(
         backend_model,
         path,
         request_mode,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode,
             responses_store,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -152,7 +152,7 @@ fn chat_completions_request_converts_to_responses() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::ChatCompletionsViaResponses,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -222,7 +222,7 @@ fn chat_completions_to_responses_applies_responses_policies() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::ChatCompletionsViaResponses,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::ForceFalse,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
@@ -252,7 +252,7 @@ fn chat_completions_to_responses_rejects_unsupported_options() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::ChatCompletionsViaResponses,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -273,7 +273,7 @@ fn chat_completions_to_responses_rejects_unsupported_options() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::ChatCompletionsViaResponses,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -294,7 +294,7 @@ fn chat_completions_to_responses_rejects_unsupported_options() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::ChatCompletionsViaResponses,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -313,7 +313,7 @@ fn chat_completions_to_responses_requires_json_and_messages() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::ChatCompletionsViaResponses,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -332,7 +332,7 @@ fn chat_completions_to_responses_requires_json_and_messages() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::ChatCompletionsViaResponses,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -418,7 +418,7 @@ fn native_responses_can_rewrite_max_output_tokens_for_wrapper_quirks() {
         Some("backend-model"),
         "/v1/responses",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
@@ -436,7 +436,7 @@ fn native_responses_can_rewrite_max_output_tokens_for_wrapper_quirks() {
         Some("backend-model"),
         "/v1/responses",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::RenameToMaxTokens,
@@ -463,7 +463,7 @@ fn native_responses_max_output_tokens_policy_preserves_other_paths_and_existing_
         Some("backend-model"),
         "/v1/responses",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens:
@@ -487,7 +487,7 @@ fn native_responses_max_output_tokens_policy_preserves_other_paths_and_existing_
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
@@ -513,7 +513,7 @@ fn chat_stream_usage_policy_inserts_usage_request_for_chat_streams() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -530,7 +530,7 @@ fn chat_stream_usage_policy_inserts_usage_request_for_chat_streams() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -559,7 +559,7 @@ fn chat_stream_usage_policy_preserves_client_stream_options() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -587,7 +587,7 @@ fn chat_stream_usage_policy_preserves_client_stream_options() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -619,7 +619,7 @@ fn chat_stream_usage_policy_force_true_overrides_client_value() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -648,7 +648,7 @@ fn chat_stream_usage_policy_force_true_replaces_non_object_stream_options() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -676,7 +676,7 @@ fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
         Some("backend-model"),
         "/v1/responses",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -693,7 +693,7 @@ fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
         Some("backend-model"),
         "/v1/embeddings",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -716,7 +716,7 @@ fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
         Some("backend-model"),
         "/v1/chat/completions",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -742,7 +742,7 @@ fn chat_stream_usage_policy_applies_after_responses_to_chat_conversion() {
         Some("backend-model"),
         "/v1/responses",
         RequestMode::ResponsesViaChatCompletions,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
@@ -1125,7 +1125,7 @@ fn native_responses_rejects_function_calls_without_matching_outputs() {
         Some("backend-model"),
         "/v1/responses",
         RequestMode::Native,
-        RequestRewritePolicies {
+        &RequestRewritePolicies {
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
