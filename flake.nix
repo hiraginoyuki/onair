@@ -32,12 +32,12 @@
       version = "0.1.0";
       tag = "unstable";
       hashes = {
-        "x86_64-unknown-linux-gnu"  = "sha256-5pldhvJ1g9Ku2U1c8XZ2taHKryHY11s2paatjJYxMUc=";
+        "x86_64-unknown-linux-gnu" = "sha256-5pldhvJ1g9Ku2U1c8XZ2taHKryHY11s2paatjJYxMUc=";
         "x86_64-unknown-linux-musl" = "sha256-yDPS3Faz3pxZOGhZ+hIsXK49VHv7iqsf85jp6U0qsC0=";
         "aarch64-unknown-linux-gnu" = "sha256-AS/wvuL5jn6dWhw4TGZI5whmEq7mFC2oMzt0EGTLe4o=";
         "aarch64-unknown-linux-musl" = "sha256-NUubI+XK9IkD25OzK867EEGcXj3+NPiiK1W69EGLY2E=";
-        "x86_64-apple-darwin"       = "sha256-O/6jOqK0r/6sQKT1uGAjyNCqAY9LO5HG1dwmdY6f70M=";
-        "aarch64-apple-darwin"      = "sha256-H03PKDFaVu7XVc9Z1cT4bWXq2PfaNLkO6tWGzbYiDt4=";
+        "x86_64-apple-darwin" = "sha256-O/6jOqK0r/6sQKT1uGAjyNCqAY9LO5HG1dwmdY6f70M=";
+        "aarch64-apple-darwin" = "sha256-H03PKDFaVu7XVc9Z1cT4bWXq2PfaNLkO6tWGzbYiDt4=";
       };
 
       mkPkg = system: pkgs: pkgs.stdenv.mkDerivation {
