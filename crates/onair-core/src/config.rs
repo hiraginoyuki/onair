@@ -24,7 +24,9 @@ const CONFIG_RELOAD_RETRY_DELAY: Duration = Duration::from_millis(250);
 const CONFIG_RELOAD_MAX_ATTEMPTS: usize = 5;
 const MAX_FALLBACK_ATTEMPTS: usize = 16;
 const MAX_INSPECTOR_RETENTION_REQUESTS: usize = 1_000_000;
+const MAX_INSPECTOR_PERSISTENCE_DRAIN_TIMEOUT_MS: u64 = 60_000;
 const DEFAULT_INSPECTOR_RETENTION_REQUESTS: usize = 10_000;
+const DEFAULT_INSPECTOR_PERSISTENCE_DRAIN_TIMEOUT_MS: u64 = 500;
 const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_TELEMETRY_EXPORT_INTERVAL_MS: u64 = 30_000;
 const DEFAULT_BACKEND_TIMEOUT_MS: u64 = 120_000;
@@ -288,11 +290,22 @@ pub struct InspectorConfig {
     pub persistence: InspectorPersistenceConfig,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct InspectorPersistenceConfig {
     pub enabled: bool,
     pub path: Option<PathBuf>,
+    pub drain_timeout_ms: u64,
+}
+
+impl Default for InspectorPersistenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: None,
+            drain_timeout_ms: DEFAULT_INSPECTOR_PERSISTENCE_DRAIN_TIMEOUT_MS,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -518,33 +531,14 @@ pub enum ContextLengthMode {
     Upstream,
 }
 
-#[derive(Debug, Clone)]
-pub enum ContextLengthPolicy {
-    None,
-    Static(u64),
-    Upstream {
-        backend_id: String,
-        backend_model: String,
-    },
-}
-
-/// Resolved form of [`ContextLengthPolicy`], carrying the live
-/// upstream `n_ctx` once it has been observed.
-#[derive(Debug, Clone)]
-pub enum ResolvedContextLength {
-    None,
-    Static { n_ctx: u64 },
-    Upstream { n_ctx: Option<u64> },
-}
-
-/// The collapsed single-enum target for the B5 cleanup.
+/// A route's context-length policy together with the live upstream
+/// `n_ctx` once it has been observed.
 ///
-/// Carries both the routing info from [`ContextLengthPolicy`] and the
-/// live `n_ctx` from [`ResolvedContextLength`] on the upstream
-/// variant. The onair-proxy and onair match sites need to be
-/// migrated to this shape before the old enums can be removed; in
-/// the meantime, [`ContextLengthPolicy`] and
-/// [`ResolvedContextLength`] remain the public types.
+/// For the `Static` variant, `n_ctx` is the configured value. For the
+/// `Upstream` variant, the routing info is set at config-resolve time
+/// and `n_ctx` is `None` until the context-size refresh task observes
+/// a value; the `public_model_context_lengths_with_cache` helper
+/// fills `n_ctx` in from the cache.
 #[derive(Debug, Clone)]
 pub enum ContextLengthSpec {
     None,
@@ -556,23 +550,6 @@ pub enum ContextLengthSpec {
         backend_model: String,
         n_ctx: Option<u64>,
     },
-}
-
-impl From<&ContextLengthPolicy> for ContextLengthSpec {
-    fn from(policy: &ContextLengthPolicy) -> Self {
-        match policy {
-            ContextLengthPolicy::None => Self::None,
-            ContextLengthPolicy::Static(value) => Self::Static { n_ctx: *value },
-            ContextLengthPolicy::Upstream {
-                backend_id,
-                backend_model,
-            } => Self::Upstream {
-                backend_id: backend_id.clone(),
-                backend_model: backend_model.clone(),
-                n_ctx: None,
-            },
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -599,7 +576,7 @@ pub struct RouteBackendBinding {
 pub struct ResolvedRoute {
     pub key: RouteKey,
     pub expose: BTreeSet<String>,
-    pub context_length: ContextLengthPolicy,
+    pub context_length: ContextLengthSpec,
     pub tool_schema_mode: ToolSchemaMode,
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
@@ -644,18 +621,24 @@ impl Config {
         })
     }
 
-    pub fn public_model_context_lengths(&self) -> BTreeMap<String, ResolvedContextLength> {
+    pub fn public_model_context_lengths(&self) -> BTreeMap<String, ContextLengthSpec> {
         let mut models = BTreeMap::new();
         for route in &self.routes {
             if let RouteKey::Public(public) = &route.key {
                 let resolved = match &route.context_length {
-                    ContextLengthPolicy::None => ResolvedContextLength::None,
-                    ContextLengthPolicy::Static(value) => {
-                        ResolvedContextLength::Static { n_ctx: *value }
+                    ContextLengthSpec::None => ContextLengthSpec::None,
+                    ContextLengthSpec::Static { n_ctx } => {
+                        ContextLengthSpec::Static { n_ctx: *n_ctx }
                     }
-                    ContextLengthPolicy::Upstream { .. } => {
-                        ResolvedContextLength::Upstream { n_ctx: None }
-                    }
+                    ContextLengthSpec::Upstream {
+                        backend_id,
+                        backend_model,
+                        ..
+                    } => ContextLengthSpec::Upstream {
+                        backend_id: backend_id.clone(),
+                        backend_model: backend_model.clone(),
+                        n_ctx: None,
+                    },
                 };
                 models.entry(public.clone()).or_insert(resolved);
             }
@@ -666,16 +649,22 @@ impl Config {
     pub fn public_model_context_lengths_with_cache(
         &self,
         cache: &ContextSizeCache,
-    ) -> BTreeMap<String, ResolvedContextLength> {
+    ) -> BTreeMap<String, ContextLengthSpec> {
         let mut models = BTreeMap::new();
         for route in &self.routes {
             if let RouteKey::Public(public) = &route.key {
                 let resolved = match &route.context_length {
-                    ContextLengthPolicy::None => ResolvedContextLength::None,
-                    ContextLengthPolicy::Static(value) => {
-                        ResolvedContextLength::Static { n_ctx: *value }
+                    ContextLengthSpec::None => ContextLengthSpec::None,
+                    ContextLengthSpec::Static { n_ctx } => {
+                        ContextLengthSpec::Static { n_ctx: *n_ctx }
                     }
-                    ContextLengthPolicy::Upstream { .. } => ResolvedContextLength::Upstream {
+                    ContextLengthSpec::Upstream {
+                        backend_id,
+                        backend_model,
+                        ..
+                    } => ContextLengthSpec::Upstream {
+                        backend_id: backend_id.clone(),
+                        backend_model: backend_model.clone(),
                         n_ctx: cache.lookup(public),
                     },
                 };
@@ -823,9 +812,9 @@ fn resolve_context_lengths(
     key: &RouteKey,
     config: &ContextLengthConfig,
     bindings: &[RouteBackendBinding],
-) -> Result<ContextLengthPolicy> {
+) -> Result<ContextLengthSpec> {
     match key {
-        RouteKey::Path(_) => Ok(ContextLengthPolicy::None),
+        RouteKey::Path(_) => Ok(ContextLengthSpec::None),
         RouteKey::Public(public) => {
             let first = bindings.first();
             let backend_id = first.map(|b| b.backend_id.as_str()).unwrap_or("");
@@ -1109,6 +1098,16 @@ fn validate_inspector_config(config: &InspectorConfig) -> Result<()> {
             )));
         }
     }
+    if config.persistence.drain_timeout_ms == 0 {
+        return Err(Error::Config(ConfigError::Message(
+            "inspector.persistence.drain_timeout_ms must be greater than zero".to_owned(),
+        )));
+    }
+    if config.persistence.drain_timeout_ms > MAX_INSPECTOR_PERSISTENCE_DRAIN_TIMEOUT_MS {
+        return Err(Error::Config(ConfigError::Message(format!(
+            "inspector.persistence.drain_timeout_ms must be at most {MAX_INSPECTOR_PERSISTENCE_DRAIN_TIMEOUT_MS}"
+        ))));
+    }
     Ok(())
 }
 
@@ -1207,16 +1206,15 @@ fn resolve_context_length_policy(
     config: &ContextLengthConfig,
     backend_id: &str,
     backend_model: &str,
-) -> Result<ContextLengthPolicy> {
+) -> Result<ContextLengthSpec> {
     match config {
-        ContextLengthConfig::Value(value) => Ok(ContextLengthPolicy::Static(*value)),
-        ContextLengthConfig::Mode(ContextLengthMode::None) => Ok(ContextLengthPolicy::None),
-        ContextLengthConfig::Mode(ContextLengthMode::Upstream) => {
-            Ok(ContextLengthPolicy::Upstream {
-                backend_id: backend_id.to_owned(),
-                backend_model: backend_model.to_owned(),
-            })
-        }
+        ContextLengthConfig::Value(value) => Ok(ContextLengthSpec::Static { n_ctx: *value }),
+        ContextLengthConfig::Mode(ContextLengthMode::None) => Ok(ContextLengthSpec::None),
+        ContextLengthConfig::Mode(ContextLengthMode::Upstream) => Ok(ContextLengthSpec::Upstream {
+            backend_id: backend_id.to_owned(),
+            backend_model: backend_model.to_owned(),
+            n_ctx: None,
+        }),
     }
 }
 
@@ -1451,17 +1449,17 @@ mod tests {
         let cache = ContextSizeCache::new();
         let models = config.public_model_context_lengths_with_cache(&cache);
         match models.get("public-upstream").unwrap() {
-            ResolvedContextLength::Upstream { n_ctx } => assert_eq!(*n_ctx, None),
+            ContextLengthSpec::Upstream { n_ctx, .. } => assert_eq!(*n_ctx, None),
             other => panic!("expected Upstream, got {other:?}"),
         }
         match models.get("public-specific").unwrap() {
-            ResolvedContextLength::Static { n_ctx } => {
+            ContextLengthSpec::Static { n_ctx } => {
                 assert_eq!(*n_ctx, 8_192);
             }
             other => panic!("expected Static, got {other:?}"),
         }
         match models.get("public-none").unwrap() {
-            ResolvedContextLength::None => {}
+            ContextLengthSpec::None => {}
             other => panic!("expected None, got {other:?}"),
         }
     }
@@ -1492,14 +1490,15 @@ mod tests {
 
         let route = &config.routes[0];
         match &route.context_length {
-            ContextLengthPolicy::Upstream {
+            ContextLengthSpec::Upstream {
                 backend_id,
                 backend_model,
+                ..
             } => {
                 assert_eq!(backend_id, "backend-a");
                 assert_eq!(backend_model, "private-upstream");
             }
-            other => panic!("expected Upstream policy, got {other:?}"),
+            other => panic!("expected Upstream spec, got {other:?}"),
         }
     }
 
@@ -2477,6 +2476,129 @@ mod tests {
 
         let error = resolve_error(file);
         assert!(error.contains("inspector.retention_requests must be greater than zero"));
+    }
+
+    #[test]
+    fn inspector_persistence_drain_timeout_defaults_to_500ms() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        assert_eq!(config.inspector.persistence.drain_timeout_ms, 500);
+    }
+
+    #[test]
+    fn inspector_persistence_drain_timeout_accepts_explicit_value() {
+        let config = parse_config(
+            r#"
+            [inspector.persistence]
+            drain_timeout_ms = 1500
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        assert_eq!(config.inspector.persistence.drain_timeout_ms, 1500);
+    }
+
+    #[test]
+    fn inspector_persistence_rejects_zero_drain_timeout() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [inspector.persistence]
+            drain_timeout_ms = 0
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        )
+        .unwrap();
+
+        let error = resolve_error(file);
+        assert!(
+            error.contains("inspector.persistence.drain_timeout_ms must be greater than zero"),
+            "error={error}"
+        );
+    }
+
+    #[test]
+    fn inspector_persistence_rejects_drain_timeout_above_maximum() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [inspector.persistence]
+            drain_timeout_ms = 60_001
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        )
+        .unwrap();
+
+        let error = resolve_error(file);
+        assert!(
+            error.contains("inspector.persistence.drain_timeout_ms must be at most 60000"),
+            "error={error}"
+        );
     }
 
     #[test]

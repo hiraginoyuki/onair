@@ -554,9 +554,132 @@ fn json_event_type(value: &Value) -> Option<&str> {
         .or_else(|| value.get("object").and_then(Value::as_str))
 }
 
+/// A single SSE frame yielded by [`SseLineParser`].
+///
+/// `line` carries the original line bytes (including the trailing
+/// `\n` when the parser saw one, and any preceding `\r`) so the
+/// caller can re-emit the raw line for `PassThrough`, `Event`, and
+/// unparseable `data:` lines.
+#[derive(Debug)]
+pub enum SseFrame {
+    /// `event: <name>` line. The caller decides whether to re-emit
+    /// the raw line.
+    Event { name: String, line: Vec<u8> },
+    /// `data: <json>` line whose value parsed as JSON.
+    Data {
+        value: Value,
+        leading_space: bool,
+        line: Vec<u8>,
+    },
+    /// `data:` line whose value was empty, malformed, or otherwise
+    /// not parseable as JSON.
+    DataUnparseable { line: Vec<u8> },
+    /// `data: [DONE]` line.
+    Done { line: Vec<u8> },
+    /// Any other line (blank, comment, or non-`data:` non-`event:`).
+    PassThrough { line: Vec<u8> },
+}
+
+/// Splits a byte stream into [`SseFrame`]s on `\n`.
+///
+/// The three SSE normalizers all share the same line-splitting +
+/// field-extraction logic, so the parser is factored out. The
+/// per-type emission strategy is intentionally kept inside each
+/// normalizer; see `SseNormalizer`, `ResponsesSseNormalizer`, and
+/// `ChatCompletionsSseNormalizer`.
+// TODO(audit-followup): collapse the three normalizers into a single
+// `SseNormalizer` with a per-type emission strategy enum
+// (`Passthrough` | `ChatToResponses` | `ResponsesToChat`). The current
+// refactor only extracted the line parser; the three `handle_frame`
+// and `handle_data` methods still duplicate the usage-extraction +
+// observation + model-rewrite prologue and the Event/PassThrough
+// line-routing decisions. The audit plan called this the highest-risk
+// item in slice B; the protocol-by-protocol approach to the strategy
+// collapse was deferred after the first attempt was reverted. Future
+// work could revisit with a thorough strategy-trait extraction.
+#[derive(Debug, Default)]
+pub struct SseLineParser {
+    pending: Vec<u8>,
+}
+
+impl SseLineParser {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, chunk: &[u8]) -> Vec<SseFrame> {
+        self.pending.extend_from_slice(chunk);
+        let mut frames = Vec::new();
+        while let Some(position) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = self.pending.drain(..=position).collect();
+            frames.push(parse_sse_line(&line));
+        }
+        frames
+    }
+
+    pub fn finish(&mut self) -> Option<SseFrame> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let line = std::mem::take(&mut self.pending);
+        Some(parse_sse_line(&line))
+    }
+}
+
+fn parse_sse_line(line: &[u8]) -> SseFrame {
+    let line_without_newline = line.strip_suffix(b"\n").unwrap_or(line);
+    let line_without_cr = line_without_newline
+        .strip_suffix(b"\r")
+        .unwrap_or(line_without_newline);
+    if let Some(event_name) = utf8_field_value(line_without_cr, b"event:") {
+        return SseFrame::Event {
+            name: event_name,
+            line: line.to_vec(),
+        };
+    }
+    if let Some(data) = sse_field_value(line_without_cr, b"data:") {
+        let leading_space = line_without_cr
+            .strip_prefix(b"data:")
+            .is_some_and(|data| data.starts_with(b" "));
+        if data == b"[DONE]" {
+            return SseFrame::Done {
+                line: line.to_vec(),
+            };
+        }
+        if let Ok(value) = serde_json::from_slice::<Value>(data) {
+            return SseFrame::Data {
+                value,
+                leading_space,
+                line: line.to_vec(),
+            };
+        }
+        return SseFrame::DataUnparseable {
+            line: line.to_vec(),
+        };
+    }
+    SseFrame::PassThrough {
+        line: line.to_vec(),
+    }
+}
+
+fn line_suffix(line: &[u8]) -> (&[u8], &[u8]) {
+    let line_ending = if line.ends_with(b"\n") {
+        b"\n".as_slice()
+    } else {
+        b"".as_slice()
+    };
+    let line_without_newline = line.strip_suffix(b"\n").unwrap_or(line);
+    let cr = if line_without_newline.ends_with(b"\r") {
+        b"\r".as_slice()
+    } else {
+        b"".as_slice()
+    };
+    (cr, line_ending)
+}
+
 #[derive(Debug, Default)]
 pub struct SseNormalizer {
-    pending: Vec<u8>,
+    parser: SseLineParser,
     pub usage: UsageTotals,
     pub diagnostics: UsageDiagnostics,
     pending_event_name: Option<String>,
@@ -580,62 +703,57 @@ impl SseNormalizer {
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
-        self.pending.extend_from_slice(chunk);
-        let mut output = Vec::with_capacity(self.pending.len());
-
-        while let Some(position) = self.pending.iter().position(|byte| *byte == b'\n') {
-            let line = self.pending.drain(..=position).collect::<Vec<_>>();
-            output.extend(self.normalize_line(&line));
+        let frames = self.parser.push(chunk);
+        let mut output = Vec::with_capacity(chunk.len());
+        for frame in frames {
+            self.handle_frame(frame, &mut output);
         }
-
         output
     }
 
     pub fn finish(&mut self) -> Vec<u8> {
-        if self.pending.is_empty() {
-            return Vec::new();
+        let mut output = Vec::new();
+        if let Some(frame) = self.parser.finish() {
+            self.handle_frame(frame, &mut output);
         }
-        let line = std::mem::take(&mut self.pending);
-        self.normalize_line(&line)
+        output
     }
 
-    fn normalize_line(&mut self, line: &[u8]) -> Vec<u8> {
-        let line_without_newline = line.strip_suffix(b"\n").unwrap_or(line);
-        let line_ending = if line.ends_with(b"\n") {
-            b"\n".as_slice()
-        } else {
-            b"".as_slice()
-        };
-        let line_without_cr = line_without_newline
-            .strip_suffix(b"\r")
-            .unwrap_or(line_without_newline);
-        let cr = if line_without_newline.ends_with(b"\r") {
-            b"\r".as_slice()
-        } else {
-            b"".as_slice()
-        };
-
-        if let Some(event_name) = utf8_field_value(line_without_cr, b"event:") {
-            self.diagnostics.observe_event_name(&event_name);
-            self.pending_event_name = Some(event_name);
-            return line.to_vec();
+    fn handle_frame(&mut self, frame: SseFrame, output: &mut Vec<u8>) {
+        match frame {
+            SseFrame::Event { name, line } => {
+                self.diagnostics.observe_event_name(&name);
+                self.pending_event_name = Some(name);
+                output.extend_from_slice(&line);
+            }
+            SseFrame::Data {
+                value,
+                leading_space,
+                line,
+            } => {
+                self.handle_data(value, leading_space, &line, output);
+            }
+            SseFrame::DataUnparseable { line } => {
+                self.pending_event_name = None;
+                output.extend_from_slice(&line);
+            }
+            SseFrame::Done { line } => {
+                self.pending_event_name = None;
+                output.extend_from_slice(&line);
+            }
+            SseFrame::PassThrough { line } => {
+                output.extend_from_slice(&line);
+            }
         }
+    }
 
-        let Some(data) = sse_field_value(line_without_cr, b"data:") else {
-            return line.to_vec();
-        };
-        let leading_space = line_without_cr
-            .strip_prefix(b"data:")
-            .is_some_and(|data| data.starts_with(b" "));
-        if data == b"[DONE]" {
-            self.pending_event_name = None;
-            return line.to_vec();
-        }
-
-        let Ok(mut json) = serde_json::from_slice::<Value>(data) else {
-            self.pending_event_name = None;
-            return line.to_vec();
-        };
+    fn handle_data(
+        &mut self,
+        mut json: Value,
+        leading_space: bool,
+        line: &[u8],
+        output: &mut Vec<u8>,
+    ) {
         let observation = extract_usage_observation(&json);
         let usage_object_count = observation.diagnostics.usage_object_count;
         let json_event_name = json_event_type(&json).and_then(safe_diagnostic_label);
@@ -663,22 +781,23 @@ impl SseNormalizer {
         ensure_usage_total_tokens(&mut json);
         if !self.emit_usage_to_client && usage_object_count > 0 {
             if chat_usage_only_chunk(&json) {
-                return Vec::new();
+                return;
             }
             remove_usage_field(&mut json);
         }
 
         let normalized = serde_json::to_vec(&json)
             .expect("normalized SSE data is always serializable; this is a programmer error");
-        let mut output = Vec::with_capacity(line.len() + normalized.len());
-        output.extend_from_slice(b"data:");
+        let (cr, line_ending) = line_suffix(line);
+        let mut rewritten = Vec::with_capacity(line.len() + normalized.len());
+        rewritten.extend_from_slice(b"data:");
         if leading_space {
-            output.extend_from_slice(b" ");
+            rewritten.extend_from_slice(b" ");
         }
-        output.extend_from_slice(&normalized);
-        output.extend_from_slice(cr);
-        output.extend_from_slice(line_ending);
-        output
+        rewritten.extend_from_slice(&normalized);
+        rewritten.extend_from_slice(cr);
+        rewritten.extend_from_slice(line_ending);
+        output.extend_from_slice(&rewritten);
     }
 }
 
@@ -698,7 +817,7 @@ fn remove_usage_field(value: &mut Value) {
 
 #[derive(Debug, Default)]
 pub struct ResponsesSseNormalizer {
-    pending: Vec<u8>,
+    parser: SseLineParser,
     pub usage: UsageTotals,
     pub diagnostics: UsageDiagnostics,
     pending_event_name: Option<String>,
@@ -733,51 +852,49 @@ impl ResponsesSseNormalizer {
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
-        self.pending.extend_from_slice(chunk);
+        let frames = self.parser.push(chunk);
         let mut output = Vec::new();
-
-        while let Some(position) = self.pending.iter().position(|byte| *byte == b'\n') {
-            let line = self.pending.drain(..=position).collect::<Vec<_>>();
-            output.extend(self.normalize_line(&line));
+        for frame in frames {
+            self.handle_frame(frame, &mut output);
         }
-
         output
     }
 
     pub fn finish(&mut self) -> Vec<u8> {
         let mut output = Vec::new();
-        if !self.pending.is_empty() {
-            let line = std::mem::take(&mut self.pending);
-            output.extend(self.normalize_line(&line));
+        if let Some(frame) = self.parser.finish() {
+            self.handle_frame(frame, &mut output);
         }
         output.extend(self.finish_response());
         output
     }
 
-    fn normalize_line(&mut self, line: &[u8]) -> Vec<u8> {
-        let line_without_newline = line.strip_suffix(b"\n").unwrap_or(line);
-        let line_without_cr = line_without_newline
-            .strip_suffix(b"\r")
-            .unwrap_or(line_without_newline);
-        if let Some(event_name) = utf8_field_value(line_without_cr, b"event:") {
-            self.diagnostics.observe_event_name(&event_name);
-            self.pending_event_name = Some(event_name);
-            return line.to_vec();
+    fn handle_frame(&mut self, frame: SseFrame, output: &mut Vec<u8>) {
+        match frame {
+            SseFrame::Event { name, line } => {
+                self.diagnostics.observe_event_name(&name);
+                self.pending_event_name = Some(name);
+                output.extend_from_slice(&line);
+            }
+            SseFrame::Data { value, .. } => {
+                self.handle_data(value, output);
+            }
+            SseFrame::DataUnparseable { line } => {
+                self.pending_event_name = None;
+                output.extend_from_slice(&line);
+            }
+            SseFrame::Done { line } => {
+                self.pending_event_name = None;
+                output.extend(self.finish_response());
+                output.extend_from_slice(&line);
+            }
+            SseFrame::PassThrough { line } => {
+                output.extend_from_slice(&line);
+            }
         }
-        let Some(data) = sse_field_value(line_without_cr, b"data:") else {
-            return line.to_vec();
-        };
-        if data == b"[DONE]" {
-            self.pending_event_name = None;
-            let mut output = self.finish_response();
-            output.extend_from_slice(line);
-            return output;
-        }
+    }
 
-        let Ok(mut chunk) = serde_json::from_slice::<Value>(data) else {
-            self.pending_event_name = None;
-            return line.to_vec();
-        };
+    fn handle_data(&mut self, mut chunk: Value, output: &mut Vec<u8>) {
         let observation = extract_usage_observation(&chunk);
         let usage_object_count = observation.diagnostics.usage_object_count;
         let json_event_name = json_event_type(&chunk).and_then(safe_diagnostic_label);
@@ -802,7 +919,7 @@ impl ResponsesSseNormalizer {
         {
             rewrite_response_models(&mut chunk, backend_model, public_model);
         }
-        self.process_chat_chunk(&chunk)
+        output.extend(self.process_chat_chunk(&chunk));
     }
 
     fn process_chat_chunk(&mut self, chunk: &Value) -> Vec<u8> {
@@ -1128,7 +1245,7 @@ impl ResponsesSseNormalizer {
 
 #[derive(Debug, Default)]
 pub struct ChatCompletionsSseNormalizer {
-    pending: Vec<u8>,
+    parser: SseLineParser,
     pub usage: UsageTotals,
     pub diagnostics: UsageDiagnostics,
     pending_event_name: Option<String>,
@@ -1168,22 +1285,18 @@ impl ChatCompletionsSseNormalizer {
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
-        self.pending.extend_from_slice(chunk);
+        let frames = self.parser.push(chunk);
         let mut output = Vec::new();
-
-        while let Some(position) = self.pending.iter().position(|byte| *byte == b'\n') {
-            let line = self.pending.drain(..=position).collect::<Vec<_>>();
-            output.extend(self.normalize_line(&line));
+        for frame in frames {
+            self.handle_frame(frame, &mut output);
         }
-
         output
     }
 
     pub fn finish(&mut self) -> Vec<u8> {
         let mut output = Vec::new();
-        if !self.pending.is_empty() {
-            let line = std::mem::take(&mut self.pending);
-            output.extend(self.normalize_line(&line));
+        if let Some(frame) = self.parser.finish() {
+            self.handle_frame(frame, &mut output);
         }
         if !self.completed {
             output.extend(self.finish_response(None));
@@ -1192,33 +1305,30 @@ impl ChatCompletionsSseNormalizer {
         output
     }
 
-    fn normalize_line(&mut self, line: &[u8]) -> Vec<u8> {
-        let line_without_newline = line.strip_suffix(b"\n").unwrap_or(line);
-        let line_without_cr = line_without_newline
-            .strip_suffix(b"\r")
-            .unwrap_or(line_without_newline);
-        if let Some(event_name) = utf8_field_value(line_without_cr, b"event:") {
-            self.diagnostics.observe_event_name(&event_name);
-            self.pending_event_name = Some(event_name);
-            return Vec::new();
-        }
-        let Some(data) = sse_field_value(line_without_cr, b"data:") else {
-            return Vec::new();
-        };
-        if data == b"[DONE]" {
-            self.pending_event_name = None;
-            let mut output = Vec::new();
-            if !self.completed {
-                output.extend(self.finish_response(None));
+    fn handle_frame(&mut self, frame: SseFrame, output: &mut Vec<u8>) {
+        match frame {
+            SseFrame::Event { name, .. } => {
+                self.diagnostics.observe_event_name(&name);
+                self.pending_event_name = Some(name);
             }
-            output.extend(self.done_event());
-            return output;
+            SseFrame::Data { value, .. } => {
+                self.handle_data(value, output);
+            }
+            SseFrame::DataUnparseable { .. } => {
+                self.pending_event_name = None;
+            }
+            SseFrame::Done { .. } => {
+                self.pending_event_name = None;
+                if !self.completed {
+                    output.extend(self.finish_response(None));
+                }
+                output.extend(self.done_event());
+            }
+            SseFrame::PassThrough { .. } => {}
         }
+    }
 
-        let Ok(mut event) = serde_json::from_slice::<Value>(data) else {
-            self.pending_event_name = None;
-            return Vec::new();
-        };
+    fn handle_data(&mut self, mut event: Value, output: &mut Vec<u8>) {
         let observation = extract_usage_observation(&event);
         let usage_object_count = observation.diagnostics.usage_object_count;
         let json_event_name = json_event_type(&event).and_then(safe_diagnostic_label);
@@ -1245,7 +1355,7 @@ impl ChatCompletionsSseNormalizer {
         }
         ensure_usage_total_tokens(&mut event);
 
-        self.process_response_event(&event)
+        output.extend(self.process_response_event(&event));
     }
 
     fn process_response_event(&mut self, event: &Value) -> Vec<u8> {

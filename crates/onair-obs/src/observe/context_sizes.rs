@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use onair_core::ContextSizeCache;
-use onair_core::config::{Config, ConfigStore, ContextLengthPolicy, RouteKey};
+use onair_core::config::{Config, ConfigStore, ContextLengthSpec, RouteKey};
 use reqwest::Client;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
@@ -136,9 +136,10 @@ fn collect_upstream_targets(config: &Config) -> Vec<(String, String, String)> {
     for route in &config.routes {
         if let (
             RouteKey::Public(public),
-            ContextLengthPolicy::Upstream {
+            ContextLengthSpec::Upstream {
                 backend_id,
                 backend_model,
+                ..
             },
         ) = (&route.key, &route.context_length)
             && seen.insert(public.clone())
@@ -315,9 +316,10 @@ mod tests {
                 ResolvedRoute {
                     key: RouteKey::Public("shared".to_owned()),
                     expose: BTreeSet::new(),
-                    context_length: ContextLengthPolicy::Upstream {
+                    context_length: ContextLengthSpec::Upstream {
                         backend_id: "backend-a".to_owned(),
                         backend_model: "shared-a".to_owned(),
+                        n_ctx: None,
                     },
                     tool_schema_mode: ToolSchemaMode::Preserve,
                     responses_store: ResponsesStorePolicy::Preserve,
@@ -331,9 +333,10 @@ mod tests {
                 ResolvedRoute {
                     key: RouteKey::Public("shared".to_owned()),
                     expose: BTreeSet::new(),
-                    context_length: ContextLengthPolicy::Upstream {
+                    context_length: ContextLengthSpec::Upstream {
                         backend_id: "backend-b".to_owned(),
                         backend_model: "shared-b".to_owned(),
+                        n_ctx: None,
                     },
                     tool_schema_mode: ToolSchemaMode::Preserve,
                     responses_store: ResponsesStorePolicy::Preserve,
