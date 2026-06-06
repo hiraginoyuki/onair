@@ -71,7 +71,7 @@ pub(super) fn client_request_id_str(headers: &HeaderMap) -> Option<String> {
 
 pub async fn proxy_v1(
     state: Arc<ProxyState>,
-    peer_addr: Option<SocketAddr>,
+    peer_addr: SocketAddr,
     headers: HeaderMap,
     method: Method,
     uri: Uri,
@@ -83,7 +83,7 @@ pub async fn proxy_v1(
     let route_name = routing::path_metric_name(&path);
     let config = state.config.snapshot();
     let client_info =
-        ClientInfo::from_headers(&headers, peer_addr, &config.server.trusted_proxy_cidrs);
+        ClientInfo::from_headers(&headers, Some(peer_addr), &config.server.trusted_proxy_cidrs);
     let request_body_bytes = body.len();
     let client_request_id = header_str(&headers, &X_REQUEST_ID).map(inspector_text);
     let started_at_unix_ms = timeline.snapshot().started_unix_ms;

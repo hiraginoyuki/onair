@@ -276,7 +276,7 @@ async fn v1_proxy(
     let proxy_state = state.proxy_state();
     match proxy::proxy_v1(
         proxy_state,
-        Some(peer_addr),
+        peer_addr,
         headers.clone(),
         method,
         uri,
