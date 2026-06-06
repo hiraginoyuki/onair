@@ -495,28 +495,37 @@ fn has_tool_capability(supports: &BTreeSet<String>) -> bool {
         || has_capability(supports, "functions")
 }
 
-#[derive(Default)]
-struct FnvHasher(u64);
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+struct FnvHasher {
+    state: u64,
+    started: bool,
+}
+
+impl Default for FnvHasher {
+    fn default() -> Self {
+        Self {
+            state: FNV_OFFSET_BASIS,
+            started: false,
+        }
+    }
+}
 
 impl Hasher for FnvHasher {
     fn write(&mut self, bytes: &[u8]) {
-        let mut hash = if self.0 == 0 {
-            0xcbf29ce484222325
-        } else {
-            self.0
-        };
         for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x100000001b3);
+            self.state ^= u64::from(*byte);
+            self.state = self.state.wrapping_mul(FNV_PRIME);
+            self.started = true;
         }
-        self.0 = hash;
     }
 
     fn finish(&self) -> u64 {
-        if self.0 == 0 {
-            0xcbf29ce484222325
+        if self.started {
+            self.state
         } else {
-            self.0
+            FNV_OFFSET_BASIS
         }
     }
 }
