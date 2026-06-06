@@ -133,7 +133,7 @@ pub(super) fn record_preflight_inspector(record: PreflightInspectorRecord<'_>) {
 }
 
 pub(super) fn record_context_inspector(
-    context: ProxyContext,
+    context: ProxyContext<'_>,
     outcome: InspectorOutcome,
     status: StatusCode,
     error_kind: Option<&'static str>,

@@ -277,7 +277,7 @@ async fn v1_proxy(
     match proxy::proxy_v1(
         proxy_state,
         peer_addr,
-        headers.clone(),
+        &headers,
         method,
         uri,
         body,
