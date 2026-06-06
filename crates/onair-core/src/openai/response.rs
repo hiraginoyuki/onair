@@ -586,17 +586,10 @@ pub enum SseFrame {
 /// field-extraction logic, so the parser is factored out. The
 /// per-type emission strategy is intentionally kept inside each
 /// normalizer; see `SseNormalizer`, `ResponsesSseNormalizer`, and
-/// `ChatCompletionsSseNormalizer`.
-// TODO(audit-followup): collapse the three normalizers into a single
-// `SseNormalizer` with a per-type emission strategy enum
-// (`Passthrough` | `ChatToResponses` | `ResponsesToChat`). The current
-// refactor only extracted the line parser; the three `handle_frame`
-// and `handle_data` methods still duplicate the usage-extraction +
-// observation + model-rewrite prologue and the Event/PassThrough
-// line-routing decisions. The audit plan called this the highest-risk
-// item in slice B; the protocol-by-protocol approach to the strategy
-// collapse was deferred after the first attempt was reverted. Future
-// work could revisit with a thorough strategy-trait extraction.
+/// `ChatCompletionsSseNormalizer`. The shared `data:`-frame
+/// prologue (usage extraction, diagnostics, model rewrite,
+/// `ensure_usage_total_tokens`) is factored into
+/// [`apply_data_prologue`].
 #[derive(Debug, Default)]
 pub struct SseLineParser {
     pending: Vec<u8>,
@@ -677,6 +670,65 @@ fn line_suffix(line: &[u8]) -> (&[u8], &[u8]) {
     (cr, line_ending)
 }
 
+/// Result of running the shared SSE `data:`-frame prologue.
+///
+/// All three normalizers (`SseNormalizer`, `ResponsesSseNormalizer`,
+/// `ChatCompletionsSseNormalizer`) share the same opening moves on
+/// a parsed JSON data value: usage extraction, event-name diagnostics,
+/// model rewrite, and `ensure_usage_total_tokens`. The function
+/// [`apply_data_prologue`] runs them and returns the per-call
+/// summary that the protocol-specific strategies consult to decide
+/// what to emit.
+pub(crate) struct DataPrologue {
+    pub usage_object_count: u64,
+}
+
+/// Shared opening moves for an SSE `data:`-frame.
+///
+/// Mutates `value` in place (model rewrite, `ensure_usage_total_tokens`).
+/// Updates `usage` and `diagnostics` with the extracted usage
+/// totals. Clears `pending_event_name` once the data frame has
+/// been attributed. Returns the [`DataPrologue`] summary the
+/// strategy needs to decide what to emit.
+///
+/// The per-strategy work happens after this call returns; the
+/// three normalizers differ only in what they emit, not in what
+/// they observe about the data.
+pub(crate) fn apply_data_prologue(
+    value: &mut Value,
+    pending_event_name: &mut Option<String>,
+    usage: &mut UsageTotals,
+    diagnostics: &mut UsageDiagnostics,
+    backend_model: Option<&str>,
+    public_model: Option<&str>,
+) -> DataPrologue {
+    let observation = extract_usage_observation(value);
+    let usage_object_count = observation.diagnostics.usage_object_count;
+    let json_event_name = json_event_type(value).and_then(safe_diagnostic_label);
+    if let Some(event_name) = &json_event_name {
+        diagnostics.observe_event_name(event_name);
+    }
+    if usage_object_count > 0 {
+        if let Some(event_name) = &*pending_event_name {
+            diagnostics.observe_usage_event_name(event_name);
+        }
+        if let Some(event_name) = &json_event_name {
+            diagnostics.observe_usage_event_name(event_name);
+        }
+    }
+    *pending_event_name = None;
+    usage.input += observation.totals.input;
+    usage.cached_input += observation.totals.cached_input;
+    usage.output += observation.totals.output;
+    usage.total += observation.totals.total;
+    diagnostics.merge(observation.diagnostics);
+    if let (Some(backend_model), Some(public_model)) = (backend_model, public_model) {
+        rewrite_response_models(value, backend_model, public_model);
+    }
+    ensure_usage_total_tokens(value);
+    DataPrologue { usage_object_count }
+}
+
 #[derive(Debug, Default)]
 pub struct SseNormalizer {
     parser: SseLineParser,
@@ -754,32 +806,15 @@ impl SseNormalizer {
         line: &[u8],
         output: &mut Vec<u8>,
     ) {
-        let observation = extract_usage_observation(&json);
-        let usage_object_count = observation.diagnostics.usage_object_count;
-        let json_event_name = json_event_type(&json).and_then(safe_diagnostic_label);
-        if let Some(event_name) = &json_event_name {
-            self.diagnostics.observe_event_name(event_name);
-        }
-        if usage_object_count > 0 {
-            if let Some(event_name) = &self.pending_event_name {
-                self.diagnostics.observe_usage_event_name(event_name);
-            }
-            if let Some(event_name) = &json_event_name {
-                self.diagnostics.observe_usage_event_name(event_name);
-            }
-        }
-        self.pending_event_name = None;
-        self.usage.input += observation.totals.input;
-        self.usage.cached_input += observation.totals.cached_input;
-        self.usage.output += observation.totals.output;
-        self.usage.total += observation.totals.total;
-        self.diagnostics.merge(observation.diagnostics);
-        if let (Some(backend_model), Some(public_model)) = (&self.backend_model, &self.public_model)
-        {
-            rewrite_response_models(&mut json, backend_model, public_model);
-        }
-        ensure_usage_total_tokens(&mut json);
-        if !self.emit_usage_to_client && usage_object_count > 0 {
+        let prologue = apply_data_prologue(
+            &mut json,
+            &mut self.pending_event_name,
+            &mut self.usage,
+            &mut self.diagnostics,
+            self.backend_model.as_deref(),
+            self.public_model.as_deref(),
+        );
+        if !self.emit_usage_to_client && prologue.usage_object_count > 0 {
             if chat_usage_only_chunk(&json) {
                 return;
             }
@@ -895,30 +930,14 @@ impl ResponsesSseNormalizer {
     }
 
     fn handle_data(&mut self, mut chunk: Value, output: &mut Vec<u8>) {
-        let observation = extract_usage_observation(&chunk);
-        let usage_object_count = observation.diagnostics.usage_object_count;
-        let json_event_name = json_event_type(&chunk).and_then(safe_diagnostic_label);
-        if let Some(event_name) = &json_event_name {
-            self.diagnostics.observe_event_name(event_name);
-        }
-        if usage_object_count > 0 {
-            if let Some(event_name) = &self.pending_event_name {
-                self.diagnostics.observe_usage_event_name(event_name);
-            }
-            if let Some(event_name) = &json_event_name {
-                self.diagnostics.observe_usage_event_name(event_name);
-            }
-        }
-        self.pending_event_name = None;
-        self.usage.input += observation.totals.input;
-        self.usage.cached_input += observation.totals.cached_input;
-        self.usage.output += observation.totals.output;
-        self.usage.total += observation.totals.total;
-        self.diagnostics.merge(observation.diagnostics);
-        if let (Some(backend_model), Some(public_model)) = (&self.backend_model, &self.public_model)
-        {
-            rewrite_response_models(&mut chunk, backend_model, public_model);
-        }
+        apply_data_prologue(
+            &mut chunk,
+            &mut self.pending_event_name,
+            &mut self.usage,
+            &mut self.diagnostics,
+            self.backend_model.as_deref(),
+            self.public_model.as_deref(),
+        );
         output.extend(self.process_chat_chunk(&chunk));
     }
 
@@ -1329,32 +1348,14 @@ impl ChatCompletionsSseNormalizer {
     }
 
     fn handle_data(&mut self, mut event: Value, output: &mut Vec<u8>) {
-        let observation = extract_usage_observation(&event);
-        let usage_object_count = observation.diagnostics.usage_object_count;
-        let json_event_name = json_event_type(&event).and_then(safe_diagnostic_label);
-        if let Some(event_name) = &json_event_name {
-            self.diagnostics.observe_event_name(event_name);
-        }
-        if usage_object_count > 0 {
-            if let Some(event_name) = &self.pending_event_name {
-                self.diagnostics.observe_usage_event_name(event_name);
-            }
-            if let Some(event_name) = &json_event_name {
-                self.diagnostics.observe_usage_event_name(event_name);
-            }
-        }
-        self.pending_event_name = None;
-        self.usage.input += observation.totals.input;
-        self.usage.cached_input += observation.totals.cached_input;
-        self.usage.output += observation.totals.output;
-        self.usage.total += observation.totals.total;
-        self.diagnostics.merge(observation.diagnostics);
-        if let (Some(backend_model), Some(public_model)) = (&self.backend_model, &self.public_model)
-        {
-            rewrite_response_models(&mut event, backend_model, public_model);
-        }
-        ensure_usage_total_tokens(&mut event);
-
+        apply_data_prologue(
+            &mut event,
+            &mut self.pending_event_name,
+            &mut self.usage,
+            &mut self.diagnostics,
+            self.backend_model.as_deref(),
+            self.public_model.as_deref(),
+        );
         output.extend(self.process_response_event(&event));
     }
 
