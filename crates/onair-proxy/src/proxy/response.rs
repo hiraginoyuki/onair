@@ -95,7 +95,7 @@ pub(super) async fn buffered_response(
             );
             if let Some(capture) = &mut debug_capture {
                 capture.record_outcome(CaptureOutcome::UpstreamBodyReadFailed {
-                    client_status: StatusCode::BAD_GATEWAY.as_u16(),
+                    client_status: StatusCode::BAD_GATEWAY,
                     error_kind,
                 });
             }
@@ -178,7 +178,7 @@ pub(super) async fn buffered_response(
     );
     if let Some(capture) = &mut debug_capture {
         capture.record_outcome(CaptureOutcome::Success {
-            upstream_status: upstream_status.as_u16(),
+            upstream_status,
         });
     }
     state.health.record_success(
@@ -289,7 +289,7 @@ pub(super) fn streaming_response(
         inspector_enabled,
         inspector_retention_requests,
         labels: labels.clone(),
-        status_code: upstream_status.as_u16(),
+        status_code: upstream_status,
         model_log_fields: model_log_fields.clone(),
         request_body_bytes,
         debug_capture_config,
@@ -476,7 +476,7 @@ struct StreamMetrics {
     inspector_retention_requests: usize,
     inspector_base: InspectorRequestBase,
     labels: MetricLabels,
-    status_code: u16,
+    status_code: StatusCode,
     model_log_fields: ModelLogFields,
     request_body_bytes: usize,
     debug_capture_config: DebugCaptureConfig,
@@ -507,7 +507,7 @@ struct StreamMetricsInit {
     inspector_enabled: bool,
     inspector_retention_requests: usize,
     labels: MetricLabels,
-    status_code: u16,
+    status_code: StatusCode,
     model_log_fields: ModelLogFields,
     request_body_bytes: usize,
     debug_capture_config: DebugCaptureConfig,
@@ -621,8 +621,8 @@ impl Drop for StreamMetrics {
         if let Some(mut attempt_record) = self.current_attempt.take() {
             attempt_record.mark_stream_complete(stream_complete_us);
             self.backend_attempts.push(attempt_record.finish(
-                StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::OK),
-                Some(self.status_code),
+                self.status_code,
+                Some(self.status_code.as_u16()),
                 match self.stream_error_kind {
                     Some(_) => "upstream_stream_failed",
                     None if !self.body_complete => "stream_incomplete",
@@ -636,7 +636,7 @@ impl Drop for StreamMetrics {
             self.metrics.record_usage(&self.labels, self.usage);
         }
         debug!(
-            upstream_status = self.status_code,
+            upstream_status = %self.status_code,
             backend = %self.labels.backend,
             backend_target = %self.backend_target,
             backend_remote_addr = %socket_addr_or_none(self.backend_remote_addr),
@@ -672,12 +672,12 @@ impl Drop for StreamMetrics {
             self.health_store.record_failure(
                 &self.labels.backend,
                 duration,
-                self.status_code,
+                self.status_code.as_u16(),
                 error_kind,
             );
         } else if self.body_complete {
             self.health_store
-                .record_success(&self.labels.backend, duration, self.status_code);
+                .record_success(&self.labels.backend, duration, self.status_code.as_u16());
         }
         if let Some(capture) = &mut self.debug_capture {
             capture.record_stream_usage(self.usage_diagnostics.clone());
@@ -718,9 +718,7 @@ impl Drop for StreamMetrics {
             InspectorRequestRecord::new(InspectorRequestRecordInit {
                 base: inspector_base,
                 outcome: inspector_outcome,
-                status: StatusCode::from_u16(self.status_code)
-                    .unwrap_or(StatusCode::OK)
-                    .as_u16(),
+                status: self.status_code.as_u16(),
                 error_kind: self.stream_error_kind.map(str::to_owned),
                 backend_attempts: self.backend_attempts.clone(),
                 retried_attempts: self.retried_attempts.clone(),
@@ -734,6 +732,6 @@ impl Drop for StreamMetrics {
             "streaming response timeline snapshot",
         );
         self.metrics
-            .record_stream(&self.labels, self.status_code, duration);
+            .record_stream(&self.labels, self.status_code.as_u16(), duration);
     }
 }

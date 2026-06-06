@@ -410,11 +410,11 @@ async fn do_proxy(
             .await
             {
                 Ok(error_body) => {
-                    if let Some(capture) = &mut context.debug_capture {
-                        capture.record_upstream_error_response(
-                            upstream_status.as_u16(),
-                            upstream_content_type.as_deref(),
-                            &error_body.bytes,
+                if let Some(capture) = &mut context.debug_capture {
+                    capture.record_upstream_error_response(
+                        upstream_status,
+                        upstream_content_type.as_deref(),
+                        &error_body.bytes,
                             error_body.truncated,
                         );
                     }
@@ -454,8 +454,8 @@ async fn do_proxy(
         );
         if let Some(capture) = &mut context.debug_capture {
             capture.record_outcome(CaptureOutcome::UpstreamNonSuccess {
-                upstream_status: upstream_status.as_u16(),
-                client_status: api_error.status.as_u16(),
+                upstream_status,
+                client_status: api_error.status,
             });
         }
         context.state.health.record_failure(
@@ -818,7 +818,7 @@ impl FailureKind {
         }
     }
 
-    fn capture_outcome(self, client_status: u16) -> CaptureOutcome {
+    fn capture_outcome(self, client_status: StatusCode) -> CaptureOutcome {
         match self {
             Self::Timeout => CaptureOutcome::UpstreamTimeout { client_status },
             Self::Request { error_kind, .. } => CaptureOutcome::UpstreamRequestFailed {
@@ -876,7 +876,7 @@ fn record_retry(
     let error_kind = kind.error_kind();
     let outcome = kind.outcome();
     if let Some(capture) = &mut context.debug_capture {
-        capture.record_outcome(kind.capture_outcome(client_status.as_u16()));
+        capture.record_outcome(kind.capture_outcome(client_status));
     }
     context.state.health.record_failure(
         &context.labels.backend,
@@ -918,7 +918,7 @@ fn record_final_failure(
         context.request_timer.elapsed(),
     );
     if let Some(capture) = &mut context.debug_capture {
-        capture.record_outcome(kind.capture_outcome(client_status.as_u16()));
+        capture.record_outcome(kind.capture_outcome(client_status));
     }
     context.state.health.record_failure(
         &context.labels.backend,
