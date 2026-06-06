@@ -3,11 +3,12 @@ use std::env;
 use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use notify::event::{AccessKind, AccessMode};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -76,15 +77,12 @@ impl ConfigStore {
     }
 
     pub fn snapshot(&self) -> Arc<Config> {
-        self.inner
-            .read()
-            .expect("config store lock poisoned")
-            .clone()
+        self.inner.read().clone()
     }
 
     pub fn replace(&self, config: Config) -> Arc<Config> {
         let config = Arc::new(config);
-        *self.inner.write().expect("config store lock poisoned") = config.clone();
+        *self.inner.write() = config.clone();
         config
     }
 }
@@ -1311,6 +1309,57 @@ fn is_reload_event(event: &Event, path: &Path, filename: &std::ffi::OsStr) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_store_lock_survives_panic_in_holder() {
+        use std::io::Write;
+
+        let path = env::temp_dir().join(format!(
+            "onair-config-store-lock-test-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(
+            br#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        )
+        .unwrap();
+        let store = ConfigStore::new(Config::load(&path).unwrap());
+        let _ = std::fs::remove_file(&path);
+
+        let writer = store.clone();
+        let _ = std::thread::spawn(move || {
+            // parking_lot guards are unwind-safe by design; if a task
+            // that held the read/write lock panicked, subsequent
+            // accessors must still succeed.
+            let _guard = writer.inner.write();
+            panic!("simulated panic in lock holder");
+        })
+        .join();
+
+        let snapshot = store.snapshot();
+        assert!(!snapshot.clients.is_empty());
+    }
 
     #[test]
     fn context_length_policies_resolve_from_config() {
