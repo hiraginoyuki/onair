@@ -4,6 +4,8 @@ use std::str::FromStr;
 
 use serde::Deserialize;
 
+const V4_MAPPED_PREFIX: u128 = 0xFFFF_u128 << 32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IpCidr {
     network: IpAddr,
@@ -20,6 +22,11 @@ impl IpCidr {
             (IpAddr::V6(network), IpAddr::V6(address)) if self.prefix <= 128 => {
                 let mask = ipv6_mask(self.prefix);
                 u128::from(network) & mask == u128::from(address) & mask
+            }
+            (IpAddr::V6(network), IpAddr::V4(address)) if self.prefix <= 128 => {
+                let mapped = u128::from(u32::from(address)) | V4_MAPPED_PREFIX;
+                let mask = ipv6_mask(self.prefix);
+                u128::from(network) & mask == mapped & mask
             }
             _ => false,
         }
@@ -62,6 +69,12 @@ impl FromStr for IpCidr {
             return Err(format!(
                 "CIDR prefix {prefix} exceeds maximum {max_prefix} for {network}"
             ));
+        }
+        if prefix == 0 {
+            return Err(
+                "CIDR prefix 0 matches every address and is not allowed for trusted_proxy_cidrs"
+                    .to_owned(),
+            );
         }
 
         Ok(Self { network, prefix })
@@ -126,6 +139,32 @@ mod tests {
     #[test]
     fn rejects_oversized_prefix() {
         assert!("10.0.0.0/33".parse::<IpCidr>().is_err());
+    }
+
+    #[test]
+    fn rejects_zero_prefix_v4() {
+        let error = "0.0.0.0/0".parse::<IpCidr>().unwrap_err();
+        assert!(
+            error.contains("prefix 0"),
+            "unexpected zero-prefix error: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_zero_prefix_v6() {
+        let error = "::/0".parse::<IpCidr>().unwrap_err();
+        assert!(
+            error.contains("prefix 0"),
+            "unexpected zero-prefix error: {error}"
+        );
+    }
+
+    #[test]
+    fn v6_cidr_matches_v4_mapped_address() {
+        let cidr: IpCidr = "::ffff:127.0.0.0/104".parse().unwrap();
+        assert!(cidr.contains("127.0.0.1".parse().unwrap()));
+        assert!(cidr.contains("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!cidr.contains("128.0.0.1".parse().unwrap()));
     }
 
     #[test]
