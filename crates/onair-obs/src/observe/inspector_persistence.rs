@@ -15,7 +15,6 @@ use onair_core::error::{Error, Result};
 use super::inspector::{InspectorOutcome, InspectorRequestRecord};
 
 const WRITER_QUEUE_CAPACITY: usize = 1024;
-const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 const RUNNING_RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const CURRENT_SCHEMA_VERSION: i64 = 1;
 
@@ -41,6 +40,7 @@ enum LoopState {
 pub(super) fn restore_records(
     path: &Path,
     retention_requests: usize,
+    drain_timeout: Duration,
 ) -> Result<(
     Vec<InspectorRequestRecord>,
     InspectorPersistenceWriter,
@@ -86,7 +86,7 @@ pub(super) fn restore_records(
             loop {
                 if matches!(state, LoopState::Running) && shutdown.load(Ordering::Acquire) {
                     state = LoopState::Draining {
-                        deadline: Instant::now() + SHUTDOWN_DRAIN_TIMEOUT,
+                        deadline: Instant::now() + drain_timeout,
                     };
                 }
 
@@ -116,7 +116,7 @@ pub(super) fn restore_records(
                     Ok(PersistenceMessage::Shutdown) => {
                         if matches!(state, LoopState::Running) {
                             state = LoopState::Draining {
-                                deadline: Instant::now() + SHUTDOWN_DRAIN_TIMEOUT,
+                                deadline: Instant::now() + drain_timeout,
                             };
                         }
                     }

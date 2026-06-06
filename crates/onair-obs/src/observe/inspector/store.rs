@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
@@ -150,7 +151,8 @@ impl InspectorStore {
             )
         })?;
         let retention_requests = config.retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        let (records, writer, handle) = restore_records(path, retention_requests)?;
+        let drain_timeout = Duration::from_millis(config.persistence.drain_timeout_ms);
+        let (records, writer, handle) = restore_records(path, retention_requests, drain_timeout)?;
         Ok(Self::from_parts(
             records,
             Some(PersistenceComponents {
