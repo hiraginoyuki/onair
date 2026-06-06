@@ -434,16 +434,13 @@ async fn operator_runtime(
         return response;
     }
 
-    let config = state.config.snapshot();
-    let mut response = Json(operator::runtime_snapshot(
-        &config,
+    operator::runtime_snapshot(
+        &state.config.snapshot(),
         state.started_at_unix_ms,
         state.uptime(),
         state.inspector.retained_len(),
-    ))
-    .into_response();
-    add_inspector_headers(&mut response);
-    response
+    )
+    .into_response()
 }
 
 async fn operator_config(
@@ -454,10 +451,7 @@ async fn operator_config(
         return response;
     }
 
-    let config = state.config.snapshot();
-    let mut response = Json(operator::config_snapshot(&config)).into_response();
-    add_inspector_headers(&mut response);
-    response
+    operator::config_snapshot(&state.config.snapshot()).into_response()
 }
 
 async fn operator_models(
@@ -468,11 +462,7 @@ async fn operator_models(
         return response;
     }
 
-    let config = state.config.snapshot();
-    let mut response =
-        Json(operator::models_snapshot(&config, &state.context_sizes)).into_response();
-    add_inspector_headers(&mut response);
-    response
+    operator::models_snapshot(&state.config.snapshot(), &state.context_sizes).into_response()
 }
 
 async fn operator_health(
@@ -483,10 +473,7 @@ async fn operator_health(
         return response;
     }
 
-    let config = state.config.snapshot();
-    let mut response = Json(operator::health_snapshot(&config, &state.health)).into_response();
-    add_inspector_headers(&mut response);
-    response
+    operator::health_snapshot(&state.config.snapshot(), &state.health).into_response()
 }
 
 fn local_operator_gate(state: &AppState, request: &Request<Body>) -> Option<Response<Body>> {
