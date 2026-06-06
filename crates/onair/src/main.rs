@@ -43,16 +43,12 @@ async fn main() -> Result<()> {
     let bind = config.server.bind;
     let state = Arc::new(AppState::new(config, metrics, shutdown_tx.clone())?);
     let _config_watcher = ConfigWatcher::start(&args.config, state.config.clone())?;
-    let app = build_router(state);
+    let app = app::router(state);
 
     info!(%bind, "starting onair router");
     serve(bind, app, shutdown_tx).await?;
     telemetry_guard.shutdown();
     Ok(())
-}
-
-fn build_router(state: Arc<AppState>) -> Router {
-    app::router(state)
 }
 
 async fn serve(bind: SocketAddr, app: Router, shutdown: watch::Sender<bool>) -> Result<()> {
