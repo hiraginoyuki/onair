@@ -28,9 +28,9 @@ pub struct ProxyRequest {
     pub(super) stream: bool,
 }
 
-pub struct ProxyContext {
+pub struct ProxyContext<'a> {
     pub(super) state: Arc<ProxyState>,
-    pub(super) client_headers: HeaderMap,
+    pub(super) client_headers: &'a HeaderMap,
     pub(super) debug_capture_config: DebugCaptureConfig,
     pub(super) debug_capture: Option<RequestCapture>,
     pub(super) pending_debug_capture: Option<PendingDebugCapture>,
@@ -57,7 +57,7 @@ pub struct ProxyContext {
     pub(super) current_attempt: Option<InspectorAttemptBuilder>,
 }
 
-impl ProxyContext {
+impl<'a> ProxyContext<'a> {
     pub fn apply_route(&mut self, route: SelectedRoute) {
         self.backend_target = backend_target(&route.base_url);
         self.backend_remote_addr = None;

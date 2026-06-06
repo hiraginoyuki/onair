@@ -72,7 +72,7 @@ pub(super) fn client_request_id_str(headers: &HeaderMap) -> Option<String> {
 pub async fn proxy_v1(
     state: Arc<ProxyState>,
     peer_addr: SocketAddr,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     method: Method,
     uri: Uri,
     body: Bytes,
@@ -83,9 +83,9 @@ pub async fn proxy_v1(
     let route_name = routing::path_metric_name(&path);
     let config = state.config.snapshot();
     let client_info =
-        ClientInfo::from_headers(&headers, Some(peer_addr), &config.server.trusted_proxy_cidrs);
+        ClientInfo::from_headers(headers, Some(peer_addr), &config.server.trusted_proxy_cidrs);
     let request_body_bytes = body.len();
-    let client_request_id = header_str(&headers, &X_REQUEST_ID).map(inspector_text);
+    let client_request_id = header_str(headers, &X_REQUEST_ID).map(inspector_text);
     let started_at_unix_ms = timeline.snapshot().started_unix_ms;
     let observation = RequestObservationBase {
         inspector_enabled: config.inspector.enabled,
@@ -107,7 +107,7 @@ pub async fn proxy_v1(
         initial_live_record(&observation, &timeline, &route_name),
     );
 
-    let identity = match authenticate(&headers, &config.clients) {
+    let identity = match authenticate(headers, &config.clients) {
         Ok(identity) => {
             timeline.mark(TimelineEvent::AuthDone);
             identity
@@ -133,7 +133,7 @@ pub async fn proxy_v1(
         }
     };
 
-    let content_type = header_str(&headers, &CONTENT_TYPE).map(str::to_owned);
+    let content_type = header_str(headers, &CONTENT_TYPE).map(str::to_owned);
     let request_shape = openai::inspect_request(&body, content_type.as_deref(), uri.query());
     timeline.mark(TimelineEvent::RequestInspected);
     if request_shape.model.is_none() && routing::path_requires_model(&path) {
@@ -312,8 +312,8 @@ pub async fn proxy_v1(
         .await
 }
 
-async fn do_proxy(
-    mut context: ProxyContext,
+async fn do_proxy<'a>(
+    mut context: ProxyContext<'a>,
     request: ProxyRequest,
     fallback_routes: Vec<SelectedRoute>,
 ) -> Result<Response<Body>, ApiError> {
@@ -327,7 +327,7 @@ async fn do_proxy(
     let request_path = uri.path().to_owned();
     let request_query = uri.query().map(str::to_owned);
     let upstream_path = upstream_path(&request_path).to_owned();
-    let request_id = client_request_id_str(&context.client_headers);
+    let request_id = client_request_id_str(context.client_headers);
     let capture_mode = context.debug_capture_config.mode;
     let mut fallback_routes = fallback_routes.into_iter();
     let upstream = loop {
@@ -756,7 +756,7 @@ fn prepare_outbound(
     if let Some(api_key) = &context.route.api_key {
         upstream_request = upstream_request.header(AUTHORIZATION, format!("Bearer {api_key}"));
     }
-    if let Some(client_request_id) = client_request_id(&context.client_headers) {
+    if let Some(client_request_id) = client_request_id(context.client_headers) {
         upstream_request = upstream_request.header(X_REQUEST_ID, client_request_id);
     }
 
@@ -893,8 +893,8 @@ fn record_retry(
     context.apply_route(next_route);
 }
 
-fn record_final_failure(
-    mut context: ProxyContext,
+fn record_final_failure<'a>(
+    mut context: ProxyContext<'a>,
     attempt_record: InspectorAttemptBuilder,
     kind: FailureKind,
 ) -> ApiError {

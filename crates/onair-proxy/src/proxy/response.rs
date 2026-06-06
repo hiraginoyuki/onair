@@ -31,7 +31,7 @@ use super::{
 };
 
 pub(super) async fn buffered_response(
-    context: ProxyContext,
+    context: ProxyContext<'_>,
     upstream: reqwest::Response,
 ) -> Result<Response<Body>, ApiError> {
     let ProxyContext {
@@ -227,7 +227,7 @@ pub(super) async fn buffered_response(
 
     response_builder(
         upstream_status,
-        &client_headers,
+        client_headers,
         &upstream_headers,
         content_type.as_deref(),
         false,
@@ -237,7 +237,7 @@ pub(super) async fn buffered_response(
 }
 
 pub(super) fn streaming_response(
-    context: ProxyContext,
+    context: ProxyContext<'_>,
     upstream: reqwest::Response,
 ) -> Response<Body> {
     let ProxyContext {
@@ -401,7 +401,7 @@ pub(super) fn streaming_response(
 
     response_builder(
         upstream_status,
-        &client_headers,
+        client_headers,
         &upstream_headers,
         Some("text/event-stream"),
         true,
