@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use crate::error::{Error, Result};
+use crate::error::{ConfigError, Error, Result};
 use crate::{ContextSizeCache, IpCidr};
 
 const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -688,16 +688,16 @@ fn validate_routes(
     let mut validated = Vec::with_capacity(route_configs.len());
     for route_config in route_configs {
         let key = route_config.route_key().ok_or_else(|| {
-            Error::Config(format!(
+            Error::Config(ConfigError::Message(format!(
                 "each [[route]] must declare exactly one of `public` or `path`; got public={:?} path={:?}",
                 route_config.public, route_config.path
-            ))
+            )))
         })?;
         if !seen_keys.insert(key.clone()) {
-            return Err(Error::Config(format!(
+            return Err(Error::Config(ConfigError::Message(format!(
                 "duplicate route declaration for '{}'",
                 format_route_key(&key)
-            )));
+            ))));
         }
         validate_markers(
             &route_config.expose,
@@ -722,11 +722,11 @@ fn bind_routes(
             .iter()
             .find(|b| b.id == backend_id)
             .ok_or_else(|| {
-                Error::Config(format!(
+                Error::Config(ConfigError::Message(format!(
                     "route '{}' references unknown backend '{}'",
                     format_route_key(key),
                     backend_id
-                ))
+                )))
             })?;
         let backend_model = model.clone().unwrap_or_else(|| match key {
             RouteKey::Public(public) => public.clone(),
@@ -839,14 +839,14 @@ fn parse_route_backend(entry: &str) -> Result<(Option<String>, String)> {
         let model = entry[..at_pos].to_owned();
         let backend_id = entry[at_pos + 1..].to_owned();
         if backend_id.is_empty() {
-            return Err(Error::Config(format!(
+            return Err(Error::Config(ConfigError::Message(format!(
                 "route backend entry '{entry}' is missing the backend id after '@'"
-            )));
+            ))));
         }
         if model.is_empty() {
-            return Err(Error::Config(format!(
+            return Err(Error::Config(ConfigError::Message(format!(
                 "route backend entry '{entry}' uses '@' but the model part is empty; use a bare backend id for model-less routes"
-            )));
+            ))));
         }
         Ok((Some(model), backend_id))
     } else {
@@ -870,13 +870,15 @@ fn resolve_clients(
     let mut clients = Vec::with_capacity(raw_clients.len());
     for client in raw_clients {
         if client.id.trim().is_empty() {
-            return Err(Error::Config("client id must not be empty".to_owned()));
+            return Err(Error::Config(ConfigError::Message(
+                "client id must not be empty".to_owned(),
+            )));
         }
         if !client_ids.insert(client.id.clone()) {
-            return Err(Error::Config(format!(
+            return Err(Error::Config(ConfigError::Message(format!(
                 "duplicate client id '{}'",
                 client.id
-            )));
+            ))));
         }
         let api_key = resolve_secret(
             client.api_key,
@@ -894,9 +896,9 @@ fn resolve_clients(
     }
 
     if clients.is_empty() {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "at least one [[client]] is required".to_owned(),
-        ));
+        )));
     }
 
     Ok(clients)
@@ -910,19 +912,21 @@ fn resolve_backends(
     let mut backends = Vec::with_capacity(raw_backends.len());
     for backend in raw_backends {
         if backend.id.trim().is_empty() {
-            return Err(Error::Config("backend id must not be empty".to_owned()));
+            return Err(Error::Config(ConfigError::Message(
+                "backend id must not be empty".to_owned(),
+            )));
         }
         if !backend_ids.insert(backend.id.clone()) {
-            return Err(Error::Config(format!(
+            return Err(Error::Config(ConfigError::Message(format!(
                 "duplicate backend id '{}'",
                 backend.id
-            )));
+            ))));
         }
         if backend.weight == 0 {
-            return Err(Error::Config(format!(
+            return Err(Error::Config(ConfigError::Message(format!(
                 "backend '{}' weight must be greater than zero",
                 backend.id
-            )));
+            ))));
         }
         let base_url = normalize_backend_base_url(&backend.base_url, &backend.id)?;
         let api_key = resolve_optional_secret(backend.api_key, backend.api_key_env)?;
@@ -947,9 +951,9 @@ fn resolve_backends(
     }
 
     if backends.is_empty() {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "at least one [[backend]] is required".to_owned(),
-        ));
+        )));
     }
 
     Ok(backends)
@@ -963,10 +967,10 @@ fn validate_allowed_routes(clients: &[ResolvedClient], routes: &[ResolvedRoute])
                 RouteKey::Path(_) => false,
             });
             if !found {
-                return Err(Error::Config(format!(
+                return Err(Error::Config(ConfigError::Message(format!(
                     "client '{}' references public model '{model}' which has no [[route]] declaration; add a [[route]] block or remove the model from the client",
                     client.id
-                )));
+                ))));
             }
         }
     }
@@ -979,14 +983,16 @@ fn resolve_secret(
     label: &str,
 ) -> Result<String> {
     match (api_key, api_key_env) {
-        (Some(_), Some(_)) => Err(Error::Config(format!(
+        (Some(_), Some(_)) => Err(Error::Config(ConfigError::Message(format!(
             "{label} must use api_key or api_key_env, not both"
-        ))),
+        )))),
         (Some(value), None) if !value.trim().is_empty() => Ok(value),
         (None, Some(name)) if !name.trim().is_empty() => {
             env::var(&name).map_err(|_| Error::MissingEnv(name))
         }
-        _ => Err(Error::Config(format!("{label} is required"))),
+        _ => Err(Error::Config(ConfigError::Message(format!(
+            "{label} is required"
+        )))),
     }
 }
 
@@ -995,9 +1001,9 @@ fn resolve_optional_secret(
     api_key_env: Option<String>,
 ) -> Result<Option<String>> {
     match (api_key, api_key_env) {
-        (Some(_), Some(_)) => Err(Error::Config(
+        (Some(_), Some(_)) => Err(Error::Config(ConfigError::Message(
             "backend must use api_key or api_key_env, not both".to_owned(),
-        )),
+        ))),
         (Some(value), None) if !value.trim().is_empty() => Ok(Some(value)),
         (None, Some(name)) if !name.trim().is_empty() => env::var(&name)
             .map(Some)
@@ -1008,54 +1014,54 @@ fn resolve_optional_secret(
 
 fn validate_health_config(config: &HealthConfig) -> Result<()> {
     if config.interval_ms == 0 {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "health.interval_ms must be greater than zero".to_owned(),
-        ));
+        )));
     }
     if config.timeout_ms == 0 {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "health.timeout_ms must be greater than zero".to_owned(),
-        ));
+        )));
     }
     if !config.path.starts_with('/') {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "health.path must start with '/' and be relative to backend base_url".to_owned(),
-        ));
+        )));
     }
     if config.path.starts_with("//") || config.path.contains("://") {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "health.path must be a relative path, not an absolute URL".to_owned(),
-        ));
+        )));
     }
     if config.path.chars().any(char::is_control) {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "health.path must not contain control characters".to_owned(),
-        ));
+        )));
     }
     Ok(())
 }
 
 fn validate_inspector_config(config: &InspectorConfig) -> Result<()> {
     if config.retention_requests == 0 {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "inspector.retention_requests must be greater than zero".to_owned(),
-        ));
+        )));
     }
     if config.retention_requests > MAX_INSPECTOR_RETENTION_REQUESTS {
-        return Err(Error::Config(format!(
+        return Err(Error::Config(ConfigError::Message(format!(
             "inspector.retention_requests must be at most {MAX_INSPECTOR_RETENTION_REQUESTS}"
-        )));
+        ))));
     }
     if config.persistence.enabled {
         let Some(path) = config.persistence.path.as_ref() else {
-            return Err(Error::Config(
+            return Err(Error::Config(ConfigError::Message(
                 "inspector.persistence.path is required when persistence is enabled".to_owned(),
-            ));
+            )));
         };
         if path.as_os_str().is_empty() {
-            return Err(Error::Config(
+            return Err(Error::Config(ConfigError::Message(
                 "inspector.persistence.path must not be empty".to_owned(),
-            ));
+            )));
         }
     }
     Ok(())
@@ -1069,9 +1075,9 @@ fn validate_debug_capture_config(config: &DebugCaptureConfig) -> Result<()> {
     }
 
     if config.directory.as_os_str().is_empty() {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "debug_capture.directory must not be empty when debug capture is enabled".to_owned(),
-        ));
+        )));
     }
 
     if config
@@ -1079,9 +1085,9 @@ fn validate_debug_capture_config(config: &DebugCaptureConfig) -> Result<()> {
         .components()
         .any(|component| matches!(component, Component::ParentDir))
     {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "debug_capture.directory must not contain '..' components".to_owned(),
-        ));
+        )));
     }
 
     if !config
@@ -1089,9 +1095,9 @@ fn validate_debug_capture_config(config: &DebugCaptureConfig) -> Result<()> {
         .components()
         .any(|component| matches!(component, Component::Normal(_)))
     {
-        return Err(Error::Config(
+        return Err(Error::Config(ConfigError::Message(
             "debug_capture.directory must include a directory name".to_owned(),
-        ));
+        )));
     }
 
     Ok(())
@@ -1099,9 +1105,9 @@ fn validate_debug_capture_config(config: &DebugCaptureConfig) -> Result<()> {
 
 fn validate_routing_config(config: &RoutingConfig) -> Result<()> {
     if config.fallback_attempts > MAX_FALLBACK_ATTEMPTS {
-        return Err(Error::Config(format!(
+        return Err(Error::Config(ConfigError::Message(format!(
             "routing.fallback_attempts must be at most {MAX_FALLBACK_ATTEMPTS}"
-        )));
+        ))));
     }
     Ok(())
 }
@@ -1141,11 +1147,11 @@ fn validate_markers(
                 );
             }
             UnknownMarkerPolicy::Error => {
-                return Err(Error::Config(format!(
+                return Err(Error::Config(ConfigError::Message(format!(
                     "{location} {} '{value}' is not a recognized marker; allowed: {}",
                     kind.as_str(),
                     crate::KNOWN_MARKERS.join(", "),
-                )));
+                ))));
             }
         }
     }
@@ -1172,35 +1178,35 @@ fn resolve_context_length_policy(
 fn normalize_backend_base_url(base_url: &str, backend_id: &str) -> Result<String> {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
-        return Err(Error::Config(format!(
+        return Err(Error::Config(ConfigError::Message(format!(
             "backend '{backend_id}' base_url must not be empty"
-        )));
+        ))));
     }
 
     let parsed = Url::parse(trimmed).map_err(|source| {
-        Error::Config(format!(
+        Error::Config(ConfigError::Message(format!(
             "backend '{backend_id}' base_url is invalid: {source}"
-        ))
+        )))
     })?;
     if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(Error::Config(format!(
+        return Err(Error::Config(ConfigError::Message(format!(
             "backend '{backend_id}' base_url must use http or https"
-        )));
+        ))));
     }
     if parsed.host_str().is_none() {
-        return Err(Error::Config(format!(
+        return Err(Error::Config(ConfigError::Message(format!(
             "backend '{backend_id}' base_url must include a host"
-        )));
+        ))));
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(Error::Config(format!(
+        return Err(Error::Config(ConfigError::Message(format!(
             "backend '{backend_id}' base_url must not contain credentials"
-        )));
+        ))));
     }
     if parsed.query().is_some() || parsed.fragment().is_some() {
-        return Err(Error::Config(format!(
+        return Err(Error::Config(ConfigError::Message(format!(
             "backend '{backend_id}' base_url must not contain a query string or fragment"
-        )));
+        ))));
     }
 
     Ok(trimmed.to_owned())

@@ -7,6 +7,42 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("{0}")]
+    Message(String),
+}
+
+impl ConfigError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self::Message(message.into())
+    }
+}
+
+impl From<String> for ConfigError {
+    fn from(value: String) -> Self {
+        Self::Message(value)
+    }
+}
+
+impl From<&str> for ConfigError {
+    fn from(value: &str) -> Self {
+        Self::Message(value.to_owned())
+    }
+}
+
+impl From<String> for Error {
+    fn from(value: String) -> Self {
+        Self::Config(ConfigError::Message(value))
+    }
+}
+
+impl From<&str> for Error {
+    fn from(value: &str) -> Self {
+        Self::Config(ConfigError::Message(value.to_owned()))
+    }
+}
+
+#[derive(Debug, Error)]
 pub enum Error {
     #[error("failed to read config {path}: {source}")]
     ConfigRead {
@@ -19,7 +55,7 @@ pub enum Error {
         source: toml::de::Error,
     },
     #[error("invalid config: {0}")]
-    Config(String),
+    Config(#[from] ConfigError),
     #[error("missing environment variable {0}")]
     MissingEnv(String),
     #[error("config watcher error: {0}")]
@@ -117,39 +153,35 @@ impl ApiError {
     }
 
     pub fn upstream(status: StatusCode) -> Self {
-        let (status, kind, code, message) = match status {
-            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => (
+        match status {
+            StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => Self {
                 status,
-                "invalid_request_error",
-                None,
-                "The request could not be completed by the selected model.",
-            ),
-            StatusCode::TOO_MANY_REQUESTS => (
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limit_error",
-                Some("rate_limit_exceeded"),
-                "The selected model is temporarily rate limited.",
-            ),
-            StatusCode::REQUEST_TIMEOUT => (
-                StatusCode::REQUEST_TIMEOUT,
-                "server_error",
-                Some("request_timeout"),
-                "The selected model did not respond in time.",
-            ),
-            _ => (
-                StatusCode::BAD_GATEWAY,
-                "server_error",
-                Some("upstream_error"),
-                "The selected model could not complete the request.",
-            ),
-        };
-
-        Self {
-            status,
-            message: message.to_owned(),
-            kind: kind.to_owned(),
-            code: code.map(str::to_owned),
-            param: None,
+                message: "The request could not be completed by the selected model.".to_owned(),
+                kind: "invalid_request_error".to_owned(),
+                code: None,
+                param: None,
+            },
+            StatusCode::TOO_MANY_REQUESTS => Self {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                message: "The selected model is temporarily rate limited.".to_owned(),
+                kind: "rate_limit_error".to_owned(),
+                code: Some("rate_limit_exceeded".to_owned()),
+                param: None,
+            },
+            StatusCode::REQUEST_TIMEOUT => Self {
+                status: StatusCode::REQUEST_TIMEOUT,
+                message: "The selected model did not respond in time.".to_owned(),
+                kind: "server_error".to_owned(),
+                code: Some("request_timeout".to_owned()),
+                param: None,
+            },
+            _ => Self {
+                status: StatusCode::BAD_GATEWAY,
+                message: "The selected model could not complete the request.".to_owned(),
+                kind: "server_error".to_owned(),
+                code: Some("upstream_error".to_owned()),
+                param: None,
+            },
         }
     }
 
