@@ -10,10 +10,10 @@ use tracing::error;
 
 use onair_core::config::InspectorConfig;
 use onair_core::error::Result;
+use onair_core::sanitize_for_storage;
 
 use super::records::{InspectorOutcome, InspectorRequestRecord};
 use crate::observe::inspector_persistence::{InspectorPersistenceWriter, restore_records};
-use crate::util::sanitize_for_storage;
 
 pub(super) const MAX_RETENTION_REQUESTS: usize = 100_000;
 const EVENT_CHANNEL_CAPACITY: usize = 1024;

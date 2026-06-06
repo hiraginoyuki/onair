@@ -1,11 +1,11 @@
-//! Cross-cutting helpers shared between the observability modules.
+//! Storage-shape sanitizers.
 //!
-//! Kept intentionally small: only the functions that are reused by
-//! more than one sibling module belong here. Anything used in a
-//! single module stays next to its caller.
+//! Cross-cutting helpers for projecting free-form strings (client
+//! request ids, filenames, log lines) into the shape that is
+//! safe to embed in a filesystem path, JSON key, or
+//! developer-facing log line.
 
-/// Project a free-form string (a client-supplied `X-Request-Id`, a
-/// user-controlled id, etc.) into the shape that is safe to embed
+/// Project a free-form string into the shape that is safe to embed
 /// in a storage path, filename, or log line: keep ASCII
 /// alphanumerics and `-` `_` `.` verbatim, replace any other
 /// printable ASCII character with `_`, drop control characters
