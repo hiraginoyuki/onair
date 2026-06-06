@@ -364,7 +364,8 @@ async fn inspector_events(
     let snapshot_limit = inspector_limit(&request, &["snapshot_limit", "limit"]);
     let mut receiver = state.inspector.subscribe();
     let mut shutdown = state.shutdown_receiver();
-    let snapshot = state.inspector.records_limited(snapshot_limit);
+    let mut snapshot = state.inspector.records_limited(snapshot_limit);
+    snapshot.reverse();
     let stream = async_stream::stream! {
         for record in snapshot {
             yield Ok::<_, Infallible>(inspector_sse_event("snapshot", record));
