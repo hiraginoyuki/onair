@@ -25,6 +25,11 @@ const CONFIG_RELOAD_MAX_ATTEMPTS: usize = 5;
 const MAX_FALLBACK_ATTEMPTS: usize = 16;
 const MAX_INSPECTOR_RETENTION_REQUESTS: usize = 1_000_000;
 const DEFAULT_INSPECTOR_RETENTION_REQUESTS: usize = 10_000;
+const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
+const DEFAULT_TELEMETRY_EXPORT_INTERVAL_MS: u64 = 30_000;
+const DEFAULT_BACKEND_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_HEALTH_INTERVAL_MS: u64 = 30_000;
+const DEFAULT_HEALTH_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -214,7 +219,7 @@ impl Default for ServerConfig {
             bind: "127.0.0.1:8080"
                 .parse()
                 .expect("valid default bind address"),
-            request_body_limit_bytes: 2 * 1024 * 1024,
+            request_body_limit_bytes: DEFAULT_REQUEST_BODY_LIMIT_BYTES,
             trusted_proxy_cidrs: Vec::new(),
         }
     }
@@ -235,7 +240,7 @@ impl Default for TelemetryConfig {
             service_name: "onair".to_owned(),
             exporter: TelemetryExporter::None,
             otlp_endpoint: None,
-            export_interval_ms: 30_000,
+            export_interval_ms: DEFAULT_TELEMETRY_EXPORT_INTERVAL_MS,
         }
     }
 }
@@ -303,8 +308,8 @@ impl Default for HealthConfig {
     fn default() -> Self {
         Self {
             active: false,
-            interval_ms: 30_000,
-            timeout_ms: 2_000,
+            interval_ms: DEFAULT_HEALTH_INTERVAL_MS,
+            timeout_ms: DEFAULT_HEALTH_TIMEOUT_MS,
             path: "/v1/models".to_owned(),
         }
     }
@@ -406,7 +411,7 @@ impl Default for BackendConfig {
             base_url: String::new(),
             api_key: None,
             api_key_env: None,
-            timeout_ms: 120_000,
+            timeout_ms: DEFAULT_BACKEND_TIMEOUT_MS,
             tool_schema_mode: ToolSchemaMode::Preserve,
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
