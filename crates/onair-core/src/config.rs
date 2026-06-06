@@ -523,11 +523,49 @@ pub enum ContextLengthPolicy {
     },
 }
 
+/// Resolved form of [`ContextLengthPolicy`], carrying the live
+/// upstream `n_ctx` once it has been observed.
 #[derive(Debug, Clone)]
 pub enum ResolvedContextLength {
     None,
     Static { n_ctx: u64 },
     Upstream { n_ctx: Option<u64> },
+}
+
+/// The collapsed single-enum target for the B5 cleanup.
+///
+/// Carries both the routing info from [`ContextLengthPolicy`] and the
+/// live `n_ctx` from [`ResolvedContextLength`] on the upstream
+/// variant. The onair-proxy and onair match sites need to be
+/// migrated to this shape before the old enums can be removed; in
+/// the meantime, [`ContextLengthPolicy`] and
+/// [`ResolvedContextLength`] remain the public types.
+#[derive(Debug, Clone)]
+pub enum ContextLengthSpec {
+    None,
+    Static { n_ctx: u64 },
+    Upstream {
+        backend_id: String,
+        backend_model: String,
+        n_ctx: Option<u64>,
+    },
+}
+
+impl From<&ContextLengthPolicy> for ContextLengthSpec {
+    fn from(policy: &ContextLengthPolicy) -> Self {
+        match policy {
+            ContextLengthPolicy::None => Self::None,
+            ContextLengthPolicy::Static(value) => Self::Static { n_ctx: *value },
+            ContextLengthPolicy::Upstream {
+                backend_id,
+                backend_model,
+            } => Self::Upstream {
+                backend_id: backend_id.clone(),
+                backend_model: backend_model.clone(),
+                n_ctx: None,
+            },
+        }
+    }
 }
 
 #[derive(Clone)]
