@@ -9,6 +9,7 @@ use crate::config::{
 
 use super::{
     is_json_content_type,
+    paths::endpoint_kind,
     responses_compat::{rewrite_chat_request_as_responses, rewrite_responses_request_as_chat},
 };
 
@@ -27,6 +28,39 @@ pub struct RequestRewritePolicies {
     pub chat_stream_usage: ChatStreamUsagePolicy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewriteParam {
+    Input,
+    Model,
+    Messages,
+    Tools,
+    ToolChoice,
+    PreviousResponseId,
+    N,
+    Logprobs,
+    TopLogprobs,
+    Stream,
+    FunctionCallId,
+}
+
+impl RewriteParam {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Model => "model",
+            Self::Messages => "messages",
+            Self::Tools => "tools",
+            Self::ToolChoice => "tool_choice",
+            Self::PreviousResponseId => "previous_response_id",
+            Self::N => "n",
+            Self::Logprobs => "logprobs",
+            Self::TopLogprobs => "top_logprobs",
+            Self::Stream => "stream",
+            Self::FunctionCallId => "function_call_id",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestRewriteError {
     message: String,
@@ -39,6 +73,10 @@ impl RequestRewriteError {
             message: message.into(),
             param: param.map(str::to_owned),
         }
+    }
+
+    pub fn with_param(message: impl Into<String>, param: RewriteParam) -> Self {
+        Self::new(message, Some(param.as_str()))
     }
 
     pub fn message(&self) -> &str {
@@ -85,11 +123,11 @@ pub fn rewrite_request_body_for_mode_with_policies(
     backend_model: Option<&str>,
     path: &str,
     request_mode: RequestMode,
-    policies: RequestRewritePolicies,
+    policies: &RequestRewritePolicies,
 ) -> Result<Vec<u8>, RequestRewriteError> {
-    let normalized_path = path.trim_end_matches('/');
-    let native_responses = normalized_path == "/v1/responses";
-    let chat_completions = normalized_path == "/v1/chat/completions";
+    let kind = endpoint_kind(path);
+    let native_responses = kind.is_native_responses();
+    let chat_completions = kind.is_chat_completions();
     if native_responses && should_parse_json(content_type, body) {
         validate_responses_tool_history(body)?;
     }
@@ -233,16 +271,13 @@ pub fn rewrite_query_model(query: Option<&str>, backend_model: Option<&str>) -> 
 }
 
 pub fn upstream_path_for_mode(path: &str, request_mode: RequestMode) -> &str {
+    let kind = endpoint_kind(path);
     match request_mode {
-        RequestMode::ResponsesViaChatCompletions
-            if path.trim_end_matches('/') == "/v1/responses" =>
-        {
-            "/v1/chat/completions"
+        RequestMode::ResponsesViaChatCompletions if kind.is_native_responses() => {
+            super::paths::CHAT_COMPLETIONS_PATH
         }
-        RequestMode::ChatCompletionsViaResponses
-            if path.trim_end_matches('/') == "/v1/chat/completions" =>
-        {
-            "/v1/responses"
+        RequestMode::ChatCompletionsViaResponses if kind.is_chat_completions() => {
+            super::paths::RESPONSES_PATH
         }
         _ => path,
     }

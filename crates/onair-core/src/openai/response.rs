@@ -11,7 +11,7 @@ pub fn is_event_stream_content_type(content_type: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-pub fn is_json_content_type(content_type: Option<&str>) -> bool {
+pub(crate) fn is_json_content_type(content_type: Option<&str>) -> bool {
     content_type
         .map(|value| {
             let lowered = value.to_ascii_lowercase();
@@ -51,7 +51,8 @@ pub fn rewrite_response_body(
         }
     }
 
-    let rewritten = serde_json::to_vec(&json).unwrap_or_else(|_| body.to_vec());
+    let rewritten = serde_json::to_vec(&json)
+        .expect("rewritten body is always serializable; this is a programmer error");
     (rewritten, usage)
 }
 
@@ -216,36 +217,15 @@ fn chat_message_content_to_text(content: &Value) -> String {
 }
 
 fn chat_usage_to_responses_usage(usage: Option<&Value>) -> Value {
-    let usage = usage.and_then(Value::as_object);
-    let input_tokens = usage
-        .and_then(|usage| {
-            number_field(usage, "prompt_tokens").or_else(|| number_field(usage, "input_tokens"))
-        })
-        .unwrap_or(0);
-    let output_tokens = usage
-        .and_then(|usage| {
-            number_field(usage, "completion_tokens")
-                .or_else(|| number_field(usage, "output_tokens"))
-        })
-        .unwrap_or(0);
-    let total_tokens = usage
-        .and_then(|usage| number_field(usage, "total_tokens"))
-        .unwrap_or(input_tokens + output_tokens);
-    let cached_tokens = usage
-        .and_then(|usage| {
-            nested_number_field(usage, "prompt_tokens_details", "cached_tokens")
-                .or_else(|| nested_number_field(usage, "input_tokens_details", "cached_tokens"))
-        })
-        .unwrap_or(0);
-
+    let fields = usage_fields_from_object(usage.and_then(Value::as_object));
     json!({
-        "input_tokens": input_tokens,
+        "input_tokens": fields.input,
         "input_tokens_details": {
-            "cached_tokens": cached_tokens,
+            "cached_tokens": fields.cached,
         },
-        "output_tokens": output_tokens,
+        "output_tokens": fields.output,
         "output_tokens_details": {},
-        "total_tokens": total_tokens,
+        "total_tokens": fields.total,
     })
 }
 
@@ -374,36 +354,43 @@ fn response_finish_reason(object: &Map<String, Value>, has_tool_calls: bool) -> 
 }
 
 fn responses_usage_to_chat_usage(usage: Option<&Value>) -> Value {
-    let usage = usage.and_then(Value::as_object);
-    let prompt_tokens = usage
-        .and_then(|usage| {
-            number_field(usage, "input_tokens").or_else(|| number_field(usage, "prompt_tokens"))
-        })
-        .unwrap_or(0);
-    let completion_tokens = usage
-        .and_then(|usage| {
-            number_field(usage, "output_tokens")
-                .or_else(|| number_field(usage, "completion_tokens"))
-        })
-        .unwrap_or(0);
-    let total_tokens = usage
-        .and_then(|usage| number_field(usage, "total_tokens"))
-        .unwrap_or(prompt_tokens + completion_tokens);
-    let cached_tokens = usage
-        .and_then(|usage| {
-            nested_number_field(usage, "input_tokens_details", "cached_tokens")
-                .or_else(|| nested_number_field(usage, "prompt_tokens_details", "cached_tokens"))
-        })
-        .unwrap_or(0);
-
+    let fields = usage_fields_from_object(usage.and_then(Value::as_object));
     json!({
-        "prompt_tokens": prompt_tokens,
+        "prompt_tokens": fields.input,
         "prompt_tokens_details": {
-            "cached_tokens": cached_tokens,
+            "cached_tokens": fields.cached,
         },
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
+        "completion_tokens": fields.output,
+        "total_tokens": fields.total,
     })
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct UsageFields {
+    input: u64,
+    output: u64,
+    cached: u64,
+    total: u64,
+}
+
+fn usage_fields_from_object(usage: Option<&Map<String, Value>>) -> UsageFields {
+    let Some(usage) = usage else {
+        return UsageFields::default();
+    };
+    let input = number_field(usage, "prompt_tokens").unwrap_or(0)
+        + number_field(usage, "input_tokens").unwrap_or(0);
+    let output = number_field(usage, "completion_tokens").unwrap_or(0)
+        + number_field(usage, "output_tokens").unwrap_or(0);
+    let cached = nested_number_field(usage, "prompt_tokens_details", "cached_tokens")
+        .or_else(|| nested_number_field(usage, "input_tokens_details", "cached_tokens"))
+        .unwrap_or(0);
+    let total = number_field(usage, "total_tokens").unwrap_or(input + output);
+    UsageFields {
+        input,
+        output,
+        cached,
+        total,
+    }
 }
 
 fn response_id_from_chat(chat_id: &str) -> String {
@@ -481,11 +468,11 @@ pub struct UsageObservation {
     pub diagnostics: UsageDiagnostics,
 }
 
-pub fn extract_usage(value: &Value) -> UsageTotals {
+pub(crate) fn extract_usage(value: &Value) -> UsageTotals {
     extract_usage_observation(value).totals
 }
 
-pub fn extract_usage_observation(value: &Value) -> UsageObservation {
+pub(crate) fn extract_usage_observation(value: &Value) -> UsageObservation {
     let mut observation = UsageObservation::default();
     collect_usage(value, &mut observation);
     observation
@@ -512,16 +499,11 @@ fn collect_usage(value: &Value, observation: &mut UsageObservation) {
 }
 
 fn add_usage_object(object: &Map<String, Value>, totals: &mut UsageTotals) {
-    let input = number_field(object, "prompt_tokens").unwrap_or(0)
-        + number_field(object, "input_tokens").unwrap_or(0);
-    let output = number_field(object, "completion_tokens").unwrap_or(0)
-        + number_field(object, "output_tokens").unwrap_or(0);
-    totals.input += input;
-    totals.cached_input += nested_number_field(object, "prompt_tokens_details", "cached_tokens")
-        .or_else(|| nested_number_field(object, "input_tokens_details", "cached_tokens"))
-        .unwrap_or(0);
-    totals.output += output;
-    totals.total += number_field(object, "total_tokens").unwrap_or(input + output);
+    let fields = usage_fields_from_object(Some(object));
+    totals.input += fields.input;
+    totals.cached_input += fields.cached;
+    totals.output += fields.output;
+    totals.total += fields.total;
 }
 
 fn number_field(object: &Map<String, Value>, field: &str) -> Option<u64> {
@@ -686,7 +668,8 @@ impl SseNormalizer {
             remove_usage_field(&mut json);
         }
 
-        let normalized = serde_json::to_vec(&json).unwrap_or_else(|_| data.to_vec());
+        let normalized = serde_json::to_vec(&json)
+            .expect("normalized SSE data is always serializable; this is a programmer error");
         let mut output = Vec::with_capacity(line.len() + normalized.len());
         output.extend_from_slice(b"data:");
         if leading_space {
@@ -1676,7 +1659,8 @@ impl ChatCompletionsSseNormalizer {
 }
 
 fn sse_data(data: Value) -> Vec<u8> {
-    let data = serde_json::to_vec(&data).unwrap_or_else(|_| b"{}".to_vec());
+    let data = serde_json::to_vec(&data)
+        .expect("SSE data is always serializable; this is a programmer error");
     let mut output = Vec::with_capacity(data.len() + 8);
     output.extend_from_slice(b"data: ");
     output.extend_from_slice(&data);
@@ -1685,7 +1669,8 @@ fn sse_data(data: Value) -> Vec<u8> {
 }
 
 fn sse_event(event: &str, data: Value) -> Vec<u8> {
-    let data = serde_json::to_vec(&data).unwrap_or_else(|_| b"{}".to_vec());
+    let data = serde_json::to_vec(&data)
+        .expect("SSE event data is always serializable; this is a programmer error");
     let mut output = Vec::with_capacity(event.len() + data.len() + 16);
     output.extend_from_slice(b"event: ");
     output.extend_from_slice(event.as_bytes());

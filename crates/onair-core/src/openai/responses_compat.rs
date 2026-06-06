@@ -1,3 +1,26 @@
+//! Responses ↔ Chat Completions request compatibility.
+//!
+//! The conversions here are intentionally narrow: only the OpenAI
+//! request fields that the onair router actually needs to rewrite
+//! are mapped. Fields not in the explicit allowlist are silently
+//! dropped on the rewritten path. The known lossy conversions are:
+//!
+//! * `truncation`: dropped (Responses-only).
+//! * `include`: dropped (Responses-only).
+//! * `audio`: dropped (Responses-only).
+//! * `annotations`: dropped (per-output-text annotations).
+//! * `refusal` content parts: rewritten to `output_text` so a Chat
+//!   client can still render the refusal body.
+//! * `reasoning` items: summarised and emitted as an assistant
+//!   text message in the chat stream (no reasoning metadata).
+//! * `n > 1`: rejected explicitly.
+//! * `logprobs` / `top_logprobs`: rejected explicitly.
+//! * `previous_response_id`: rejected explicitly (server-side state
+//!   cannot be reconstructed on the chat path).
+//!
+//! Future fields can either be added to the explicit allowlist or
+//! rejected with `RequestRewriteError`; do not silently strip them
+//! without updating this list.
 use serde_json::{Map, Value, json};
 
 use crate::config::{
@@ -5,7 +28,7 @@ use crate::config::{
 };
 
 use super::request::{
-    RequestRewriteError, apply_chat_stream_usage_policy,
+    RequestRewriteError, RewriteParam, apply_chat_stream_usage_policy,
     rewrite_native_responses_max_output_tokens, should_parse_json,
 };
 
@@ -43,7 +66,7 @@ pub(super) fn rewrite_responses_request_as_chat(
     }
 
     let input = object.get("input").ok_or_else(|| {
-        RequestRewriteError::new("Missing required parameter: input.", Some("input"))
+        RequestRewriteError::with_param("Missing required parameter: input.", RewriteParam::Input)
     })?;
     let mut messages = Vec::new();
     if let Some(instructions) = object.get("instructions").and_then(Value::as_str)
@@ -66,7 +89,10 @@ pub(super) fn rewrite_responses_request_as_chat(
                 .map(str::to_owned)
         })
         .ok_or_else(|| {
-            RequestRewriteError::new("Missing required parameter: model.", Some("model"))
+            RequestRewriteError::with_param(
+                "Missing required parameter: model.",
+                RewriteParam::Model,
+            )
         })?;
     chat.insert("model".to_owned(), Value::String(model));
     chat.insert("messages".to_owned(), Value::Array(messages));
@@ -160,7 +186,10 @@ pub(super) fn rewrite_chat_request_as_responses(
         .get("messages")
         .and_then(Value::as_array)
         .ok_or_else(|| {
-            RequestRewriteError::new("Missing required parameter: messages.", Some("messages"))
+            RequestRewriteError::with_param(
+                "Missing required parameter: messages.",
+                RewriteParam::Messages,
+            )
         })?;
 
     let mut instructions = Vec::new();
@@ -179,7 +208,10 @@ pub(super) fn rewrite_chat_request_as_responses(
                 .map(str::to_owned)
         })
         .ok_or_else(|| {
-            RequestRewriteError::new("Missing required parameter: model.", Some("model"))
+            RequestRewriteError::with_param(
+                "Missing required parameter: model.",
+                RewriteParam::Model,
+            )
         })?;
     responses.insert("model".to_owned(), Value::String(model));
     if !instructions.is_empty() {
@@ -279,12 +311,11 @@ fn append_chat_message_to_responses(
     input: &mut Vec<Value>,
 ) -> Result<(), RequestRewriteError> {
     let object = message.as_object().ok_or_else(|| {
-        RequestRewriteError::new("Chat messages must be objects.", Some("messages"))
+        RequestRewriteError::with_param("Chat messages must be objects.", RewriteParam::Messages)
     })?;
-    let role = object
-        .get("role")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RequestRewriteError::new("Chat messages require role.", Some("messages")))?;
+    let role = object.get("role").and_then(Value::as_str).ok_or_else(|| {
+        RequestRewriteError::with_param("Chat messages require role.", RewriteParam::Messages)
+    })?;
 
     match role {
         "system" | "developer" => {
@@ -349,11 +380,17 @@ fn append_chat_tool_calls_to_responses(
     input: &mut Vec<Value>,
 ) -> Result<(), RequestRewriteError> {
     let tool_calls = tool_calls.as_array().ok_or_else(|| {
-        RequestRewriteError::new("assistant tool_calls must be an array.", Some("messages"))
+        RequestRewriteError::with_param(
+            "assistant tool_calls must be an array.",
+            RewriteParam::Messages,
+        )
     })?;
     for (index, tool_call) in tool_calls.iter().enumerate() {
         let object = tool_call.as_object().ok_or_else(|| {
-            RequestRewriteError::new("assistant tool_calls must be objects.", Some("messages"))
+            RequestRewriteError::with_param(
+                "assistant tool_calls must be objects.",
+                RewriteParam::Messages,
+            )
         })?;
         if object
             .get("type")
@@ -570,7 +607,10 @@ fn chat_tools_to_responses_tools(tools: &Value) -> Result<Vec<Value>, RequestRew
     let mut responses_tools = Vec::new();
     for tool in tools {
         let object = tool.as_object().ok_or_else(|| {
-            RequestRewriteError::new("tool definitions must be objects.", Some("tools"))
+            RequestRewriteError::with_param(
+                "tool definitions must be objects.",
+                RewriteParam::Tools,
+            )
         })?;
         if object.get("type").and_then(Value::as_str) != Some("function") {
             return Err(RequestRewriteError::new(
@@ -582,7 +622,10 @@ fn chat_tools_to_responses_tools(tools: &Value) -> Result<Vec<Value>, RequestRew
             .get("function")
             .and_then(Value::as_object)
             .ok_or_else(|| {
-                RequestRewriteError::new("function tools require function.", Some("tools"))
+                RequestRewriteError::with_param(
+                    "function tools require function.",
+                    RewriteParam::Tools,
+                )
             })?;
         let mut responses_tool = function.clone();
         responses_tool.insert("type".to_owned(), Value::String("function".to_owned()));
@@ -678,7 +721,10 @@ fn responses_input_item_to_chat_message(item: &Value) -> Result<Value, RequestRe
         }
     };
     let content = object.get("content").ok_or_else(|| {
-        RequestRewriteError::new("Responses input messages require content.", Some("input"))
+        RequestRewriteError::with_param(
+            "Responses input messages require content.",
+            RewriteParam::Input,
+        )
     })?;
     let mut message = Map::new();
     message.insert("role".to_owned(), Value::String(role.to_owned()));
@@ -854,10 +900,16 @@ fn responses_function_call_to_chat_tool_call(
     object: &Map<String, Value>,
 ) -> Result<Value, RequestRewriteError> {
     let call_id = string_field(object, "call_id").ok_or_else(|| {
-        RequestRewriteError::new("function_call input items require call_id.", Some("input"))
+        RequestRewriteError::with_param(
+            "function_call input items require call_id.",
+            RewriteParam::Input,
+        )
     })?;
     let name = string_field(object, "name").ok_or_else(|| {
-        RequestRewriteError::new("function_call input items require name.", Some("input"))
+        RequestRewriteError::with_param(
+            "function_call input items require name.",
+            RewriteParam::Input,
+        )
     })?;
     let arguments = string_field(object, "arguments").unwrap_or_else(|| "{}".to_owned());
     Ok(json!({

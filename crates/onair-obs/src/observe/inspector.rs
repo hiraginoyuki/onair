@@ -10,7 +10,7 @@ use tracing::error;
 
 use super::TimelineSnapshot;
 use onair_core::config::InspectorConfig;
-use onair_core::error::{Error, Result};
+use onair_core::error::{ConfigError, Error, Result};
 
 use super::inspector_persistence::{InspectorPersistenceWriter, restore_records};
 
@@ -159,9 +159,9 @@ impl InspectorStore {
         }
 
         let path = config.persistence.path.as_ref().ok_or_else(|| {
-            Error::Config(
-                "inspector.persistence.path is required when persistence is enabled".to_owned(),
-            )
+            Error::Config(ConfigError::new(
+                "inspector.persistence.path is required when persistence is enabled",
+            ))
         })?;
         let retention_requests = config.retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
         let (records, writer, handle) = restore_records(path, retention_requests)?;

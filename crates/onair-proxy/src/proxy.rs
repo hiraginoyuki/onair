@@ -394,7 +394,7 @@ async fn do_proxy(
             context.route.backend_model.as_deref(),
             &upstream_path,
             context.route.request_mode,
-            openai::RequestRewritePolicies {
+            &openai::RequestRewritePolicies {
                 tool_schema_mode: context.route.tool_schema_mode,
                 responses_store: context.route.responses_store,
                 responses_max_output_tokens: context.route.responses_max_output_tokens,
