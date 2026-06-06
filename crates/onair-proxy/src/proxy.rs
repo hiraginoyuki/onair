@@ -52,6 +52,20 @@ use self::upstream::{
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
 
+pub(super) fn client_request_id(headers: &HeaderMap) -> Option<HeaderValue> {
+    headers
+        .get(X_REQUEST_ID)
+        .and_then(valid_header_value)
+        .cloned()
+}
+
+pub(super) fn client_request_id_str(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(X_REQUEST_ID)
+        .and_then(header_str_value)
+        .map(str::to_owned)
+}
+
 pub async fn proxy_v1(
     state: Arc<ProxyState>,
     peer_addr: Option<SocketAddr>,
@@ -369,11 +383,7 @@ async fn do_proxy(
     let request_path = uri.path().to_owned();
     let request_query = uri.query().map(str::to_owned);
     let upstream_path = upstream_path(&request_path).to_owned();
-    let request_id = context
-        .client_headers
-        .get(X_REQUEST_ID)
-        .and_then(header_str_value)
-        .map(str::to_owned);
+    let request_id = client_request_id_str(&context.client_headers);
     let capture_mode = context.debug_capture_config.mode;
     let mut fallback_routes = fallback_routes.into_iter();
     let upstream = loop {
@@ -474,12 +484,7 @@ async fn do_proxy(
         if let Some(api_key) = &context.route.api_key {
             upstream_request = upstream_request.header(AUTHORIZATION, format!("Bearer {api_key}"));
         }
-        if let Some(request_id) = context
-            .client_headers
-            .get(X_REQUEST_ID)
-            .and_then(valid_header_value)
-            .cloned()
-        {
+        if let Some(request_id) = client_request_id(&context.client_headers) {
             upstream_request = upstream_request.header(X_REQUEST_ID, request_id);
         }
 
@@ -810,11 +815,7 @@ fn response_builder(
         builder = builder.header(CONTENT_DISPOSITION, content_disposition);
     }
 
-    if let Some(request_id) = client_headers
-        .get(X_REQUEST_ID)
-        .and_then(valid_header_value)
-        .cloned()
-    {
+    if let Some(request_id) = client_request_id(client_headers) {
         builder = builder.header(X_REQUEST_ID, request_id);
     }
 
@@ -829,11 +830,7 @@ pub fn attach_request_id(
     mut response: Response<Body>,
     client_headers: &HeaderMap,
 ) -> Response<Body> {
-    if let Some(request_id) = client_headers
-        .get(X_REQUEST_ID)
-        .and_then(valid_header_value)
-        .cloned()
-    {
+    if let Some(request_id) = client_request_id(client_headers) {
         response.headers_mut().insert(X_REQUEST_ID, request_id);
     }
     response
