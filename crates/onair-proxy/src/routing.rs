@@ -31,6 +31,51 @@ pub struct SelectedRoute {
     pub weight: u32,
 }
 
+pub struct NonEmptyVec<T> {
+    head: T,
+    tail: Vec<T>,
+}
+
+impl<T> NonEmptyVec<T> {
+    pub fn from_vec(vec: Vec<T>) -> Option<Self> {
+        let mut iter = vec.into_iter();
+        let head = iter.next()?;
+        Some(Self {
+            head,
+            tail: iter.collect(),
+        })
+    }
+
+    pub fn head(&self) -> &T {
+        &self.head
+    }
+
+    pub fn tail(&self) -> &[T] {
+        &self.tail
+    }
+
+    pub fn len(&self) -> usize {
+        1 + self.tail.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    pub fn iter(&self) -> std::iter::Chain<std::iter::Once<&T>, std::slice::Iter<'_, T>> {
+        std::iter::once(&self.head).chain(self.tail.iter())
+    }
+}
+
+impl<T> IntoIterator for NonEmptyVec<T> {
+    type Item = T;
+    type IntoIter = std::iter::Chain<std::iter::Once<T>, std::vec::IntoIter<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(self.head).chain(self.tail)
+    }
+}
+
 pub struct RoundRobinCounters {
     inner: Arc<Mutex<HashMap<String, u64>>>,
 }
@@ -43,6 +88,7 @@ impl Clone for RoundRobinCounters {
     }
 }
 
+#[cfg(test)]
 impl Default for RoundRobinCounters {
     fn default() -> Self {
         Self::new()
@@ -50,6 +96,7 @@ impl Default for RoundRobinCounters {
 }
 
 impl RoundRobinCounters {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
@@ -84,142 +131,212 @@ pub fn select_backend_candidates(
     tools: bool,
     sticky_key: Option<&str>,
     round_robin: &RoundRobinCounters,
-) -> Result<Vec<SelectedRoute>, ApiError> {
-    let path_candidates = path_capability_candidates(path);
-    let mut candidates = Vec::new();
-    let mut tool_incompatible_candidates = false;
+) -> Result<NonEmptyVec<SelectedRoute>, ApiError> {
+    BackendSelector::new(BackendSelectionRequest {
+        backends,
+        routes,
+        strategy,
+        path,
+        model,
+        stream,
+        tools,
+        sticky_key,
+        round_robin,
+    })
+    .select()
+}
 
-    if let Some(requested_model) = model {
-        let Some(route) = routes.iter().find(|r| matches!(&r.key, onair_core::config::RouteKey::Public(public) if public == requested_model)) else {
-            return Err(ApiError::model_not_found(requested_model));
-        };
-        for binding in &route.backends {
-            let Some(backend) = backends.iter().find(|b| b.id == binding.backend_id) else {
-                continue;
-            };
-            if stream && !has_capability(&backend.supports, "streaming") {
-                continue;
-            }
-            let Some(request_mode) = request_mode_for_route(
-                path,
-                &path_candidates,
-                &backend.supports,
-                Some(&route.expose),
-            ) else {
-                continue;
-            };
-            if tools && !supports_tools(&backend.supports, Some(&route.expose)) {
-                tool_incompatible_candidates = true;
-                continue;
-            }
-            candidates.push(SelectedRoute {
-                backend_id: backend.id.clone(),
-                base_url: backend.base_url.clone(),
-                api_key: backend.api_key.clone(),
-                timeout: backend.timeout,
-                public_model: Some(requested_model.to_owned()),
-                backend_model: Some(binding.backend_model.clone()),
-                request_mode,
-                tool_schema_mode: route.tool_schema_mode,
-                responses_store: route.responses_store,
-                responses_max_output_tokens: route.responses_max_output_tokens,
-                chat_stream_usage: route.chat_stream_usage,
-                weight: backend.weight,
-            });
+#[derive(Clone, Copy)]
+pub struct BackendSelectionRequest<'a> {
+    pub backends: &'a [ResolvedBackend],
+    pub routes: &'a [ResolvedRoute],
+    pub strategy: RoutingStrategy,
+    pub path: &'a str,
+    pub model: Option<&'a str>,
+    pub stream: bool,
+    pub tools: bool,
+    pub sticky_key: Option<&'a str>,
+    pub round_robin: &'a RoundRobinCounters,
+}
+
+pub struct BackendSelector<'a> {
+    request: BackendSelectionRequest<'a>,
+    path_candidates: BTreeSet<String>,
+}
+
+impl<'a> BackendSelector<'a> {
+    pub fn new(request: BackendSelectionRequest<'a>) -> Self {
+        let path_candidates = path_capability_candidates(request.path);
+        Self {
+            request,
+            path_candidates,
         }
-    } else {
-        let route = routes.iter().find(|r| matches!(&r.key, onair_core::config::RouteKey::Path(p) if p.trim_end_matches('/') == path.trim_end_matches('/')));
-        for backend in backends {
-            if stream && !has_capability(&backend.supports, "streaming") {
-                continue;
-            }
-            if let Some(route) = route {
-                if !route.backends.iter().any(|b| b.backend_id == backend.id) {
-                    continue;
-                }
-                if let Some(request_mode) = request_mode_for_route(
-                    path,
-                    &path_candidates,
-                    &backend.supports,
-                    Some(&route.expose),
-                ) {
-                    if tools && !supports_tools(&backend.supports, Some(&route.expose)) {
-                        tool_incompatible_candidates = true;
-                        continue;
-                    }
-                    candidates.push(SelectedRoute {
-                        backend_id: backend.id.clone(),
-                        base_url: backend.base_url.clone(),
-                        api_key: backend.api_key.clone(),
-                        timeout: backend.timeout,
-                        public_model: None,
-                        backend_model: None,
-                        request_mode,
-                        tool_schema_mode: route.tool_schema_mode,
-                        responses_store: route.responses_store,
-                        responses_max_output_tokens: route.responses_max_output_tokens,
-                        chat_stream_usage: route.chat_stream_usage,
-                        weight: backend.weight,
-                    });
-                }
-            } else {
-                let Some(request_mode) =
-                    request_mode_for_backend(path, &path_candidates, &backend.supports)
+    }
+
+    pub fn select(self) -> Result<NonEmptyVec<SelectedRoute>, ApiError> {
+        let path = self.request.path;
+        let strategy = self.request.strategy;
+        let model = self.request.model;
+        let mut candidates = Vec::new();
+        let mut tool_incompatible_candidates = false;
+
+        if let Some(requested_model) = model {
+            let Some(route) = self
+                .request
+                .routes
+                .iter()
+                .find(|r| matches!(&r.key, onair_core::config::RouteKey::Public(public) if public == requested_model))
+            else {
+                return Err(ApiError::model_not_found(requested_model));
+            };
+            for binding in &route.backends {
+                let Some(backend) = self
+                    .request
+                    .backends
+                    .iter()
+                    .find(|b| b.id == binding.backend_id)
                 else {
                     continue;
                 };
-                if tools && !supports_tools(&backend.supports, None) {
-                    tool_incompatible_candidates = true;
+                let Some(request_mode) =
+                    self.is_eligible(backend, Some(route), &mut tool_incompatible_candidates)
+                else {
+                    continue;
+                };
+                candidates.push(self.build_candidate(
+                    backend,
+                    Some(route),
+                    Some(binding),
+                    Some(requested_model),
+                    request_mode,
+                ));
+            }
+        } else {
+            let route = self
+                .request
+                .routes
+                .iter()
+                .find(|r| matches!(&r.key, onair_core::config::RouteKey::Path(p) if p.trim_end_matches('/') == path.trim_end_matches('/')));
+            for backend in self.request.backends {
+                if let Some(route) = route
+                    && !route.backends.iter().any(|b| b.backend_id == backend.id)
+                {
                     continue;
                 }
-                candidates.push(SelectedRoute {
-                    backend_id: backend.id.clone(),
-                    base_url: backend.base_url.clone(),
-                    api_key: backend.api_key.clone(),
-                    timeout: backend.timeout,
-                    public_model: None,
-                    backend_model: None,
-                    request_mode,
-                    tool_schema_mode: backend.tool_schema_mode,
-                    responses_store: backend.responses_store,
-                    responses_max_output_tokens: backend.responses_max_output_tokens,
-                    chat_stream_usage: backend.chat_stream_usage,
-                    weight: backend.weight,
-                });
+                let Some(request_mode) =
+                    self.is_eligible(backend, route, &mut tool_incompatible_candidates)
+                else {
+                    continue;
+                };
+                candidates.push(self.build_candidate(backend, route, None, None, request_mode));
             }
         }
+
+        if candidates.is_empty() {
+            if self.request.tools && tool_incompatible_candidates {
+                return Err(ApiError::bad_request(
+                    "The selected model does not support tool calling.",
+                    Some("tools".to_owned()),
+                ));
+            }
+            if let Some(requested_model) = model {
+                return Err(ApiError::endpoint_unavailable(path, Some(requested_model)));
+            }
+            return Err(ApiError::endpoint_unavailable(path, None));
+        }
+
+        match strategy {
+            RoutingStrategy::Priority => {}
+            RoutingStrategy::Sticky => {
+                let index = sticky_index(self.request.sticky_key.unwrap_or(path), candidates.len());
+                candidates.rotate_left(index);
+            }
+            RoutingStrategy::RoundRobin => {
+                let key = model.unwrap_or(path);
+                let index = self.request.round_robin.next_index(key, candidates.len());
+                candidates.rotate_left(index);
+            }
+            RoutingStrategy::WeightedRandom => {
+                weighted_rotate(&mut candidates);
+            }
+        }
+
+        debug_assert!(
+            !candidates.is_empty(),
+            "candidates remained non-empty after rotation"
+        );
+        Ok(NonEmptyVec::from_vec(candidates).expect("candidates is non-empty"))
     }
 
-    if candidates.is_empty() {
-        if tools && tool_incompatible_candidates {
-            return Err(ApiError::bad_request(
-                "The selected model does not support tool calling.",
-                Some("tools".to_owned()),
-            ));
+    fn is_eligible(
+        &self,
+        backend: &ResolvedBackend,
+        route: Option<&ResolvedRoute>,
+        tool_incompatible: &mut bool,
+    ) -> Option<RequestMode> {
+        if self.request.stream && !has_capability(&backend.supports, "streaming") {
+            return None;
         }
-        if let Some(requested_model) = model {
-            return Err(ApiError::endpoint_unavailable(path, Some(requested_model)));
+        let request_mode = match route {
+            Some(route) => request_mode_for_route(
+                self.request.path,
+                &self.path_candidates,
+                &backend.supports,
+                Some(&route.expose),
+            ),
+            None => request_mode_for_backend(
+                self.request.path,
+                &self.path_candidates,
+                &backend.supports,
+            ),
+        }?;
+        if self.request.tools && !supports_tools(&backend.supports, route.map(|r| &r.expose)) {
+            *tool_incompatible = true;
+            return None;
         }
-        return Err(ApiError::endpoint_unavailable(path, None));
+        Some(request_mode)
     }
 
-    match strategy {
-        RoutingStrategy::Priority => {}
-        RoutingStrategy::Sticky => {
-            let index = sticky_index(sticky_key.unwrap_or(path), candidates.len());
-            candidates.rotate_left(index);
-        }
-        RoutingStrategy::RoundRobin => {
-            let key = model.unwrap_or(path);
-            let index = round_robin.next_index(key, candidates.len());
-            candidates.rotate_left(index);
-        }
-        RoutingStrategy::WeightedRandom => {
-            weighted_rotate(&mut candidates);
+    fn build_candidate(
+        &self,
+        backend: &ResolvedBackend,
+        route: Option<&ResolvedRoute>,
+        binding: Option<&onair_core::config::RouteBackendBinding>,
+        model: Option<&str>,
+        request_mode: RequestMode,
+    ) -> SelectedRoute {
+        let public_model = model.map(str::to_owned);
+        let backend_model = binding.map(|b| b.backend_model.clone());
+        let (tool_schema_mode, responses_store, responses_max_output_tokens, chat_stream_usage) =
+            match route {
+                Some(route) => (
+                    route.tool_schema_mode,
+                    route.responses_store,
+                    route.responses_max_output_tokens,
+                    route.chat_stream_usage,
+                ),
+                None => (
+                    backend.tool_schema_mode,
+                    backend.responses_store,
+                    backend.responses_max_output_tokens,
+                    backend.chat_stream_usage,
+                ),
+            };
+        SelectedRoute {
+            backend_id: backend.id.clone(),
+            base_url: backend.base_url.clone(),
+            api_key: backend.api_key.clone(),
+            timeout: backend.timeout,
+            public_model,
+            backend_model,
+            request_mode,
+            tool_schema_mode,
+            responses_store,
+            responses_max_output_tokens,
+            chat_stream_usage,
+            weight: backend.weight,
         }
     }
-
-    Ok(candidates)
 }
 
 fn weighted_rotate(candidates: &mut [SelectedRoute]) {
@@ -250,7 +367,7 @@ fn sticky_index(key: &str, count: usize) -> usize {
 
 fn request_mode_for_route(
     path: &str,
-    path_candidates: &[String],
+    path_candidates: &BTreeSet<String>,
     backend_supports: &BTreeSet<String>,
     route_expose: Option<&BTreeSet<String>>,
 ) -> Option<RequestMode> {
@@ -259,7 +376,7 @@ fn request_mode_for_route(
 
 fn request_mode_for_backend(
     path: &str,
-    path_candidates: &[String],
+    path_candidates: &BTreeSet<String>,
     backend_supports: &BTreeSet<String>,
 ) -> Option<RequestMode> {
     request_mode_for_path(path, path_candidates, backend_supports, None)
@@ -267,7 +384,7 @@ fn request_mode_for_backend(
 
 fn request_mode_for_path(
     path: &str,
-    path_candidates: &[String],
+    path_candidates: &BTreeSet<String>,
     backend_supports: &BTreeSet<String>,
     route_expose: Option<&BTreeSet<String>>,
 ) -> Option<RequestMode> {
@@ -380,28 +497,37 @@ fn has_tool_capability(supports: &BTreeSet<String>) -> bool {
         || has_capability(supports, "functions")
 }
 
-#[derive(Default)]
-struct FnvHasher(u64);
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+struct FnvHasher {
+    state: u64,
+    started: bool,
+}
+
+impl Default for FnvHasher {
+    fn default() -> Self {
+        Self {
+            state: FNV_OFFSET_BASIS,
+            started: false,
+        }
+    }
+}
 
 impl Hasher for FnvHasher {
     fn write(&mut self, bytes: &[u8]) {
-        let mut hash = if self.0 == 0 {
-            0xcbf29ce484222325
-        } else {
-            self.0
-        };
         for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x100000001b3);
+            self.state ^= u64::from(*byte);
+            self.state = self.state.wrapping_mul(FNV_PRIME);
+            self.started = true;
         }
-        self.0 = hash;
     }
 
     fn finish(&self) -> u64 {
-        if self.0 == 0 {
-            0xcbf29ce484222325
+        if self.started {
+            self.state
         } else {
-            self.0
+            FNV_OFFSET_BASIS
         }
     }
 }
@@ -429,9 +555,9 @@ pub fn path_metric_name(path: &str) -> String {
     if path.ends_with("/responses") {
         return "responses".to_owned();
     }
-    let candidates = path_capability_candidates(path);
-    candidates
-        .first()
+    path_capability_candidates(path)
+        .iter()
+        .next()
         .cloned()
         .unwrap_or_else(|| "unknown".to_owned())
 }
@@ -452,13 +578,13 @@ pub fn path_requires_model(path: &str) -> bool {
     )
 }
 
-pub fn path_capability_candidates(path: &str) -> Vec<String> {
+pub fn path_capability_candidates(path: &str) -> BTreeSet<String> {
     let trimmed = path
         .strip_prefix("/v1/")
         .unwrap_or(path)
         .trim_start_matches('/');
     if trimmed.is_empty() {
-        return Vec::new();
+        return BTreeSet::new();
     }
 
     let segments = trimmed
@@ -467,48 +593,42 @@ pub fn path_capability_candidates(path: &str) -> Vec<String> {
         .map(normalize_segment)
         .collect::<Vec<_>>();
     if segments.is_empty() {
-        return Vec::new();
+        return BTreeSet::new();
     }
 
-    let mut candidates = Vec::new();
-    push_unique(&mut candidates, segments[0].clone());
+    let mut candidates = BTreeSet::new();
+    candidates.insert(segments[0].clone());
     if segments[0].ends_with('s') && segments[0].len() > 1 {
-        push_unique(&mut candidates, singularize(&segments[0]));
+        candidates.insert(singularize(&segments[0]));
     }
     if let Some(second_segment) = segments.get(1) {
-        push_unique(&mut candidates, second_segment.clone());
-        push_unique(
-            &mut candidates,
-            format!("{}_{}", segments[0], second_segment),
-        );
+        candidates.insert(second_segment.clone());
+        candidates.insert(format!("{}_{}", segments[0], second_segment));
     }
     if let Some(third_segment) = segments.get(2) {
-        push_unique(
-            &mut candidates,
-            format!("{}_{}", segments[0], third_segment),
-        );
-        push_unique(&mut candidates, third_segment.clone());
+        candidates.insert(format!("{}_{}", segments[0], third_segment));
+        candidates.insert(third_segment.clone());
     }
 
     match segments[0].as_str() {
         "chat" => {
-            push_unique(&mut candidates, "chat_completions".to_owned());
-            push_unique(&mut candidates, "completions".to_owned());
+            candidates.insert("chat_completions".to_owned());
+            candidates.insert("completions".to_owned());
         }
         "responses" => {
-            push_unique(&mut candidates, RESPONSES_VIA_CHAT_COMPLETIONS.to_owned());
+            candidates.insert(RESPONSES_VIA_CHAT_COMPLETIONS.to_owned());
         }
         "images" => {
-            push_unique(&mut candidates, "image".to_owned());
+            candidates.insert("image".to_owned());
         }
         "files" => {
-            push_unique(&mut candidates, "file".to_owned());
+            candidates.insert("file".to_owned());
         }
         "models" => {
-            push_unique(&mut candidates, "model".to_owned());
+            candidates.insert("model".to_owned());
         }
         "audio" => {
-            push_unique(&mut candidates, "audio".to_owned());
+            candidates.insert("audio".to_owned());
         }
         _ => {}
     }
@@ -516,7 +636,7 @@ pub fn path_capability_candidates(path: &str) -> Vec<String> {
     candidates
 }
 
-fn supports_candidates(capabilities: &BTreeSet<String>, candidates: &[String]) -> bool {
+fn supports_candidates(capabilities: &BTreeSet<String>, candidates: &BTreeSet<String>) -> bool {
     candidates
         .iter()
         .any(|candidate| has_capability(capabilities, candidate))
@@ -538,12 +658,6 @@ fn normalize_segment(segment: &str) -> String {
 
 fn singularize(segment: &str) -> String {
     segment.strip_suffix('s').unwrap_or(segment).to_owned()
-}
-
-fn push_unique(candidates: &mut Vec<String>, candidate: String) {
-    if !candidate.is_empty() && !candidates.iter().any(|value| value == &candidate) {
-        candidates.push(candidate);
-    }
 }
 
 #[cfg(test)]
@@ -600,7 +714,8 @@ mod tests {
         .unwrap();
 
         let selected_index = sticky_index(&sticky_key, priority.len());
-        assert_eq!(sticky[0].backend_id, priority[selected_index].backend_id);
+        let expected = priority.iter().nth(selected_index).unwrap();
+        assert_eq!(sticky.head().backend_id, expected.backend_id);
         assert_eq!(sticky.len(), priority.len());
         assert_eq!(
             sticky
@@ -728,9 +843,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "chat-backend");
+        assert_eq!(selected.head().backend_id, "chat-backend");
         assert_eq!(
-            selected[0].request_mode,
+            selected.head().request_mode,
             RequestMode::ResponsesViaChatCompletions
         );
     }
@@ -761,8 +876,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "native-backend");
-        assert_eq!(selected[0].request_mode, RequestMode::Native);
+        assert_eq!(selected.head().backend_id, "native-backend");
+        assert_eq!(selected.head().request_mode, RequestMode::Native);
     }
 
     #[test]
@@ -791,9 +906,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "mixed-backend");
+        assert_eq!(selected.head().backend_id, "mixed-backend");
         assert_eq!(
-            selected[0].request_mode,
+            selected.head().request_mode,
             RequestMode::ResponsesViaChatCompletions
         );
     }
@@ -821,9 +936,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "responses-backend");
+        assert_eq!(selected.head().backend_id, "responses-backend");
         assert_eq!(
-            selected[0].request_mode,
+            selected.head().request_mode,
             RequestMode::ChatCompletionsViaResponses
         );
     }
@@ -854,8 +969,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "native-chat-backend");
-        assert_eq!(selected[0].request_mode, RequestMode::Native);
+        assert_eq!(selected.head().backend_id, "native-chat-backend");
+        assert_eq!(selected.head().request_mode, RequestMode::Native);
     }
 
     #[test]
@@ -884,9 +999,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "mixed-backend");
+        assert_eq!(selected.head().backend_id, "mixed-backend");
         assert_eq!(
-            selected[0].request_mode,
+            selected.head().request_mode,
             RequestMode::ChatCompletionsViaResponses
         );
     }
@@ -920,7 +1035,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].backend_id, "supported-backend");
+        assert_eq!(selected.head().backend_id, "supported-backend");
     }
 
     #[test]
@@ -1052,8 +1167,8 @@ mod tests {
             &counters,
         )
         .unwrap();
-        assert_eq!(selected_a[0].backend_id, "a");
-        assert_eq!(selected_b[0].backend_id, "a");
+        assert_eq!(selected_a.head().backend_id, "a");
+        assert_eq!(selected_b.head().backend_id, "a");
         let selected_b_second = select_backend_candidates(
             &backends_b,
             &routes_for_b,
@@ -1066,7 +1181,7 @@ mod tests {
             &counters,
         )
         .unwrap();
-        assert_eq!(selected_b_second[0].backend_id, "b");
+        assert_eq!(selected_b_second.head().backend_id, "b");
     }
 
     #[test]
@@ -1124,8 +1239,8 @@ mod tests {
             &counters,
         )
         .unwrap();
-        assert_eq!(selected_a[0].backend_id, "a");
-        assert_eq!(selected_b[0].backend_id, "b");
+        assert_eq!(selected_a.head().backend_id, "a");
+        assert_eq!(selected_b.head().backend_id, "b");
     }
 
     #[test]
@@ -1208,7 +1323,7 @@ mod tests {
                 &RoundRobinCounters::new(),
             )
             .unwrap();
-            assert!(selected[0].backend_id == "a" || selected[0].backend_id == "c");
+            assert!(selected.head().backend_id == "a" || selected.head().backend_id == "c");
         }
     }
 
@@ -1229,7 +1344,7 @@ mod tests {
                 &RoundRobinCounters::new(),
             )
             .unwrap();
-            assert_eq!(selected[0].backend_id, "only");
+            assert_eq!(selected.head().backend_id, "only");
         }
     }
 
@@ -1278,7 +1393,7 @@ mod tests {
             &RoundRobinCounters::new(),
         )
         .unwrap();
-        assert_eq!(selected[0].weight, 7);
+        assert_eq!(selected.head().weight, 7);
     }
 
     fn backend(id: &str) -> ResolvedBackend {

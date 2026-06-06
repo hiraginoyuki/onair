@@ -37,7 +37,7 @@ pub struct ProxyContext {
     pub(super) inspector_base: InspectorRequestBase,
     pub(super) inspector_enabled: bool,
     pub(super) inspector_retention_requests: usize,
-    pub(super) live_record: Option<LiveRecord>,
+    pub(super) live_record: LiveRecord,
     pub(super) client_info: ClientInfo,
     pub(super) shutdown: watch::Receiver<bool>,
     pub(super) backend_target: String,
@@ -78,32 +78,23 @@ impl ProxyContext {
         self.inspector_base.backend_remote_addr = None;
         self.inspector_base.debug_capture_id = None;
         self.route = route;
-        if let Some(live) = &self.live_record {
-            let base = self.inspector_base.clone();
-            live.update(|record| record.base = base);
-        }
+        let base = self.inspector_base.clone();
+        self.live_record.update(|record| record.base = base);
     }
 
-    pub fn live_upsert(&self, mutate: impl FnOnce(&mut InspectorRequestRecord)) {
-        if let Some(live) = &self.live_record {
-            live.update(|record| {
-                let mut snapshot = build_live_record_from_context(self);
-                mutate(&mut snapshot);
-                *record = snapshot;
-            });
-        }
+    pub fn live_upsert(&self) {
+        let snapshot = build_live_record_from_context(self);
+        self.live_record.update(|record| *record = snapshot);
     }
 
     pub fn live_finalize(self, final_record: InspectorRequestRecord) {
-        if let Some(live) = self.live_record {
-            live.finalize(final_record);
-        }
+        self.live_record.finalize(final_record);
     }
 
     pub fn record_retried_attempt(&mut self, attempt: InspectorAttemptRecord) {
         self.backend_attempts.push(attempt.clone());
         self.retried_attempts.push(attempt);
-        self.live_upsert(refresh_live_record);
+        self.live_upsert();
     }
 
     pub fn record_final_attempt(
@@ -122,7 +113,7 @@ impl ProxyContext {
                 error_kind,
                 ended_us,
             ));
-            self.live_upsert(refresh_live_record);
+            self.live_upsert();
         }
     }
 }
