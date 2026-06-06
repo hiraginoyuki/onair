@@ -540,16 +540,6 @@ fn response_builder(
     builder
 }
 
-pub fn attach_request_id(
-    mut response: Response<Body>,
-    client_headers: &HeaderMap,
-) -> Response<Body> {
-    if let Some(request_id) = client_request_id(client_headers) {
-        response.headers_mut().insert(X_REQUEST_ID, request_id);
-    }
-    response
-}
-
 /// `tower::Layer` that copies the inbound `X-Request-Id` (if any) from the
 /// request headers to the response headers. Replaces the per-handler
 /// `attach_request_id` ceremony at every call site.
