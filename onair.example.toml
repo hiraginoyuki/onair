@@ -1,5 +1,7 @@
 [server]
 bind = "127.0.0.1:8080"
+# Maximum accepted request body size in bytes. Captured at router construction;
+# hot reload does not change it — restart onair to apply a new value.
 request_body_limit_bytes = 2097152
 # Only trust Forwarded/X-Forwarded-For/X-Real-IP from these immediate peer CIDRs.
 trusted_proxy_cidrs = []

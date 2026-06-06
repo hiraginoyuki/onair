@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use tracing::{debug, warn};
 use url::form_urlencoded;
 
 use onair_core::ContextSizeCache;
-use onair_core::auth::authenticate;
+use onair_core::auth::{Identity, authenticate};
 use onair_core::config::{Config, ConfigStore, ResolvedContextLength};
 use onair_core::error::{ApiError, Result};
 use onair_core::openai;
@@ -38,12 +39,11 @@ const MAX_INSPECTOR_SNAPSHOT_LIMIT: usize = 10_000;
 
 pub struct AppState {
     pub config: ConfigStore,
-    pub http: Client,
     pub health: BackendHealthStore,
     pub inspector: InspectorStore,
     pub metrics: Metrics,
-    pub round_robin: RoundRobinCounters,
     pub context_sizes: ContextSizeCache,
+    proxy_state: Arc<ProxyState>,
     shutdown: watch::Sender<bool>,
     _health_probe: HealthProbeTask,
     _context_size_refresh: ContextSizeRefreshTask,
@@ -68,14 +68,22 @@ impl AppState {
         let context_sizes = ContextSizeCache::new();
         let context_size_refresh =
             ContextSizeRefreshTask::start(config.clone(), http.clone(), context_sizes.clone());
+        let proxy_state = Arc::new(ProxyState::from_app_state(
+            Arc::new(config.clone()),
+            Arc::new(http),
+            Arc::new(inspector.clone()),
+            Arc::new(metrics.clone()),
+            Arc::new(health.clone()),
+            Arc::new(round_robin),
+            shutdown.subscribe(),
+        ));
         Ok(Self {
             config,
-            http,
             health,
             inspector,
             metrics,
-            round_robin,
             context_sizes,
+            proxy_state,
             shutdown,
             _health_probe: health_probe,
             _context_size_refresh: context_size_refresh,
@@ -93,15 +101,7 @@ impl AppState {
     }
 
     pub fn proxy_state(&self) -> Arc<ProxyState> {
-        Arc::new(ProxyState::from_app_state(
-            Arc::new(self.config.clone()),
-            Arc::new(self.http.clone()),
-            Arc::new(self.inspector.clone()),
-            Arc::new(self.metrics.clone()),
-            Arc::new(self.health.clone()),
-            Arc::new(self.round_robin.clone()),
-            self.shutdown.subscribe(),
-        ))
+        self.proxy_state.clone()
     }
 }
 
@@ -136,55 +136,29 @@ async fn healthz() -> StatusCode {
 }
 
 async fn models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response<Body> {
-    let timer = RequestTimer::start();
-    let config = state.config.snapshot();
-    let response = match authenticate(&headers, &config.clients) {
-        Ok(identity) => {
-            let available = config.public_model_context_lengths_with_cache(&state.context_sizes);
-            let identity_id = identity.id.clone();
-            let models = identity
-                .models
-                .into_iter()
-                .filter_map(|model| {
-                    available.get(&model).map(|resolved| match resolved {
-                        ResolvedContextLength::None => openai::ModelObject::new(model, None),
-                        ResolvedContextLength::Static { n_ctx } => {
-                            openai::ModelObject::new_static(model, *n_ctx)
-                        }
-                        ResolvedContextLength::Upstream { n_ctx: Some(n_ctx) } => {
-                            openai::ModelObject::new(model, Some(*n_ctx))
-                        }
-                        ResolvedContextLength::Upstream { n_ctx: None } => {
-                            openai::ModelObject::new(model, None)
-                        }
-                    })
+    authed_handler(state, &headers, "models", "none", |identity, available| {
+        let models = identity
+            .models
+            .iter()
+            .cloned()
+            .filter_map(|model| {
+                available.get(&model).map(|resolved| match resolved {
+                    ResolvedContextLength::None => openai::ModelObject::new(model, None),
+                    ResolvedContextLength::Static { n_ctx } => {
+                        openai::ModelObject::new_static(model, *n_ctx)
+                    }
+                    ResolvedContextLength::Upstream { n_ctx: Some(n_ctx) } => {
+                        openai::ModelObject::new(model, Some(*n_ctx))
+                    }
+                    ResolvedContextLength::Upstream { n_ctx: None } => {
+                        openai::ModelObject::new(model, None)
+                    }
                 })
-                .collect::<Vec<_>>();
-            let model_count = models.len();
-            let response = openai::models_response(models).into_response();
-            state.metrics.record_request(
-                &model_route_labels("models", &identity_id, "none"),
-                response.status().as_u16(),
-                timer.elapsed(),
-            );
-            debug!(
-                identity = %identity_id,
-                response_status = response.status().as_u16(),
-                model_count,
-                "models response completed"
-            );
-            response
-        }
-        Err(error) => {
-            state.metrics.record_request(
-                &model_route_labels("models", "unknown", "none"),
-                error.status.as_u16(),
-                timer.elapsed(),
-            );
-            error.into_response()
-        }
-    };
-    proxy::attach_request_id(response, &headers)
+            })
+            .collect::<Vec<_>>();
+        openai::models_response(models).into_response()
+    })
+    .await
 }
 
 async fn model(
@@ -192,66 +166,25 @@ async fn model(
     headers: HeaderMap,
     Path(model): Path<String>,
 ) -> Response<Body> {
-    let timer = RequestTimer::start();
-    let config = state.config.snapshot();
-    let response = match authenticate(&headers, &config.clients) {
-        Ok(identity) => {
-            let available = config.public_model_context_lengths_with_cache(&state.context_sizes);
-            if identity.models.contains(&model) {
-                if let Some(resolved) = available.get(&model) {
-                    let response = match resolved {
-                        ResolvedContextLength::None => {
-                            openai::model_response(model.clone(), None).into_response()
-                        }
-                        ResolvedContextLength::Static { n_ctx } => {
-                            openai::model_response_with_n_ctx_train(model.clone(), *n_ctx)
-                                .into_response()
-                        }
-                        ResolvedContextLength::Upstream { n_ctx } => {
-                            openai::model_response(model.clone(), *n_ctx).into_response()
-                        }
-                    };
-                    state.metrics.record_request(
-                        &model_route_labels("models_retrieve", &identity.id, &model),
-                        response.status().as_u16(),
-                        timer.elapsed(),
-                    );
-                    debug!(
-                        identity = %identity.id,
-                        model = %model,
-                        response_status = response.status().as_u16(),
-                        "model response completed"
-                    );
-                    response
-                } else {
-                    let error = ApiError::model_not_found(&model);
-                    state.metrics.record_request(
-                        &model_route_labels("models_retrieve", &identity.id, &model),
-                        error.status.as_u16(),
-                        timer.elapsed(),
-                    );
-                    error.into_response()
-                }
-            } else {
-                let error = ApiError::model_not_found(&model);
-                state.metrics.record_request(
-                    &model_route_labels("models_retrieve", &identity.id, &model),
-                    error.status.as_u16(),
-                    timer.elapsed(),
-                );
-                error.into_response()
+    authed_handler(
+        state,
+        &headers,
+        "models_retrieve",
+        &model,
+        |_identity, available| match available.get(&model) {
+            Some(ResolvedContextLength::None) => {
+                openai::model_response(model.clone(), None).into_response()
             }
-        }
-        Err(error) => {
-            state.metrics.record_request(
-                &model_route_labels("models_retrieve", "unknown", &model),
-                error.status.as_u16(),
-                timer.elapsed(),
-            );
-            error.into_response()
-        }
-    };
-    proxy::attach_request_id(response, &headers)
+            Some(ResolvedContextLength::Static { n_ctx }) => {
+                openai::model_response_with_n_ctx_train(model.clone(), *n_ctx).into_response()
+            }
+            Some(ResolvedContextLength::Upstream { n_ctx }) => {
+                openai::model_response(model.clone(), *n_ctx).into_response()
+            }
+            None => ApiError::model_not_found(&model).into_response(),
+        },
+    )
+    .await
 }
 
 async fn props(
@@ -259,65 +192,77 @@ async fn props(
     headers: HeaderMap,
     uri: axum::http::Uri,
 ) -> Response<Body> {
-    let timer = RequestTimer::start();
     let query_model = uri.query().and_then(|query| {
         url::form_urlencoded::parse(query.as_bytes())
             .find(|(key, _)| key == "model")
             .map(|(_, value)| value.into_owned())
     });
+    let label = query_model.clone().unwrap_or_else(|| "none".to_owned());
+    authed_handler(
+        state,
+        &headers,
+        "props",
+        &label,
+        move |_identity, available| match query_model.as_deref() {
+            Some(model) => match available.get(model) {
+                Some(resolved) => {
+                    let n_ctx = match resolved {
+                        ResolvedContextLength::None => 0,
+                        ResolvedContextLength::Static { n_ctx, .. } => *n_ctx,
+                        ResolvedContextLength::Upstream { n_ctx } => n_ctx.unwrap_or(0),
+                    };
+                    openai::props_response(Some("router"), Some(model.to_owned()), n_ctx)
+                        .into_response()
+                }
+                None => ApiError::model_not_found(model).into_response(),
+            },
+            None => openai::props_response(Some("router"), Some("llama-server".to_owned()), 0)
+                .into_response(),
+        },
+    )
+    .await
+}
 
+async fn authed_handler<F>(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    route_name: &'static str,
+    model_label: &str,
+    handle: F,
+) -> Response<Body>
+where
+    F: FnOnce(&Identity, &BTreeMap<String, ResolvedContextLength>) -> Response<Body>,
+{
+    let timer = RequestTimer::start();
     let config = state.config.snapshot();
-    let response = match authenticate(&headers, &config.clients) {
+    let response = match authenticate(headers, &config.clients) {
         Ok(identity) => {
             let available = config.public_model_context_lengths_with_cache(&state.context_sizes);
-            let response = match query_model.as_deref() {
-                Some(model) => {
-                    if identity.models.contains(model) {
-                        if let Some(resolved) = available.get(model) {
-                            let n_ctx = match resolved {
-                                ResolvedContextLength::None => 0,
-                                ResolvedContextLength::Static { n_ctx, .. } => *n_ctx,
-                                ResolvedContextLength::Upstream { n_ctx } => n_ctx.unwrap_or(0),
-                            };
-                            openai::props_response(Some("router"), Some(model.to_owned()), n_ctx)
-                                .into_response()
-                        } else {
-                            ApiError::model_not_found(model).into_response()
-                        }
-                    } else {
-                        ApiError::model_not_found(model).into_response()
-                    }
-                }
-                None => openai::props_response(Some("router"), Some("llama-server".to_owned()), 0)
-                    .into_response(),
-            };
+            let response = handle(&identity, &available);
             state.metrics.record_request(
-                &model_route_labels(
-                    "props",
-                    &identity.id,
-                    query_model.as_deref().unwrap_or("none"),
-                ),
+                &model_route_labels(route_name, &identity.id, model_label),
                 response.status().as_u16(),
                 timer.elapsed(),
             );
             debug!(
                 identity = %identity.id,
+                route = route_name,
+                model = model_label,
                 response_status = response.status().as_u16(),
-                model = query_model.as_deref().unwrap_or("none"),
-                "props response completed"
+                "authed response completed"
             );
             response
         }
         Err(error) => {
             state.metrics.record_request(
-                &model_route_labels("props", "unknown", query_model.as_deref().unwrap_or("none")),
+                &model_route_labels(route_name, "unknown", model_label),
                 error.status.as_u16(),
                 timer.elapsed(),
             );
             error.into_response()
         }
     };
-    proxy::attach_request_id(response, &headers)
+    proxy::attach_request_id(response, headers)
 }
 
 async fn v1_proxy(
@@ -418,7 +363,8 @@ async fn inspector_events(
     let snapshot_limit = inspector_limit(&request, &["snapshot_limit", "limit"]);
     let mut receiver = state.inspector.subscribe();
     let mut shutdown = state.shutdown_receiver();
-    let snapshot = state.inspector.records_limited(snapshot_limit);
+    let mut snapshot = state.inspector.records_limited(snapshot_limit);
+    snapshot.reverse();
     let stream = async_stream::stream! {
         for record in snapshot {
             yield Ok::<_, Infallible>(inspector_sse_event("snapshot", record));
@@ -460,7 +406,8 @@ async fn inspector_events(
 }
 
 fn inspector_sse_event(event_name: &'static str, record: InspectorRequestRecord) -> Event {
-    let data = serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_owned());
+    let data =
+        serde_json::to_string(&record).expect("InspectorRequestRecord is always serializable");
     Event::default().event(event_name).data(data)
 }
 
