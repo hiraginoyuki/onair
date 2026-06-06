@@ -39,12 +39,11 @@ const MAX_INSPECTOR_SNAPSHOT_LIMIT: usize = 10_000;
 
 pub struct AppState {
     pub config: ConfigStore,
-    pub http: Client,
     pub health: BackendHealthStore,
     pub inspector: InspectorStore,
     pub metrics: Metrics,
-    pub round_robin: RoundRobinCounters,
     pub context_sizes: ContextSizeCache,
+    proxy_state: Arc<ProxyState>,
     shutdown: watch::Sender<bool>,
     _health_probe: HealthProbeTask,
     _context_size_refresh: ContextSizeRefreshTask,
@@ -69,14 +68,22 @@ impl AppState {
         let context_sizes = ContextSizeCache::new();
         let context_size_refresh =
             ContextSizeRefreshTask::start(config.clone(), http.clone(), context_sizes.clone());
+        let proxy_state = Arc::new(ProxyState::from_app_state(
+            Arc::new(config.clone()),
+            Arc::new(http),
+            Arc::new(inspector.clone()),
+            Arc::new(metrics.clone()),
+            Arc::new(health.clone()),
+            Arc::new(round_robin),
+            shutdown.subscribe(),
+        ));
         Ok(Self {
             config,
-            http,
             health,
             inspector,
             metrics,
-            round_robin,
             context_sizes,
+            proxy_state,
             shutdown,
             _health_probe: health_probe,
             _context_size_refresh: context_size_refresh,
@@ -94,15 +101,7 @@ impl AppState {
     }
 
     pub fn proxy_state(&self) -> Arc<ProxyState> {
-        Arc::new(ProxyState::from_app_state(
-            Arc::new(self.config.clone()),
-            Arc::new(self.http.clone()),
-            Arc::new(self.inspector.clone()),
-            Arc::new(self.metrics.clone()),
-            Arc::new(self.health.clone()),
-            Arc::new(self.round_robin.clone()),
-            self.shutdown.subscribe(),
-        ))
+        self.proxy_state.clone()
     }
 }
 
