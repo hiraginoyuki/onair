@@ -1,10 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 
-const UNHEALTHY_FAILURE_THRESHOLD: u64 = 3;
+const UNHEALTHY_FAILURE_THRESHOLD: usize = 3;
+const FAILURE_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub struct BackendHealthStore {
@@ -82,7 +83,7 @@ impl BackendHealthStore {
                 record.probe_successes = record.probe_successes.saturating_add(1)
             }
         }
-        record.consecutive_failures = 0;
+        record.recent_failures.clear();
         record.last_success_unix_ms = Some(observed_at_unix_ms);
         record.last_observed_unix_ms = Some(observed_at_unix_ms);
         record.last_status = Some(status);
@@ -110,7 +111,16 @@ impl BackendHealthStore {
                 record.probe_failures = record.probe_failures.saturating_add(1)
             }
         }
-        record.consecutive_failures = record.consecutive_failures.saturating_add(1);
+        let now = Instant::now();
+        record.recent_failures.push_back(now);
+        let cutoff = now.checked_sub(FAILURE_WINDOW).unwrap_or(now);
+        while let Some(front) = record.recent_failures.front() {
+            if *front < cutoff {
+                record.recent_failures.pop_front();
+            } else {
+                break;
+            }
+        }
         record.last_failure_unix_ms = Some(observed_at_unix_ms);
         record.last_observed_unix_ms = Some(observed_at_unix_ms);
         record.last_status = Some(status);
@@ -134,7 +144,7 @@ impl BackendHealthStore {
                     traffic_failures: record.traffic_failures,
                     probe_successes: record.probe_successes,
                     probe_failures: record.probe_failures,
-                    consecutive_failures: record.consecutive_failures,
+                    consecutive_failures: record.recent_failures.len() as u64,
                     last_success_unix_ms: record.last_success_unix_ms,
                     last_failure_unix_ms: record.last_failure_unix_ms,
                     last_observed_unix_ms: record.last_observed_unix_ms,
@@ -154,7 +164,7 @@ struct BackendHealthRecord {
     traffic_failures: u64,
     probe_successes: u64,
     probe_failures: u64,
-    consecutive_failures: u64,
+    recent_failures: VecDeque<Instant>,
     last_success_unix_ms: Option<u64>,
     last_failure_unix_ms: Option<u64>,
     last_observed_unix_ms: Option<u64>,
@@ -176,9 +186,9 @@ impl BackendHealthRecord {
     fn status(&self) -> &'static str {
         if self.last_observed_unix_ms.is_none() {
             "unknown"
-        } else if self.consecutive_failures == 0 {
+        } else if self.recent_failures.is_empty() {
             "healthy"
-        } else if self.consecutive_failures >= UNHEALTHY_FAILURE_THRESHOLD {
+        } else if self.recent_failures.len() >= UNHEALTHY_FAILURE_THRESHOLD {
             "unhealthy"
         } else {
             "degraded"
@@ -259,5 +269,34 @@ mod tests {
         assert_eq!(recovered[0].consecutive_failures, 0);
         assert_eq!(recovered[0].successes, 1);
         assert_eq!(recovered[0].failures, 1);
+    }
+
+    #[test]
+    fn health_window_reaches_unhealthy_after_threshold_failures() {
+        let store = BackendHealthStore::new();
+        let backends = vec!["backend-a".to_owned()];
+
+        for _ in 0..3 {
+            store.record_failure("backend-a", Duration::from_millis(5), 502, "connect");
+        }
+        let snapshot = store.snapshot(&backends);
+        assert_eq!(snapshot[0].status, "unhealthy");
+        assert_eq!(snapshot[0].consecutive_failures, 3);
+    }
+
+    #[test]
+    fn health_window_clears_on_success() {
+        let store = BackendHealthStore::new();
+        let backends = vec!["backend-a".to_owned()];
+
+        for _ in 0..2 {
+            store.record_failure("backend-a", Duration::from_millis(5), 502, "connect");
+        }
+        assert_eq!(store.snapshot(&backends)[0].status, "degraded");
+
+        store.record_success("backend-a", Duration::from_millis(8), 200);
+        let snapshot = store.snapshot(&backends);
+        assert_eq!(snapshot[0].status, "healthy");
+        assert_eq!(snapshot[0].consecutive_failures, 0);
     }
 }
