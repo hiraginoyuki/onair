@@ -71,7 +71,7 @@ pub(super) fn client_request_id_str(headers: &HeaderMap) -> Option<String> {
 
 pub async fn proxy_v1(
     state: Arc<ProxyState>,
-    peer_addr: Option<SocketAddr>,
+    peer_addr: SocketAddr,
     headers: HeaderMap,
     method: Method,
     uri: Uri,
@@ -83,7 +83,7 @@ pub async fn proxy_v1(
     let route_name = routing::path_metric_name(&path);
     let config = state.config.snapshot();
     let client_info =
-        ClientInfo::from_headers(&headers, peer_addr, &config.server.trusted_proxy_cidrs);
+        ClientInfo::from_headers(&headers, Some(peer_addr), &config.server.trusted_proxy_cidrs);
     let request_body_bytes = body.len();
     let client_request_id = header_str(&headers, &X_REQUEST_ID).map(inspector_text);
     let started_at_unix_ms = timeline.snapshot().started_unix_ms;
@@ -410,11 +410,11 @@ async fn do_proxy(
             .await
             {
                 Ok(error_body) => {
-                    if let Some(capture) = &mut context.debug_capture {
-                        capture.record_upstream_error_response(
-                            upstream_status.as_u16(),
-                            upstream_content_type.as_deref(),
-                            &error_body.bytes,
+                if let Some(capture) = &mut context.debug_capture {
+                    capture.record_upstream_error_response(
+                        upstream_status,
+                        upstream_content_type.as_deref(),
+                        &error_body.bytes,
                             error_body.truncated,
                         );
                     }
@@ -454,8 +454,8 @@ async fn do_proxy(
         );
         if let Some(capture) = &mut context.debug_capture {
             capture.record_outcome(CaptureOutcome::UpstreamNonSuccess {
-                upstream_status: upstream_status.as_u16(),
-                client_status: api_error.status.as_u16(),
+                upstream_status,
+                client_status: api_error.status,
             });
         }
         context.state.health.record_failure(
@@ -538,16 +538,6 @@ fn response_builder(
     }
 
     builder
-}
-
-pub fn attach_request_id(
-    mut response: Response<Body>,
-    client_headers: &HeaderMap,
-) -> Response<Body> {
-    if let Some(request_id) = client_request_id(client_headers) {
-        response.headers_mut().insert(X_REQUEST_ID, request_id);
-    }
-    response
 }
 
 /// `tower::Layer` that copies the inbound `X-Request-Id` (if any) from the
@@ -818,7 +808,7 @@ impl FailureKind {
         }
     }
 
-    fn capture_outcome(self, client_status: u16) -> CaptureOutcome {
+    fn capture_outcome(self, client_status: StatusCode) -> CaptureOutcome {
         match self {
             Self::Timeout => CaptureOutcome::UpstreamTimeout { client_status },
             Self::Request { error_kind, .. } => CaptureOutcome::UpstreamRequestFailed {
@@ -876,7 +866,7 @@ fn record_retry(
     let error_kind = kind.error_kind();
     let outcome = kind.outcome();
     if let Some(capture) = &mut context.debug_capture {
-        capture.record_outcome(kind.capture_outcome(client_status.as_u16()));
+        capture.record_outcome(kind.capture_outcome(client_status));
     }
     context.state.health.record_failure(
         &context.labels.backend,
@@ -918,7 +908,7 @@ fn record_final_failure(
         context.request_timer.elapsed(),
     );
     if let Some(capture) = &mut context.debug_capture {
-        capture.record_outcome(kind.capture_outcome(client_status.as_u16()));
+        capture.record_outcome(kind.capture_outcome(client_status));
     }
     context.state.health.record_failure(
         &context.labels.backend,

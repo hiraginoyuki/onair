@@ -30,7 +30,7 @@ use onair_obs::observe::{
     InspectorRequestRecord, InspectorStore, inspector,
 };
 use onair_proxy::operator;
-use onair_proxy::proxy;
+use onair_proxy::proxy::{self, PropagateRequestIdLayer};
 use onair_proxy::proxy_state::ProxyState;
 use onair_proxy::routing::RoundRobinCounters;
 
@@ -127,6 +127,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/{*path}", any(v1_proxy))
         .fallback(fallback)
         .layer(DefaultBodyLimit::max(body_limit))
+        .layer(PropagateRequestIdLayer)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -235,7 +236,7 @@ where
 {
     let timer = RequestTimer::start();
     let config = state.config.snapshot();
-    let response = match authenticate(headers, &config.clients) {
+    match authenticate(headers, &config.clients) {
         Ok(identity) => {
             let available = config.public_model_context_lengths_with_cache(&state.context_sizes);
             let response = handle(&identity, &available);
@@ -261,8 +262,7 @@ where
             );
             error.into_response()
         }
-    };
-    proxy::attach_request_id(response, headers)
+    }
 }
 
 async fn v1_proxy(
@@ -276,7 +276,7 @@ async fn v1_proxy(
     let proxy_state = state.proxy_state();
     match proxy::proxy_v1(
         proxy_state,
-        Some(peer_addr),
+        peer_addr,
         headers.clone(),
         method,
         uri,
@@ -287,7 +287,7 @@ async fn v1_proxy(
         Ok(response) => response,
         Err(error) => {
             warn!(status = error.status.as_u16(), kind = %error.kind, "request failed before proxy response");
-            proxy::attach_request_id(error.into_response(), &headers)
+            error.into_response()
         }
     }
 }
@@ -538,7 +538,7 @@ fn unix_millis() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-async fn fallback(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response<Body> {
+async fn fallback(State(state): State<Arc<AppState>>) -> Response<Body> {
     let timer = RequestTimer::start();
     let error = ApiError::not_found("The requested endpoint does not exist.");
     state.metrics.record_request(
@@ -546,7 +546,7 @@ async fn fallback(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Res
         error.status.as_u16(),
         timer.elapsed(),
     );
-    proxy::attach_request_id(error.into_response(), &headers)
+    error.into_response()
 }
 
 fn model_route_labels(route: &str, identity: &str, model: &str) -> MetricLabels {
