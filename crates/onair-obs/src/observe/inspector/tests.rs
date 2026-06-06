@@ -256,6 +256,7 @@ fn persistence_drain_only_walks_current_deque_state() {
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(path.clone()),
+            ..InspectorPersistenceConfig::default()
         },
     };
     let store = InspectorStore::from_config(&config).unwrap();
@@ -290,6 +291,7 @@ fn evicted_in_flight_record_is_not_marked_interrupted_on_drop() {
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(path.clone()),
+            ..InspectorPersistenceConfig::default()
         },
     };
     let store = InspectorStore::from_config(&config).unwrap();
@@ -380,6 +382,7 @@ fn persistent_store_restores_latest_records() {
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(path.clone()),
+            ..InspectorPersistenceConfig::default()
         },
     };
     let store = InspectorStore::from_config(&config).unwrap();
@@ -408,6 +411,7 @@ fn persistent_store_drop_drains_pending_records() {
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(path.clone()),
+            ..InspectorPersistenceConfig::default()
         },
     };
     let store = InspectorStore::from_config(&config).unwrap();
@@ -447,6 +451,7 @@ fn store_drop_marks_inflight_records_as_interrupted() {
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(path.clone()),
+            ..InspectorPersistenceConfig::default()
         },
     };
     let store = InspectorStore::from_config(&config).unwrap();

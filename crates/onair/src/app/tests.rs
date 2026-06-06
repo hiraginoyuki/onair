@@ -1210,6 +1210,7 @@ async fn inspector_persistence_restores_retained_records_after_restart() {
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(database_path.clone()),
+            ..InspectorPersistenceConfig::default()
         },
     };
     let state = test_state_with_inspector(
@@ -1579,6 +1580,7 @@ async fn inspector_in_flight_record_persisted_as_interrupted_on_app_state_drop()
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(database_path.clone()),
+            ..InspectorPersistenceConfig::default()
         },
     };
     let state = test_state_with_inspector(
@@ -1644,6 +1646,7 @@ async fn inspector_in_flight_record_persisted_as_interrupted_on_app_state_drop()
             persistence: InspectorPersistenceConfig {
                 enabled: true,
                 path: Some(database_path.clone()),
+                ..InspectorPersistenceConfig::default()
             },
         },
     );
