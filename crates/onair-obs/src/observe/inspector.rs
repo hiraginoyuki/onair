@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 use std::thread::JoinHandle;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::error;
@@ -54,7 +55,7 @@ impl Drop for InspectorStoreInner {
             return;
         };
         let interrupted: Vec<InspectorRequestRecord> = {
-            let mut records = self.records.lock().expect("inspector store lock poisoned");
+            let mut records = self.records.lock();
             for record in records.iter_mut() {
                 if matches!(record.outcome, InspectorOutcome::InFlight) {
                     mark_record_interrupted(record);
@@ -195,11 +196,7 @@ impl InspectorStore {
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
         {
-            let mut records = self
-                .inner
-                .records
-                .lock()
-                .expect("inspector store lock poisoned");
+            let mut records = self.inner.records.lock();
             upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
         }
 
@@ -219,11 +216,7 @@ impl InspectorStore {
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
         {
-            let mut records = self
-                .inner
-                .records
-                .lock()
-                .expect("inspector store lock poisoned");
+            let mut records = self.inner.records.lock();
             upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
         }
 
@@ -242,11 +235,7 @@ impl InspectorStore {
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
         {
-            let mut records = self
-                .inner
-                .records
-                .lock()
-                .expect("inspector store lock poisoned");
+            let mut records = self.inner.records.lock();
             upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
         }
 
@@ -260,28 +249,19 @@ impl InspectorStore {
     }
 
     pub fn records_limited(&self, limit: usize) -> Vec<InspectorRequestRecord> {
-        let records = self
-            .inner
-            .records
-            .lock()
-            .expect("inspector store lock poisoned");
+        let records = self.inner.records.lock();
         let skip = records.len().saturating_sub(limit.max(1));
         records.iter().skip(skip).cloned().collect()
     }
 
     pub fn retained_len(&self) -> usize {
-        self.inner
-            .records
-            .lock()
-            .expect("inspector store lock poisoned")
-            .len()
+        self.inner.records.lock().len()
     }
 
     pub fn get(&self, record_id: &str) -> Option<InspectorRequestRecord> {
         self.inner
             .records
             .lock()
-            .expect("inspector store lock poisoned")
             .iter()
             .rev()
             .find(|record| record.base.record_id == record_id)
@@ -329,11 +309,7 @@ impl LiveRecord {
         if !self.enabled {
             return;
         }
-        let record = self
-            .record
-            .lock()
-            .expect("live inspector record lock poisoned")
-            .clone();
+        let record = self.record.lock().clone();
         self.store
             .upsert(self.enabled, self.retention_requests, record);
     }
@@ -346,10 +322,7 @@ impl LiveRecord {
             return;
         }
         let snapshot = {
-            let mut record = self
-                .record
-                .lock()
-                .expect("live inspector record lock poisoned");
+            let mut record = self.record.lock();
             mutate(&mut record);
             record.clone()
         };
@@ -359,22 +332,14 @@ impl LiveRecord {
 
     #[allow(dead_code)]
     pub fn snapshot(&self) -> InspectorRequestRecord {
-        self.record
-            .lock()
-            .expect("live inspector record lock poisoned")
-            .clone()
+        self.record.lock().clone()
     }
 
     pub fn finalize(self, mut final_record: InspectorRequestRecord) {
         if !self.enabled {
             return;
         }
-        let started = self
-            .record
-            .lock()
-            .expect("live inspector record lock poisoned")
-            .base
-            .started_at_unix_ms;
+        let started = self.record.lock().base.started_at_unix_ms;
         final_record.base.started_at_unix_ms = started;
         final_record.timeline.started_unix_ms = started;
         self.store
@@ -1030,5 +995,29 @@ mod tests {
         assert!(html.contains("expand all"));
         assert!(html.contains("waterfall-row-body"));
         assert!(html.contains("pause"));
+    }
+
+    #[test]
+    fn panic_in_lock_holder_does_not_poison_next_accessor() {
+        // parking_lot::Mutex has no poison semantics: a panic in a
+        // holder leaves the lock acquirable. This test holds the
+        // deque lock, panics, and confirms the next accessor can
+        // still mutate the store.
+        let store = InspectorStore::new();
+        let store_arc = std::sync::Arc::new(store);
+        let cloned = std::sync::Arc::clone(&store_arc);
+
+        let result = std::thread::spawn(move || {
+            let _guard = cloned.inner.records.lock();
+            panic!("simulated panic while holding the inspector store lock");
+        })
+        .join();
+
+        assert!(result.is_err(), "expected the spawned thread to panic");
+
+        // The store must still be usable: insert and look up a record.
+        store_arc.record(true, 4, test_record("after-panic"));
+        let stored = store_arc.get("after-panic").expect("record survives panic");
+        assert_eq!(stored.base.record_id, "after-panic");
     }
 }

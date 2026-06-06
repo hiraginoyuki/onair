@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use parking_lot::Mutex;
 
 const UNHEALTHY_FAILURE_THRESHOLD: u64 = 3;
 
@@ -70,7 +72,7 @@ impl BackendHealthStore {
         source: ObservationSource,
     ) {
         let observed_at_unix_ms = unix_millis();
-        let mut records = self.inner.lock().expect("backend health lock poisoned");
+        let mut records = self.inner.lock();
         let record = records.entry(backend.to_owned()).or_default();
         match source {
             ObservationSource::Traffic => {
@@ -98,7 +100,7 @@ impl BackendHealthStore {
         source: ObservationSource,
     ) {
         let observed_at_unix_ms = unix_millis();
-        let mut records = self.inner.lock().expect("backend health lock poisoned");
+        let mut records = self.inner.lock();
         let record = records.entry(backend.to_owned()).or_default();
         match source {
             ObservationSource::Traffic => {
@@ -118,7 +120,7 @@ impl BackendHealthStore {
     }
 
     pub fn snapshot(&self, configured_backends: &[String]) -> Vec<BackendHealthSnapshot> {
-        let records = self.inner.lock().expect("backend health lock poisoned");
+        let records = self.inner.lock();
         configured_backends
             .iter()
             .map(|backend| {
