@@ -460,7 +460,8 @@ async fn inspector_events(
 }
 
 fn inspector_sse_event(event_name: &'static str, record: InspectorRequestRecord) -> Event {
-    let data = serde_json::to_string(&record).unwrap_or_else(|_| "{}".to_owned());
+    let data =
+        serde_json::to_string(&record).expect("InspectorRequestRecord is always serializable");
     Event::default().event(event_name).data(data)
 }
 
