@@ -543,7 +543,9 @@ pub enum ResolvedContextLength {
 #[derive(Debug, Clone)]
 pub enum ContextLengthSpec {
     None,
-    Static { n_ctx: u64 },
+    Static {
+        n_ctx: u64,
+    },
     Upstream {
         backend_id: String,
         backend_model: String,

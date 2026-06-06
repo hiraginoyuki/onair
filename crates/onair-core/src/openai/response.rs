@@ -11,7 +11,7 @@ pub fn is_event_stream_content_type(content_type: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
-pub fn is_json_content_type(content_type: Option<&str>) -> bool {
+pub(crate) fn is_json_content_type(content_type: Option<&str>) -> bool {
     content_type
         .map(|value| {
             let lowered = value.to_ascii_lowercase();
@@ -468,11 +468,11 @@ pub struct UsageObservation {
     pub diagnostics: UsageDiagnostics,
 }
 
-pub fn extract_usage(value: &Value) -> UsageTotals {
+pub(crate) fn extract_usage(value: &Value) -> UsageTotals {
     extract_usage_observation(value).totals
 }
 
-pub fn extract_usage_observation(value: &Value) -> UsageObservation {
+pub(crate) fn extract_usage_observation(value: &Value) -> UsageObservation {
     let mut observation = UsageObservation::default();
     collect_usage(value, &mut observation);
     observation

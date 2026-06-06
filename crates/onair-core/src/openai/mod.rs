@@ -4,26 +4,25 @@ pub mod request;
 pub mod response;
 pub mod responses_compat;
 
-#[allow(unused_imports)]
 pub use models::{
-    DefaultGenerationSettings, ModelMeta, ModelObject, ModelsResponse, PropsResponse,
-    model_response, model_response_with_n_ctx_train, models_response, props_response,
+    ModelMeta, ModelObject, ModelsResponse, model_response, model_response_with_n_ctx_train,
+    models_response, props_response,
 };
 
-#[allow(unused_imports)]
 pub use request::{
     RequestMode, RequestRewriteError, RequestRewritePolicies, RequestShape, RewriteParam,
     inspect_request, rewrite_query_model, rewrite_request_body_for_mode_with_policies,
     upstream_path_for_mode,
 };
 
-#[allow(unused_imports)]
+pub(crate) use response::is_json_content_type;
 pub use response::{
     ChatCompletionsSseNormalizer, ResponsesSseNormalizer, SseNormalizer, UsageDiagnostics,
-    UsageObservation, UsageTotals, extract_usage, extract_usage_observation,
-    is_event_stream_content_type, is_json_content_type, rewrite_response_body,
-    rewrite_response_models,
+    UsageTotals, is_event_stream_content_type, rewrite_response_body, rewrite_response_models,
 };
+
+#[cfg(test)]
+pub(crate) use response::extract_usage_observation;
 
 #[cfg(test)]
 mod tests;
