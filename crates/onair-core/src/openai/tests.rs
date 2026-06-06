@@ -1841,3 +1841,66 @@ fn responses_stream_converts_function_call_deltas_to_chat_completion_chunks() {
     assert!(output.contains("\"total_tokens\":3"));
     assert!(output.contains("data: [DONE]"));
 }
+
+#[test]
+fn chat_completion_stream_finishes_response_when_done_marker_is_missing() {
+    // Regression: a stream that ends with content but never emits
+    // "data: [DONE]" must still emit the closing finish_reason chunk
+    // and the [DONE] terminator on finish() so the client does not
+    // hang waiting for the stream terminator.
+    let mut normalizer = ChatCompletionsSseNormalizer::new_with_usage_visibility(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        false,
+    );
+    let chunk = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": "backend-model",
+        "choices": [{
+            "delta": {"content": "hello"},
+            "finish_reason": null
+        }]
+    });
+
+    let mut output = normalizer.push(format!("data: {chunk}\n\n").as_bytes());
+    output.extend(normalizer.finish());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(
+        output.contains("\"finish_reason\":\"stop\""),
+        "expected finish_reason emitted on finish() even without [DONE], got: {output}"
+    );
+    assert!(output.contains("data: [DONE]"));
+}
+
+#[test]
+fn responses_stream_finishes_response_when_done_marker_is_missing() {
+    // Regression: a Responses stream that ends with content but never
+    // emits "data: [DONE]" must still emit the response.completed
+    // event so the client gets a final state.
+    let mut normalizer = ResponsesSseNormalizer::new(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+    );
+    let chunk = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": "backend-model",
+        "choices": [{
+            "delta": {"content": "hello"},
+            "finish_reason": "stop"
+        }]
+    });
+
+    let mut output = normalizer.push(format!("data: {chunk}\n\n").as_bytes());
+    output.extend(normalizer.finish());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(
+        output.contains("event: response.completed"),
+        "expected response.completed on finish() even without [DONE], got: {output}"
+    );
+}
