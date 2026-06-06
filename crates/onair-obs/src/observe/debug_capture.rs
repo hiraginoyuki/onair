@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::http::Method;
+use axum::http::{Method, StatusCode};
 use bytes::Bytes;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use tracing::warn;
 
 use crate::metrics::MetricLabels;
@@ -22,6 +22,23 @@ const UPSTREAM_ERROR_BODY_FILE: &str = "upstream_error.body";
 const METADATA_FILE: &str = "metadata.json";
 
 static CAPTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn serialize_status_code_as_u16<S: Serializer>(
+    value: &StatusCode,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u16(value.as_u16())
+}
+
+fn serialize_optional_status_code_as_u16<S: Serializer>(
+    value: &Option<StatusCode>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(code) => serializer.serialize_some(&code.as_u16()),
+        None => serializer.serialize_none(),
+    }
+}
 
 pub struct CaptureRequest<'a> {
     pub method: &'a Method,
@@ -63,7 +80,7 @@ impl RequestCapture {
 
     pub fn record_upstream_error_response(
         &mut self,
-        upstream_status: u16,
+        upstream_status: StatusCode,
         content_type: Option<&str>,
         body: &[u8],
         truncated: bool,
@@ -94,7 +111,7 @@ impl RequestCapture {
 
     fn write_upstream_error_response(
         &mut self,
-        upstream_status: u16,
+        upstream_status: StatusCode,
         content_type: Option<&str>,
         body: &[u8],
         truncated: bool,
@@ -139,8 +156,12 @@ struct CaptureMetadata {
     stream: bool,
     request_body_bytes: usize,
     upstream_body_bytes: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    upstream_error_status: Option<u16>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_status_code_as_u16"
+    )]
+    upstream_error_status: Option<StatusCode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     upstream_error_content_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,39 +186,48 @@ struct CaptureFiles {
 pub enum CaptureOutcome {
     SentToUpstream,
     Success {
-        upstream_status: u16,
+        #[serde(serialize_with = "serialize_status_code_as_u16")]
+        upstream_status: StatusCode,
     },
     StreamCompleted {
-        upstream_status: u16,
+        #[serde(serialize_with = "serialize_status_code_as_u16")]
+        upstream_status: StatusCode,
         stream_duration_ms: u128,
         input_tokens: u64,
         cached_input_tokens: u64,
         output_tokens: u64,
     },
     StreamIncomplete {
-        upstream_status: u16,
+        #[serde(serialize_with = "serialize_status_code_as_u16")]
+        upstream_status: StatusCode,
         stream_duration_ms: u128,
         input_tokens: u64,
         cached_input_tokens: u64,
         output_tokens: u64,
     },
     UpstreamNonSuccess {
-        upstream_status: u16,
-        client_status: u16,
+        #[serde(serialize_with = "serialize_status_code_as_u16")]
+        upstream_status: StatusCode,
+        #[serde(serialize_with = "serialize_status_code_as_u16")]
+        client_status: StatusCode,
     },
     UpstreamTimeout {
-        client_status: u16,
+        #[serde(serialize_with = "serialize_status_code_as_u16")]
+        client_status: StatusCode,
     },
     UpstreamRequestFailed {
-        client_status: u16,
+        #[serde(serialize_with = "serialize_status_code_as_u16")]
+        client_status: StatusCode,
         error_kind: &'static str,
     },
     UpstreamBodyReadFailed {
-        client_status: u16,
+        #[serde(serialize_with = "serialize_status_code_as_u16")]
+        client_status: StatusCode,
         error_kind: &'static str,
     },
     UpstreamStreamFailed {
-        upstream_status: u16,
+        #[serde(serialize_with = "serialize_status_code_as_u16")]
+        upstream_status: StatusCode,
         stream_duration_ms: u128,
         error_kind: &'static str,
         input_tokens: u64,
