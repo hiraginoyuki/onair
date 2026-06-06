@@ -10,8 +10,9 @@ use tracing::error;
 use onair_core::config::InspectorConfig;
 use onair_core::error::{Error, Result};
 
-use super::records::{InspectorOutcome, InspectorRequestRecord, safe_segment};
+use super::records::{InspectorOutcome, InspectorRequestRecord};
 use crate::observe::inspector_persistence::{InspectorPersistenceWriter, restore_records};
+use crate::util::sanitize_for_storage;
 
 pub(super) const MAX_RETENTION_REQUESTS: usize = 100_000;
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
@@ -259,7 +260,9 @@ impl InspectorStore {
     pub fn next_record_id(started_at_unix_ms: u64, client_request_id: Option<&str>) -> String {
         let sequence = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut record_id = format!("{started_at_unix_ms}-{}-{sequence}", std::process::id());
-        if let Some(client_request_id) = client_request_id.and_then(safe_segment) {
+        if let Some(client_request_id) =
+            client_request_id.and_then(|value| sanitize_for_storage(value, 80))
+        {
             record_id.push('-');
             record_id.push_str(&client_request_id);
         }

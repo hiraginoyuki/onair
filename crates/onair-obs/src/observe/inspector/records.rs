@@ -164,20 +164,3 @@ pub(super) fn unix_millis() -> u64 {
         .try_into()
         .unwrap_or(0)
 }
-
-pub(super) fn safe_segment(value: &str) -> Option<String> {
-    let segment = value
-        .chars()
-        .filter_map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                Some(character)
-            } else if character.is_ascii() && !character.is_ascii_control() {
-                Some('_')
-            } else {
-                None
-            }
-        })
-        .take(80)
-        .collect::<String>();
-    (!segment.is_empty()).then_some(segment)
-}
