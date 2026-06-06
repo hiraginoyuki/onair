@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use axum::body::Body;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::{Response, StatusCode};
+use axum::response::IntoResponse;
 use serde::Serialize;
 
 use onair_core::config::{
@@ -433,4 +437,39 @@ fn unix_millis() -> u64 {
 
 fn duration_millis(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn operator_response<T: Serialize>(snapshot: T) -> Response<Body> {
+    let body = serde_json::to_vec(&snapshot).expect("operator snapshots are always serializable");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .header(CACHE_CONTROL, "no-store")
+        .header("x-content-type-options", "nosniff")
+        .body(Body::from(body))
+        .expect("operator snapshot response builder is valid")
+}
+
+impl IntoResponse for OperatorRuntimeSnapshot {
+    fn into_response(self) -> Response<Body> {
+        operator_response(self)
+    }
+}
+
+impl IntoResponse for OperatorConfigSnapshot {
+    fn into_response(self) -> Response<Body> {
+        operator_response(self)
+    }
+}
+
+impl IntoResponse for OperatorModelsSnapshot {
+    fn into_response(self) -> Response<Body> {
+        operator_response(self)
+    }
+}
+
+impl IntoResponse for OperatorHealthSnapshot {
+    fn into_response(self) -> Response<Body> {
+        operator_response(self)
+    }
 }
