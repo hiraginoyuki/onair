@@ -244,67 +244,105 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Update flake.nix with new version, tag, and hashes
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          HASHES: ${{ steps.hashes.outputs.hashes }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          new_version = os.environ["VERSION"]
+          new_tag = os.environ["TAG"]
+          new_hashes = json.loads(os.environ["HASHES"])
+
+          with open("flake.nix") as f:
+              content = f.read()
+
+          def replace_scalar(content, name, value, label):
+              pattern = re.compile(
+                  rf'({re.escape(name)}\s*=\s*)"[^"]*"\s*;',
+                  re.MULTILINE,
+              )
+              new_content, n = pattern.subn(
+                  lambda m: f'{m.group(1)}"{value}";',
+                  content,
+                  count=1,
+              )
+              if n != 1:
+                  sys.exit(f"{label} replacement failed (matched {n} times)")
+              return new_content
+
+          content = replace_scalar(content, "version", new_version, "version")
+          content = replace_scalar(content, "tag", new_tag, "tag")
+
+          hashes_lines = [
+              "        " + f'"{k}" = "{v}";'
+              for k, v in new_hashes.items()
+          ]
+          hashes_block = "{\n" + "\n".join(hashes_lines) + "\n      }"
+          pattern = re.compile(
+              r'hashes\s*=\s*\{[^}]*\}\s*;',
+              re.DOTALL,
+          )
+          new_content, n = pattern.subn(
+              f'hashes = {hashes_block};',
+              content,
+              count=1,
+          )
+          if n != 1:
+              sys.exit(f"hashes replacement failed (matched {n} times)")
+
+          with open("flake.nix", "w") as f:
+              f.write(new_content)
+          print("flake.nix updated successfully")
+          PY
+
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Update nix-metadata branch and release tag
+      - name: Commit and push updated flake.nix
+        run: |
+          set -euo pipefail
+          git add flake.nix
+          if git diff --cached --quiet; then
+            echo "No changes to flake.nix; skipping commit"
+          else
+            git commit -m "chore(release): record ${TAG} in flake.nix [skip ci]"
+            git push origin main
+          fi
+
+      - name: Push release tag
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag -f "$TAG"
+          git push origin "tag" "$TAG" --force
+
+      - name: Push moving tags (vX, latest) for stable releases
+        if: ${{ needs.meta.outputs.is_stable == 'true' }}
         env:
           TAG: ${{ needs.meta.outputs.tag }}
           VERSION: ${{ needs.meta.outputs.version }}
-          IS_UNSTABLE: ${{ needs.meta.outputs.is_unstable }}
-          IS_STABLE: ${{ needs.meta.outputs.is_stable }}
-          HASHES: ${{ steps.hashes.outputs.hashes }}
         run: |
           set -euo pipefail
+          major="v$(echo "$VERSION" | cut -d. -f1)"
+          git tag -f "$major" "$TAG"
+          git push origin "tag" "$major" --force
+          git tag -f "latest" "$TAG"
+          git push origin "tag" "latest" --force
 
-          now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-          git fetch origin nix-metadata
-          git checkout nix-metadata
-
-          if [ -f metadata.json ]; then
-            existing="$(cat metadata.json)"
-          else
-            existing='{}'
-          fi
-
-          if [ "$IS_UNSTABLE" = "true" ]; then
-            entry_key="unstable"
-            entry="$(jq -n \
-              --arg tag "$TAG" \
-              --arg version "$VERSION" \
-              --arg now "$now" \
-              --argjson sha "$HASHES" \
-              '{tag: $tag, version: $version, committed_at: $now, sha256: $sha}')"
-          else
-            entry_key="stable"
-            entry="$(jq -n \
-              --arg tag "$TAG" \
-              --arg version "$VERSION" \
-              --arg now "$now" \
-              --argjson sha "$HASHES" \
-              '{tag: $tag, version: $version, released_at: $now, sha256: $sha}')"
-          fi
-
-          new_metadata="$(echo "$existing" | jq \
-            --arg key "$entry_key" \
-            --argjson entry "$entry" \
-            '. + {($key): $entry, default: (.default // "unstable")}')"
-
-          printf '%s\n' "$new_metadata" | jq '.' > metadata.json
-
-          git add metadata.json
-          git commit -m "chore(nix-metadata): refresh after ${TAG} [skip ci]"
-          git push origin nix-metadata
-
-          if [ "$IS_STABLE" = "true" ]; then
-            echo "Pinning metadata.json to release tag ${TAG}"
-            git checkout "$TAG"
-            printf '%s\n' "$new_metadata" | jq '.' > metadata.json
-            git add metadata.json
-            git commit --allow-empty -m "chore(nix-metadata): pin ${TAG} [skip ci]"
-            git tag -f "$TAG"
-            git push origin "tag" "$TAG" --force
-          fi
+      - name: Force-push unstable tag to main HEAD
+        if: ${{ needs.meta.outputs.is_unstable == 'true' }}
+        run: |
+          set -euo pipefail
+          git tag -f unstable main
+          git push origin "tag" unstable --force
