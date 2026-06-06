@@ -580,90 +580,10 @@ impl Config {
     }
 
     fn resolve(file: ConfigFile) -> Result<Self> {
-        validate_debug_capture_config(&file.debug_capture)?;
-        validate_inspector_config(&file.inspector)?;
-        validate_health_config(&file.health)?;
-        validate_routing_config(&file.routing)?;
+        validate_top_level(&file)?;
 
-        let mut client_ids = BTreeSet::new();
-        let mut clients = Vec::with_capacity(file.clients.len());
-        for client in file.clients {
-            if client.id.trim().is_empty() {
-                return Err(Error::Config("client id must not be empty".to_owned()));
-            }
-            if !client_ids.insert(client.id.clone()) {
-                return Err(Error::Config(format!(
-                    "duplicate client id '{}'",
-                    client.id
-                )));
-            }
-            let api_key = resolve_secret(
-                client.api_key,
-                client.api_key_env,
-                &format!("client '{}' api key", client.id),
-            )?;
-            let mut models = BTreeSet::new();
-            models.extend(file.access.default_models.iter().cloned());
-            models.extend(client.models);
-            clients.push(ResolvedClient {
-                id: client.id,
-                api_key,
-                models,
-            });
-        }
-
-        if clients.is_empty() {
-            return Err(Error::Config(
-                "at least one [[client]] is required".to_owned(),
-            ));
-        }
-
-        let mut backend_ids = BTreeSet::new();
-        let mut backends = Vec::with_capacity(file.backends.len());
-        for backend in file.backends {
-            if backend.id.trim().is_empty() {
-                return Err(Error::Config("backend id must not be empty".to_owned()));
-            }
-            if !backend_ids.insert(backend.id.clone()) {
-                return Err(Error::Config(format!(
-                    "duplicate backend id '{}'",
-                    backend.id
-                )));
-            }
-            if backend.weight == 0 {
-                return Err(Error::Config(format!(
-                    "backend '{}' weight must be greater than zero",
-                    backend.id
-                )));
-            }
-            let base_url = normalize_backend_base_url(&backend.base_url, &backend.id)?;
-            let api_key = resolve_optional_secret(backend.api_key, backend.api_key_env)?;
-            validate_markers(
-                &backend.supports,
-                file.routing.unknown_capability_policy,
-                MarkerKind::Capability,
-                &format!("backend '{}'", backend.id),
-            )?;
-            backends.push(ResolvedBackend {
-                id: backend.id,
-                base_url,
-                api_key,
-                timeout: Duration::from_millis(backend.timeout_ms),
-                supports: backend.supports,
-                tool_schema_mode: backend.tool_schema_mode,
-                responses_store: backend.responses_store,
-                responses_max_output_tokens: backend.responses_max_output_tokens,
-                chat_stream_usage: backend.chat_stream_usage,
-                weight: backend.weight,
-            });
-        }
-
-        if backends.is_empty() {
-            return Err(Error::Config(
-                "at least one [[backend]] is required".to_owned(),
-            ));
-        }
-
+        let clients = resolve_clients(file.clients, &file.access)?;
+        let backends = resolve_backends(file.backends, file.routing.unknown_capability_policy)?;
         let routes = resolve_routes(&file.routes, &backends, &file.routing)?;
 
         validate_allowed_routes(&clients, &routes)?;
@@ -728,8 +648,46 @@ fn resolve_routes(
     backends: &[ResolvedBackend],
     routing_config: &RoutingConfig,
 ) -> Result<Vec<ResolvedRoute>> {
+    let validated = validate_routes(route_configs, routing_config)?;
+    let mut resolved_routes = Vec::with_capacity(validated.len());
+    for (key, route_config) in validated {
+        let bindings = bind_routes(&key, &route_config.backends, backends)?;
+        warn_about_unreachable_backends(&key, &route_config.expose, &bindings, backends);
+        let tool_schema_mode = route_config
+            .tool_schema_mode
+            .unwrap_or(ToolSchemaMode::Preserve);
+        let responses_store = route_config
+            .responses_store
+            .unwrap_or(ResponsesStorePolicy::Preserve);
+        let responses_max_output_tokens = route_config
+            .responses_max_output_tokens
+            .unwrap_or(ResponsesMaxOutputTokensPolicy::Preserve);
+        let chat_stream_usage = route_config
+            .chat_stream_usage
+            .unwrap_or(ChatStreamUsagePolicy::Preserve);
+        let expose = route_config.expose.clone();
+        let context_length =
+            resolve_context_lengths(&key, &route_config.context_length, &bindings)?;
+        resolved_routes.push(ResolvedRoute {
+            key: key.clone(),
+            expose,
+            context_length,
+            tool_schema_mode,
+            responses_store,
+            responses_max_output_tokens,
+            chat_stream_usage,
+            backends: bindings,
+        });
+    }
+    Ok(resolved_routes)
+}
+
+fn validate_routes(
+    route_configs: &[RouteConfig],
+    routing_config: &RoutingConfig,
+) -> Result<Vec<(RouteKey, RouteConfig)>> {
     let mut seen_keys: std::collections::HashSet<RouteKey> = std::collections::HashSet::new();
-    let mut resolved_routes = Vec::with_capacity(route_configs.len());
+    let mut validated = Vec::with_capacity(route_configs.len());
     for route_config in route_configs {
         let key = route_config.route_key().ok_or_else(|| {
             Error::Config(format!(
@@ -749,98 +707,91 @@ fn resolve_routes(
             MarkerKind::Endpoint,
             &format!("route '{}'", format_route_key(&key)),
         )?;
-        let mut bindings = Vec::with_capacity(route_config.backends.len());
-        for entry in &route_config.backends {
-            let (model, backend_id) = parse_route_backend(entry)?;
-            let backend = backends
-                .iter()
-                .find(|b| b.id == backend_id)
-                .ok_or_else(|| {
-                    Error::Config(format!(
-                        "route '{}' references unknown backend '{}'",
-                        format_route_key(&key),
-                        backend_id
-                    ))
-                })?;
-            let backend_model = model.clone().unwrap_or_else(|| match &key {
-                RouteKey::Public(public) => public.clone(),
-                RouteKey::Path(_) => backend_id.clone(),
-            });
-            bindings.push(RouteBackendBinding {
-                backend_id: backend.id.clone(),
-                backend_model,
-            });
-        }
-        let tool_schema_mode = route_config
-            .tool_schema_mode
-            .unwrap_or(ToolSchemaMode::Preserve);
-        let responses_store = route_config
-            .responses_store
-            .unwrap_or(ResponsesStorePolicy::Preserve);
-        let responses_max_output_tokens = route_config
-            .responses_max_output_tokens
-            .unwrap_or(ResponsesMaxOutputTokensPolicy::Preserve);
-        let chat_stream_usage = route_config
-            .chat_stream_usage
-            .unwrap_or(ChatStreamUsagePolicy::Preserve);
-        let expose = route_config.expose.clone();
-        for binding in &bindings {
-            // The unknown-backend check at lines 753-764 already rejected
-            // any binding whose backend_id is not in `backends`, so this
-            // lookup is guaranteed to succeed; if it ever fails we return
-            // Err so the watcher rejects the reload instead of crashing
-            // the whole server on a misconfigured hot reload.
-            let Some(backend) = backends.iter().find(|b| b.id == binding.backend_id) else {
-                debug_assert!(
-                    false,
-                    "binding references a known backend (validator above)"
-                );
-                return Err(Error::Config(format!(
+        validated.push((key, route_config.clone()));
+    }
+    Ok(validated)
+}
+
+fn bind_routes(
+    key: &RouteKey,
+    entries: &[String],
+    backends: &[ResolvedBackend],
+) -> Result<Vec<RouteBackendBinding>> {
+    let mut bindings = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let (model, backend_id) = parse_route_backend(entry)?;
+        let backend = backends
+            .iter()
+            .find(|b| b.id == backend_id)
+            .ok_or_else(|| {
+                Error::Config(format!(
                     "route '{}' references unknown backend '{}'",
-                    format_route_key(&key),
-                    binding.backend_id
-                )));
-            };
-            if !route_can_serve(&expose, backend) {
-                let route_label = format_route_key(&key);
-                let backend_supports = sorted_marker_list(&backend.supports);
-                let route_exposes = sorted_marker_list(&expose);
-                warn!(
-                    route = %route_label,
-                    backend = %backend.id,
-                    route_expose = %route_exposes,
-                    backend_supports = %backend_supports,
-                    "route backend cannot serve any of the route's expose markers; it will never be selected",
-                );
-            }
-        }
-        let context_length = match &key {
-            RouteKey::Path(_) => ContextLengthPolicy::None,
-            RouteKey::Public(public) => {
-                let first = bindings.first();
-                let backend_id = first.map(|b| b.backend_id.as_str()).unwrap_or("");
-                let model_for_lookup = first
-                    .map(|b| b.backend_model.clone())
-                    .unwrap_or_else(|| public.clone());
-                resolve_context_length_policy(
-                    &route_config.context_length,
-                    backend_id,
-                    &model_for_lookup,
-                )?
-            }
-        };
-        resolved_routes.push(ResolvedRoute {
-            key: key.clone(),
-            expose,
-            context_length,
-            tool_schema_mode,
-            responses_store,
-            responses_max_output_tokens,
-            chat_stream_usage,
-            backends: bindings,
+                    format_route_key(key),
+                    backend_id
+                ))
+            })?;
+        let backend_model = model.clone().unwrap_or_else(|| match key {
+            RouteKey::Public(public) => public.clone(),
+            RouteKey::Path(_) => backend_id.clone(),
+        });
+        bindings.push(RouteBackendBinding {
+            backend_id: backend.id.clone(),
+            backend_model,
         });
     }
-    Ok(resolved_routes)
+    Ok(bindings)
+}
+
+fn warn_about_unreachable_backends(
+    key: &RouteKey,
+    expose: &BTreeSet<String>,
+    bindings: &[RouteBackendBinding],
+    backends: &[ResolvedBackend],
+) {
+    for binding in bindings {
+        // The unknown-backend check inside bind_routes already rejected
+        // any binding whose backend_id is not in `backends`, so this
+        // lookup is guaranteed to succeed; if it ever fails we log and
+        // bail out so a misconfigured hot reload does not crash the
+        // whole server.
+        let Some(backend) = backends.iter().find(|b| b.id == binding.backend_id) else {
+            debug_assert!(
+                false,
+                "binding references a known backend (validator above)"
+            );
+            return;
+        };
+        if !route_can_serve(expose, backend) {
+            let route_label = format_route_key(key);
+            let backend_supports = sorted_marker_list(&backend.supports);
+            let route_exposes = sorted_marker_list(expose);
+            warn!(
+                route = %route_label,
+                backend = %backend.id,
+                route_expose = %route_exposes,
+                backend_supports = %backend_supports,
+                "route backend cannot serve any of the route's expose markers; it will never be selected",
+            );
+        }
+    }
+}
+
+fn resolve_context_lengths(
+    key: &RouteKey,
+    config: &ContextLengthConfig,
+    bindings: &[RouteBackendBinding],
+) -> Result<ContextLengthPolicy> {
+    match key {
+        RouteKey::Path(_) => Ok(ContextLengthPolicy::None),
+        RouteKey::Public(public) => {
+            let first = bindings.first();
+            let backend_id = first.map(|b| b.backend_id.as_str()).unwrap_or("");
+            let model_for_lookup = first
+                .map(|b| b.backend_model.clone())
+                .unwrap_or_else(|| public.clone());
+            resolve_context_length_policy(config, backend_id, &model_for_lookup)
+        }
+    }
 }
 
 fn format_route_key(key: &RouteKey) -> String {
@@ -903,6 +854,107 @@ fn parse_route_backend(entry: &str) -> Result<(Option<String>, String)> {
     } else {
         Ok((None, entry.to_owned()))
     }
+}
+
+fn validate_top_level(file: &ConfigFile) -> Result<()> {
+    validate_debug_capture_config(&file.debug_capture)?;
+    validate_inspector_config(&file.inspector)?;
+    validate_health_config(&file.health)?;
+    validate_routing_config(&file.routing)?;
+    Ok(())
+}
+
+fn resolve_clients(
+    raw_clients: Vec<ClientConfig>,
+    access: &AccessConfig,
+) -> Result<Vec<ResolvedClient>> {
+    let mut client_ids = BTreeSet::new();
+    let mut clients = Vec::with_capacity(raw_clients.len());
+    for client in raw_clients {
+        if client.id.trim().is_empty() {
+            return Err(Error::Config("client id must not be empty".to_owned()));
+        }
+        if !client_ids.insert(client.id.clone()) {
+            return Err(Error::Config(format!(
+                "duplicate client id '{}'",
+                client.id
+            )));
+        }
+        let api_key = resolve_secret(
+            client.api_key,
+            client.api_key_env,
+            &format!("client '{}' api key", client.id),
+        )?;
+        let mut models = BTreeSet::new();
+        models.extend(access.default_models.iter().cloned());
+        models.extend(client.models);
+        clients.push(ResolvedClient {
+            id: client.id,
+            api_key,
+            models,
+        });
+    }
+
+    if clients.is_empty() {
+        return Err(Error::Config(
+            "at least one [[client]] is required".to_owned(),
+        ));
+    }
+
+    Ok(clients)
+}
+
+fn resolve_backends(
+    raw_backends: Vec<BackendConfig>,
+    unknown_capability_policy: UnknownMarkerPolicy,
+) -> Result<Vec<ResolvedBackend>> {
+    let mut backend_ids = BTreeSet::new();
+    let mut backends = Vec::with_capacity(raw_backends.len());
+    for backend in raw_backends {
+        if backend.id.trim().is_empty() {
+            return Err(Error::Config("backend id must not be empty".to_owned()));
+        }
+        if !backend_ids.insert(backend.id.clone()) {
+            return Err(Error::Config(format!(
+                "duplicate backend id '{}'",
+                backend.id
+            )));
+        }
+        if backend.weight == 0 {
+            return Err(Error::Config(format!(
+                "backend '{}' weight must be greater than zero",
+                backend.id
+            )));
+        }
+        let base_url = normalize_backend_base_url(&backend.base_url, &backend.id)?;
+        let api_key = resolve_optional_secret(backend.api_key, backend.api_key_env)?;
+        validate_markers(
+            &backend.supports,
+            unknown_capability_policy,
+            MarkerKind::Capability,
+            &format!("backend '{}'", backend.id),
+        )?;
+        backends.push(ResolvedBackend {
+            id: backend.id,
+            base_url,
+            api_key,
+            timeout: Duration::from_millis(backend.timeout_ms),
+            supports: backend.supports,
+            tool_schema_mode: backend.tool_schema_mode,
+            responses_store: backend.responses_store,
+            responses_max_output_tokens: backend.responses_max_output_tokens,
+            chat_stream_usage: backend.chat_stream_usage,
+            weight: backend.weight,
+        });
+    }
+
+    if backends.is_empty() {
+        return Err(Error::Config(
+            "at least one [[backend]] is required".to_owned(),
+        ));
+    }
+
+    Ok(backends)
 }
 
 fn validate_allowed_routes(clients: &[ResolvedClient], routes: &[ResolvedRoute]) -> Result<()> {
