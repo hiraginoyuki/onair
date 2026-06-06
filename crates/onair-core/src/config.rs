@@ -785,10 +785,22 @@ fn resolve_routes(
             .unwrap_or(ChatStreamUsagePolicy::Preserve);
         let expose = route_config.expose.clone();
         for binding in &bindings {
-            let backend = backends
-                .iter()
-                .find(|b| b.id == binding.backend_id)
-                .expect("binding references a known backend");
+            // The unknown-backend check at lines 753-764 already rejected
+            // any binding whose backend_id is not in `backends`, so this
+            // lookup is guaranteed to succeed; if it ever fails we return
+            // Err so the watcher rejects the reload instead of crashing
+            // the whole server on a misconfigured hot reload.
+            let Some(backend) = backends.iter().find(|b| b.id == binding.backend_id) else {
+                debug_assert!(
+                    false,
+                    "binding references a known backend (validator above)"
+                );
+                return Err(Error::Config(format!(
+                    "route '{}' references unknown backend '{}'",
+                    format_route_key(&key),
+                    binding.backend_id
+                )));
+            };
             if !route_can_serve(&expose, backend) {
                 let route_label = format_route_key(&key);
                 let backend_supports = sorted_marker_list(&backend.supports);
