@@ -29,10 +29,23 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // The default filter keeps onair's own crates at `info` and
+    // suppresses the notoriously chatty deserializer/transport
+    // crates (toml, serde, hyper, reqwest, tower, axum, tokio) to
+    // `warn`. Operators who want verbose third-party logs can still
+    // override via RUST_LOG without changing the code. The toml
+    // crate's deserializer emits a `tracing` event for every byte
+    // range it parses, so the default cannot be a blanket
+    // `info`-everywhere.
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new(
+                "info,\
+                     onair=info,onair_core=info,onair_obs=info,onair_proxy=info,\
+                     toml=warn,serde=warn,serde_json=warn,\
+                     hyper=warn,reqwest=warn,tower=warn,axum=warn,tokio=warn",
+            )
+        }))
         .init();
 
     let args = Args::parse();
