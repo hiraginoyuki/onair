@@ -274,16 +274,7 @@ async fn v1_proxy(
     body: Bytes,
 ) -> Response<Body> {
     let proxy_state = state.proxy_state();
-    match proxy::proxy_v1(
-        proxy_state,
-        peer_addr,
-        &headers,
-        method,
-        uri,
-        body,
-    )
-    .await
-    {
+    match proxy::proxy_v1(proxy_state, peer_addr, &headers, method, uri, body).await {
         Ok(response) => response,
         Err(error) => {
             warn!(status = error.status.as_u16(), kind = %error.kind, "request failed before proxy response");
