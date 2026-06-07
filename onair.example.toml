@@ -87,6 +87,10 @@ base_url = "http://127.0.0.1:8000"
 # Optional: responses_max_output_tokens = "drop" removes upstream Responses max_output_tokens for wrappers that reject it.
 # Optional: chat_stream_usage = "insert" asks Chat Completions backends for streaming usage chunks for metrics; injected usage chunks are filtered unless the client requested include_usage.
 # Use "force_true" only if operator telemetry should override explicit client include_usage=false upstream; client responses still honor the original opt-in.
+# Optional: extra_body = { reasoning_split = true } merges arbitrary fields into the
+# upstream request body. Route-level extra_body overrides backend-level on key
+# conflict. See docs/configuration.md#upstream-request-body-overrides for the
+# protected-key list and merge rules.
 supports = ["chat", "responses", "streaming"]
 timeout_ms = 120000
 
@@ -105,9 +109,12 @@ timeout_ms = 120000
 public = "gpt-4o-mini"
 expose = ["chat", "responses"]
 backends = ["llama-3.1-8b-instruct@local-vllm"]
-# Optional: omitted or "none" hides the value, integer literal sets a fixed n_ctx, "upstream" forwards the
-# live n_ctx from the first backend's /props?model=<backend>. See docs/configuration.md for details.
 context_length = "upstream"
+# Optional: extra_body = { reasoning_split = true, temperature = 0.7 } merges
+# arbitrary fields into the upstream request body for this route only.
+# Route-level extra_body overrides backend-level on key conflict. See
+# docs/configuration.md#upstream-request-body-overrides for the protected-key
+# list and merge rules.
 # expose = ["chat", "responses", "tools"] # if this route supports function tools
 
 [[route]]

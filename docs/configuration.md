@@ -225,12 +225,116 @@ Fields:
   `tool_schema_mode`, `responses_store`, `responses_max_output_tokens`,
   `chat_stream_usage`. See [routing.md](routing.md#route-policies) for
   the full semantics.
+- `extra_body = { ... }` (inline table, default `{}`): arbitrary fields
+  merged into the upstream request body. See
+  [Upstream request body overrides](#upstream-request-body-overrides)
+  below for the merge rules and protected-key list.
 
 The previous `[[backend.model]]` block and its `endpoints` field are
 removed. Any public model name that was previously listed in
 `[[backend.model]]` must be re-declared under `[[route]]`, or config
 load fails. The `capability` (singular) TOML alias for the backend
 marker field is also removed; use `supports = [...]`.
+
+## Upstream request body overrides
+
+`extra_body` lets operators inject arbitrary fields into the upstream
+request body sent for a `[[backend]]` (as a default) or a `[[route]]`
+(as an override). It exists to surface upstream-specific knobs
+without onair having to ship a hardcoded field for each one — the
+canonical use case is reasoning toggles like
+`reasoning_split = true` on providers that emit inline `<think>` text
+in `delta.content` by default.
+
+```toml
+[[backend]]
+id = "minimax"
+base_url = "https://api.minimax.io/v1"
+supports = ["chat", "responses", "streaming"]
+# Backend-level default: every route bound to this backend inherits
+# this unless overridden.
+extra_body = { chat_template_kwargs = { enable_thinking = true } }
+
+[[route]]
+public = "minimax-m3"
+expose = ["chat", "responses"]
+backends = ["minimax-m3@minimax"]
+# Route-level override: wins over the backend default on key
+# conflict; non-conflicting keys from both sides are preserved.
+extra_body = { reasoning_split = true, temperature = 0.7 }
+```
+
+Merge rules:
+
+- The route's `extra_body` is shallow-merged on top of the bound
+  backend's `extra_body`. Route wins on key conflict; non-conflicting
+  keys from both sides survive.
+- A route that binds to multiple backends takes the **first**
+  binding's backend defaults. Operators who need different
+  per-binding overrides should split the route.
+- The merge is applied **after** onair's own rewrite (model swap,
+  `responses_store`, `chat_stream_usage`, etc.), so onair's
+  transformations always win.
+
+### Protected keys
+
+The following keys are onair-managed and cannot be overridden by
+`extra_body`. Any protected key in `extra_body` is dropped with a
+`tracing::warn!` carrying the route label and the offending key name:
+
+- `model` — onair always rewrites this from the public name to the
+  bound backend's model id.
+- `stream` — onair may force this for SSE-aware stream-usage
+  injection.
+- `messages`, `input` — onair rewrites between them in compat paths.
+- `tools`, `tool_choice` — onair may rewrite schemas per
+  `tool_schema_mode`.
+- `store` — onair sets this per `responses_store` policy.
+- `max_output_tokens`, `max_tokens`, `max_completion_tokens` — onair
+  may rename per `responses_max_output_tokens` policy.
+- `stream_options` — onair may add `include_usage` per
+  `chat_stream_usage` policy.
+
+The protected list is the union of fields onair actually rewrites.
+`n`, `logprobs`, `top_logprobs`, `previous_response_id` are *rejected*
+in compat paths (see `responses_compat.rs`) but are not in the
+protected list because they are not "managed" by onair in the same
+sense — `extra_body` is allowed to set them, and onair's existing
+rejection logic still applies.
+
+### Format and value types
+
+`extra_body` accepts the same TOML value types as a normal inline
+table: strings, integers, floats, booleans, arrays, and nested
+tables. Datetimes are accepted but are stringified before they reach
+the upstream. NaN and infinity floats are mapped to JSON null on
+serialize.
+
+### Hot reload
+
+`extra_body` is hot-reloadable. Changing the value and saving the
+config file causes the new map to take effect on the next request
+without restarting onair.
+
+### Worked example: `reasoning_split`
+
+A common pattern with providers that emit inline `<think>` text in
+`delta.content` is to set a per-request toggle that switches the
+response to a structured `delta.reasoning_content` field instead.
+The onair-side fix is one line:
+
+```toml
+[[route]]
+public = "minimax-m3"
+backends = ["minimax-m3@minimax"]
+extra_body = { reasoning_split = true }
+```
+
+If the upstream does not recognize this field, the warn-and-drop
+policy on protected keys does not apply (it is not a protected key)
+and the field is forwarded as-is. The upstream will either use it
+or ignore it; either way onair does not interpret the value.
+
 
 ### Strict-require-route
 
