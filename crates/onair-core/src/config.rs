@@ -415,6 +415,13 @@ pub struct BackendConfig {
     pub supports: BTreeSet<String>,
     #[serde(default = "one_u32")]
     pub weight: u32,
+    /// Extra fields merged into every upstream request body sent to
+    /// this backend, after onair's own rewriting. Used to surface
+    /// upstream-specific toggles (e.g. `reasoning_split`, chat-template
+    /// kwargs) without onair having to ship a hardcoded field for
+    /// each. Route-level `extra_body` overrides backend-level on key
+    /// conflict. See `docs/configuration.md` for the full rules.
+    pub extra_body: BTreeMap<String, toml::Value>,
 }
 
 impl Default for BackendConfig {
@@ -431,6 +438,7 @@ impl Default for BackendConfig {
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             supports: BTreeSet::new(),
             weight: 1,
+            extra_body: BTreeMap::new(),
         }
     }
 }
@@ -493,6 +501,12 @@ pub struct RouteConfig {
     pub responses_max_output_tokens: Option<ResponsesMaxOutputTokensPolicy>,
     #[serde(default)]
     pub chat_stream_usage: Option<ChatStreamUsagePolicy>,
+    /// Extra fields merged into the upstream request body for this
+    /// route, after onair's own rewriting. Wins over
+    /// `[[backend]].extra_body` on key conflict. See
+    /// `docs/configuration.md`.
+    #[serde(default)]
+    pub extra_body: BTreeMap<String, toml::Value>,
 }
 
 impl RouteConfig {
@@ -552,7 +566,7 @@ pub enum ContextLengthSpec {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ResolvedBackend {
     pub id: String,
     pub base_url: String,
@@ -564,6 +578,7 @@ pub struct ResolvedBackend {
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub chat_stream_usage: ChatStreamUsagePolicy,
     pub weight: u32,
+    pub extra_body: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -582,6 +597,11 @@ pub struct ResolvedRoute {
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub chat_stream_usage: ChatStreamUsagePolicy,
     pub backends: Vec<RouteBackendBinding>,
+    /// Per-route extra fields merged into the upstream request body.
+    /// The route's own `extra_body` overrides the bound backend's
+    /// `extra_body` on key conflict; non-conflicting keys from
+    /// either side are preserved. See `docs/configuration.md`.
+    pub extra_body: BTreeMap<String, toml::Value>,
 }
 
 impl Config {
@@ -700,6 +720,7 @@ fn resolve_routes(
         let expose = route_config.expose.clone();
         let context_length =
             resolve_context_lengths(&key, &route_config.context_length, &bindings)?;
+        let extra_body = merge_extra_body(&bindings, backends, &route_config.extra_body);
         resolved_routes.push(ResolvedRoute {
             key: key.clone(),
             expose,
@@ -709,9 +730,36 @@ fn resolve_routes(
             responses_max_output_tokens,
             chat_stream_usage,
             backends: bindings,
+            extra_body,
         });
     }
     Ok(resolved_routes)
+}
+
+/// Merge per-backend `extra_body` defaults into the per-route
+/// `extra_body`. The route's own keys win on conflict; non-
+/// conflicting keys from either side are preserved. When a route
+/// binds to multiple backends, the first binding's backend
+/// contributes its defaults and the rest are ignored — operators
+/// who need different per-binding overrides should split the route.
+fn merge_extra_body(
+    bindings: &[RouteBackendBinding],
+    backends: &[ResolvedBackend],
+    route_extra_body: &BTreeMap<String, toml::Value>,
+) -> BTreeMap<String, toml::Value> {
+    let mut merged: BTreeMap<String, toml::Value> = BTreeMap::new();
+    let first_backend = bindings
+        .first()
+        .and_then(|first| backends.iter().find(|b| b.id == first.backend_id));
+    if let Some(backend) = first_backend {
+        for (key, value) in &backend.extra_body {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    for (key, value) in route_extra_body {
+        merged.insert(key.clone(), value.clone());
+    }
+    merged
 }
 
 fn validate_routes(
@@ -981,6 +1029,7 @@ fn resolve_backends(
             responses_max_output_tokens: backend.responses_max_output_tokens,
             chat_stream_usage: backend.chat_stream_usage,
             weight: backend.weight,
+            extra_body: backend.extra_body,
         });
     }
 
@@ -1708,6 +1757,162 @@ mod tests {
         assert_eq!(
             override_route.chat_stream_usage,
             ChatStreamUsagePolicy::Insert
+        );
+    }
+
+    #[test]
+    fn extra_body_defaults_to_empty_when_omitted() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        let backend = &config.backends[0];
+        assert!(backend.extra_body.is_empty());
+        let route = route_by_public(&config, "public-model");
+        assert!(route.extra_body.is_empty());
+    }
+
+    #[test]
+    fn extra_body_resolves_with_nested_object_array_and_scalar_values() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+            extra_body = { reasoning_split = true, temperature = 0.7, stop = ["END"] }
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        let backend = &config.backends[0];
+        assert_eq!(
+            backend.extra_body.get("reasoning_split"),
+            Some(&toml::Value::Boolean(true))
+        );
+        assert_eq!(
+            backend.extra_body.get("temperature"),
+            Some(&toml::Value::Float(0.7))
+        );
+        assert_eq!(
+            backend.extra_body.get("stop"),
+            Some(&toml::Value::Array(vec![toml::Value::String(
+                "END".to_owned()
+            )]))
+        );
+
+        let route = route_by_public(&config, "public-model");
+        // Route inherits the backend's defaults since it sets none of
+        // its own.
+        assert_eq!(route.extra_body, backend.extra_body);
+    }
+
+    #[test]
+    fn extra_body_route_overrides_backend_on_key_conflict() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+            extra_body = { temperature = 0.3, reasoning_split = true }
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            extra_body = { temperature = 0.9, top_p = 0.95 }
+            "#,
+        );
+
+        let route = route_by_public(&config, "public-model");
+        // Route wins on conflict.
+        assert_eq!(
+            route.extra_body.get("temperature"),
+            Some(&toml::Value::Float(0.9))
+        );
+        // Non-conflicting keys from both sides survive.
+        assert_eq!(
+            route.extra_body.get("reasoning_split"),
+            Some(&toml::Value::Boolean(true))
+        );
+        assert_eq!(
+            route.extra_body.get("top_p"),
+            Some(&toml::Value::Float(0.95))
+        );
+    }
+
+    #[test]
+    fn extra_body_with_multiple_bindings_takes_first_bindings_backend() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+            extra_body = { from = "a" }
+
+            [[backend]]
+            id = "backend-b"
+            base_url = "http://127.0.0.1:8001"
+            supports = ["responses"]
+            extra_body = { from = "b" }
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["model-a@backend-a", "model-b@backend-b"]
+            "#,
+        );
+
+        let route = route_by_public(&config, "public-model");
+        // First binding's backend wins; second is ignored. Operators
+        // who need per-binding overrides should split the route.
+        assert_eq!(
+            route.extra_body.get("from"),
+            Some(&toml::Value::String("a".to_owned()))
         );
     }
 

@@ -10,6 +10,9 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 #[cfg(test)]
+use std::collections::BTreeMap;
+
+#[cfg(test)]
 use onair_core::config::{
     ChatStreamUsagePolicy, DebugCaptureConfig, HealthConfig, InspectorConfig, ResolvedBackend,
     ResolvedRoute, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RouteBackendBinding,
@@ -311,6 +314,7 @@ mod tests {
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
                 chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 weight: 1,
+                extra_body: BTreeMap::new(),
             }],
             routes: vec![
                 ResolvedRoute {
@@ -329,6 +333,7 @@ mod tests {
                         backend_id: "backend-a".to_owned(),
                         backend_model: "shared-a".to_owned(),
                     }],
+                    extra_body: BTreeMap::new(),
                 },
                 ResolvedRoute {
                     key: RouteKey::Public("shared".to_owned()),
@@ -346,6 +351,7 @@ mod tests {
                         backend_id: "backend-b".to_owned(),
                         backend_model: "shared-b".to_owned(),
                     }],
+                    extra_body: BTreeMap::new(),
                 },
             ],
         };

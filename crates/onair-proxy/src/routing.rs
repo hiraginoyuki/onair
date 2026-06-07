@@ -662,7 +662,7 @@ fn singularize(segment: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
     use onair_core::config::{
@@ -1412,6 +1412,7 @@ mod tests {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
+            extra_body: BTreeMap::new(),
         }
     }
 
@@ -1451,6 +1452,7 @@ mod tests {
                     backend_model: (*model).to_owned(),
                 })
                 .collect(),
+            extra_body: BTreeMap::new(),
         }
     }
 

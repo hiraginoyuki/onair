@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2119,6 +2119,7 @@ async fn models_respect_context_length_output_policy() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
+            extra_body: BTreeMap::new(),
         }],
         vec![
             ResolvedRoute {
@@ -2133,6 +2134,7 @@ async fn models_respect_context_length_output_policy() {
                     backend_id: "metadata-only".to_owned(),
                     backend_model: BACKEND_MODEL.to_owned(),
                 }],
+                extra_body: BTreeMap::new(),
             },
             ResolvedRoute {
                 key: RouteKey::Public("gpt-no-context".to_owned()),
@@ -2146,6 +2148,7 @@ async fn models_respect_context_length_output_policy() {
                     backend_id: "metadata-only".to_owned(),
                     backend_model: "backend-no-context".to_owned(),
                 }],
+                extra_body: BTreeMap::new(),
             },
         ],
         btree_set([PUBLIC_MODEL, "gpt-no-context"]),
@@ -2223,6 +2226,7 @@ async fn upstream_context_size_is_forwarded_to_v1_models() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
+            extra_body: BTreeMap::new(),
         }],
         vec![ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2240,6 +2244,7 @@ async fn upstream_context_size_is_forwarded_to_v1_models() {
                 backend_id: "backend-a".to_owned(),
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
+            extra_body: BTreeMap::new(),
         }],
         btree_set([PUBLIC_MODEL]),
     );
@@ -2289,6 +2294,7 @@ async fn upstream_context_size_is_forwarded_to_props() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
+            extra_body: BTreeMap::new(),
         }],
         vec![ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2306,6 +2312,7 @@ async fn upstream_context_size_is_forwarded_to_props() {
                 backend_id: "backend-a".to_owned(),
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
+            extra_body: BTreeMap::new(),
         }],
         btree_set([PUBLIC_MODEL]),
     );
@@ -2350,6 +2357,7 @@ async fn upstream_unreachable_hides_value() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
+            extra_body: BTreeMap::new(),
         }],
         vec![ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2367,6 +2375,7 @@ async fn upstream_unreachable_hides_value() {
                 backend_id: "backend-a".to_owned(),
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
+            extra_body: BTreeMap::new(),
         }],
         btree_set([PUBLIC_MODEL]),
     );
@@ -2412,6 +2421,7 @@ async fn operator_models_reports_upstream_source() {
                 responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
                 chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 weight: 1,
+                extra_body: BTreeMap::new(),
             },
             route: ResolvedRoute {
                 key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2429,6 +2439,7 @@ async fn operator_models_reports_upstream_source() {
                     backend_id: "backend-a".to_owned(),
                     backend_model: BACKEND_MODEL.to_owned(),
                 }],
+                extra_body: BTreeMap::new(),
             },
         }],
         InspectorConfig {
@@ -2661,6 +2672,7 @@ fn test_backend(id: &str, base_url: String) -> TestEndpoint {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
+            extra_body: BTreeMap::new(),
         },
         route: ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2674,6 +2686,7 @@ fn test_backend(id: &str, base_url: String) -> TestEndpoint {
                 backend_id: id.to_owned(),
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
+            extra_body: BTreeMap::new(),
         },
     }
 }
@@ -2691,6 +2704,7 @@ fn test_chat_backend(id: &str, base_url: String) -> TestEndpoint {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
+            extra_body: BTreeMap::new(),
         },
         route: ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2704,6 +2718,7 @@ fn test_chat_backend(id: &str, base_url: String) -> TestEndpoint {
                 backend_id: id.to_owned(),
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
+            extra_body: BTreeMap::new(),
         },
     }
 }
