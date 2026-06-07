@@ -32,6 +32,166 @@ const PUBLIC_MODEL: &str = "gpt-public";
 const BACKEND_MODEL: &str = "backend-private";
 
 #[tokio::test]
+async fn extra_body_merges_into_upstream_request_and_preserves_model_rewrite() {
+    // Operator wants upstream-specific toggles the proxy does not
+    // understand. extra_body on the route should flow into the
+    // upstream request body alongside onair's own rewrite.
+    let backend = TestBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![extra_body_test_endpoint("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "stream": false,
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    // onair's model rewrite wins: the public model is replaced with
+    // the backend's configured backend model id.
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+    // Operator-supplied extra_body fields landed alongside the
+    // client message.
+    assert_eq!(captured[0]["reasoning_split"], true);
+    assert_eq!(captured[0]["temperature"], 0.7);
+    // The protected "stream" override in extra_body did NOT
+    // override the client's stream=false — onair dropped it.
+    assert_eq!(captured[0]["stream"], false);
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn extra_body_backend_defaults_are_inherited_by_route() {
+    // Per-backend extra_body defaults flow into the route even when
+    // the route itself sets no extra_body.
+    let backend = TestBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![extra_body_backend_endpoint("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    // Backend-level field landed.
+    assert_eq!(captured[0]["chat_template_kwargs"]["enable_thinking"], true);
+    // The model rewrite still happened.
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+
+    backend.abort();
+}
+
+fn extra_body_test_endpoint(id: &str, base_url: String) -> TestEndpoint {
+    let backend = ResolvedBackend {
+        id: id.to_owned(),
+        base_url,
+        api_key: None,
+        timeout: std::time::Duration::from_secs(5),
+        supports: btree_set(["chat", "streaming"]),
+        tool_schema_mode: ToolSchemaMode::Preserve,
+        responses_store: ResponsesStorePolicy::Preserve,
+        responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+        chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        weight: 1,
+        extra_body: BTreeMap::new(),
+    };
+
+    let route = ResolvedRoute {
+        key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+        expose: btree_set(["chat"]),
+        context_length: ContextLengthSpec::None,
+        tool_schema_mode: ToolSchemaMode::Preserve,
+        responses_store: ResponsesStorePolicy::Preserve,
+        responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+        chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        backends: vec![RouteBackendBinding {
+            backend_id: id.to_owned(),
+            backend_model: BACKEND_MODEL.to_owned(),
+        }],
+        extra_body: {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "reasoning_split".to_owned(),
+                onair_core::TomlValue::Boolean(true),
+            );
+            m.insert("temperature".to_owned(), onair_core::TomlValue::Float(0.7));
+            // Protected key: should be dropped with a warn.
+            m.insert("stream".to_owned(), onair_core::TomlValue::Boolean(true));
+            m
+        },
+    };
+    TestEndpoint { backend, route }
+}
+
+fn extra_body_backend_endpoint(id: &str, base_url: String) -> TestEndpoint {
+    let backend_extra = {
+        let mut m = BTreeMap::new();
+        m.insert(
+            "chat_template_kwargs".to_owned(),
+            onair_core::TomlValue::Table(onair_core::TomlTable::from_iter([(
+                "enable_thinking".to_owned(),
+                onair_core::TomlValue::Boolean(true),
+            )])),
+        );
+        m
+    };
+    let backend = ResolvedBackend {
+        id: id.to_owned(),
+        base_url,
+        api_key: None,
+        timeout: std::time::Duration::from_secs(5),
+        supports: btree_set(["chat", "streaming"]),
+        tool_schema_mode: ToolSchemaMode::Preserve,
+        responses_store: ResponsesStorePolicy::Preserve,
+        responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+        chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        weight: 1,
+        extra_body: backend_extra.clone(),
+    };
+
+    let route = ResolvedRoute {
+        key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+        expose: btree_set(["chat"]),
+        context_length: ContextLengthSpec::None,
+        tool_schema_mode: ToolSchemaMode::Preserve,
+        responses_store: ResponsesStorePolicy::Preserve,
+        responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+        chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        backends: vec![RouteBackendBinding {
+            backend_id: id.to_owned(),
+            backend_model: BACKEND_MODEL.to_owned(),
+        }],
+        // Route has no extra_body, so it inherits the backend's.
+        extra_body: backend_extra,
+    };
+    TestEndpoint { backend, route }
+}
+
+#[tokio::test]
 async fn responses_forwards_prompt_cache_fields_and_rewrites_model() {
     let backend = TestBackend::spawn("backend-a").await;
     let state = test_state(
