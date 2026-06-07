@@ -687,6 +687,8 @@ fn prepare_outbound(
             responses_max_output_tokens: context.route.responses_max_output_tokens,
             chat_stream_usage: context.route.chat_stream_usage,
         },
+        &context.route.extra_body,
+        &context.route.route_key_label,
     )
     .map_err(|error| ApiError::bad_request(error.message(), error.param()))?;
     attempt_record.mark_request_rewritten(context.timeline.mark(TimelineEvent::RequestRewritten));

@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
@@ -29,6 +29,13 @@ pub struct SelectedRoute {
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub chat_stream_usage: ChatStreamUsagePolicy,
     pub weight: u32,
+    /// Human-readable route label used in warn logs. Format: `public=...`
+    /// for public routes, `path=...` for model-less ones, or `none` if
+    /// the route is not part of a configured `[[route]]` block.
+    pub route_key_label: String,
+    /// Per-route upstream request body overrides, merged on top of
+    /// the bound backend's defaults. See `docs/configuration.md`.
+    pub extra_body: BTreeMap<String, onair_core::TomlValue>,
 }
 
 pub struct NonEmptyVec<T> {
@@ -322,6 +329,14 @@ impl<'a> BackendSelector<'a> {
                     backend.chat_stream_usage,
                 ),
             };
+        let route_key_label = match route {
+            Some(route) => match &route.key {
+                onair_core::config::RouteKey::Public(public) => format!("public={public}"),
+                onair_core::config::RouteKey::Path(path) => format!("path={path}"),
+            },
+            None => "none".to_owned(),
+        };
+        let extra_body = route.map(|r| r.extra_body.clone()).unwrap_or_default();
         SelectedRoute {
             backend_id: backend.id.clone(),
             base_url: backend.base_url.clone(),
@@ -335,6 +350,8 @@ impl<'a> BackendSelector<'a> {
             responses_max_output_tokens,
             chat_stream_usage,
             weight: backend.weight,
+            route_key_label,
+            extra_body,
         }
     }
 }

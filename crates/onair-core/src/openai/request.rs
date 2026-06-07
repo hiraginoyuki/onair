@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
+use tracing::warn;
 use url::form_urlencoded;
 
 use crate::config::{
@@ -117,6 +118,7 @@ pub fn inspect_request(
     shape
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn rewrite_request_body_for_mode_with_policies(
     body: &[u8],
     content_type: Option<&str>,
@@ -124,6 +126,8 @@ pub fn rewrite_request_body_for_mode_with_policies(
     path: &str,
     request_mode: RequestMode,
     policies: &RequestRewritePolicies,
+    extra_body: &BTreeMap<String, toml::Value>,
+    route_label: &str,
 ) -> Result<Vec<u8>, RequestRewriteError> {
     let kind = endpoint_kind(path);
     let native_responses = kind.is_native_responses();
@@ -139,6 +143,8 @@ pub fn rewrite_request_body_for_mode_with_policies(
             backend_model,
             policies.tool_schema_mode,
             policies.chat_stream_usage,
+            extra_body,
+            route_label,
         );
     }
     if request_mode == RequestMode::ChatCompletionsViaResponses {
@@ -148,6 +154,8 @@ pub fn rewrite_request_body_for_mode_with_policies(
             backend_model,
             policies.responses_store,
             policies.responses_max_output_tokens,
+            extra_body,
+            route_label,
         );
     }
 
@@ -167,6 +175,8 @@ pub fn rewrite_request_body_for_mode_with_policies(
             policies.responses_store,
             policies.responses_max_output_tokens,
             policies.chat_stream_usage,
+            extra_body,
+            route_label,
         )
     {
         return Ok(rewritten);
@@ -283,6 +293,71 @@ pub fn upstream_path_for_mode(path: &str, request_mode: RequestMode) -> &str {
     }
 }
 
+/// Keys that onair always owns in the upstream request body. A
+/// route's `extra_body` may set any other key, but these are
+/// dropped with a `tracing::warn!` so onair's model rewrite and
+/// per-mode policy logic cannot be silently overridden.
+const PROTECTED_UPSTREAM_KEYS: &[&str] = &[
+    "model",
+    "stream",
+    "messages",
+    "input",
+    "tools",
+    "tool_choice",
+    "store",
+    "max_output_tokens",
+    "max_tokens",
+    "max_completion_tokens",
+    "stream_options",
+];
+
+/// Shallow-merge a route's `extra_body` into an upstream request
+/// body. Fields named in `PROTECTED_UPSTREAM_KEYS` are dropped with
+/// a warning so onair's own rewrite always wins. Caller is
+/// responsible for converting the `toml::Value` map to a
+/// `serde_json::Value` map — this layer operates on JSON because
+/// that is what is actually written to the upstream socket.
+pub(crate) fn apply_extra_body(
+    object: &mut Map<String, Value>,
+    extra_body: &BTreeMap<String, toml::Value>,
+    route_label: &str,
+) {
+    for (key, toml_value) in extra_body {
+        if PROTECTED_UPSTREAM_KEYS.contains(&key.as_str()) {
+            warn!(
+                route = %route_label,
+                key = %key,
+                "dropping extra_body key that onair manages; use a per-route policy field instead"
+            );
+            continue;
+        }
+        let json_value = toml_value_to_json_value(toml_value);
+        object.insert(key.clone(), json_value);
+    }
+}
+
+fn toml_value_to_json_value(value: &toml::Value) -> Value {
+    match value {
+        toml::Value::String(string) => Value::String(string.clone()),
+        toml::Value::Integer(integer) => Value::Number((*integer).into()),
+        toml::Value::Float(float) => serde_json::Number::from_f64(*float)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        toml::Value::Boolean(boolean) => Value::Bool(*boolean),
+        toml::Value::Datetime(datetime) => Value::String(datetime.to_string()),
+        toml::Value::Array(array) => {
+            Value::Array(array.iter().map(toml_value_to_json_value).collect())
+        }
+        toml::Value::Table(table) => {
+            let mut object = Map::with_capacity(table.len());
+            for (key, inner) in table {
+                object.insert(key.clone(), toml_value_to_json_value(inner));
+            }
+            Value::Object(object)
+        }
+    }
+}
+
 fn inspect_body(body: &[u8], content_type: Option<&str>) -> RequestShape {
     if body.is_empty() {
         return RequestShape::default();
@@ -387,6 +462,7 @@ fn inspect_multipart_body(body: &[u8], boundary: &str) -> RequestShape {
     shape
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rewrite_json_request_body(
     body: &[u8],
     backend_model: &str,
@@ -395,6 +471,8 @@ fn rewrite_json_request_body(
     responses_store: ResponsesStorePolicy,
     responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     chat_stream_usage: ChatStreamUsagePolicy,
+    extra_body: &BTreeMap<String, toml::Value>,
+    route_label: &str,
 ) -> Option<Vec<u8>> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
     let object = value.as_object_mut()?;
@@ -413,6 +491,7 @@ fn rewrite_json_request_body(
     } else if chat_completions {
         apply_chat_stream_usage_policy(object, chat_stream_usage);
     }
+    apply_extra_body(object, extra_body, route_label);
     serde_json::to_vec(&value).ok()
 }
 

@@ -27,8 +27,10 @@ use crate::config::{
     ChatStreamUsagePolicy, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode,
 };
 
+use std::collections::BTreeMap;
+
 use super::request::{
-    RequestRewriteError, RewriteParam, apply_chat_stream_usage_policy,
+    RequestRewriteError, RewriteParam, apply_chat_stream_usage_policy, apply_extra_body,
     rewrite_native_responses_max_output_tokens, should_parse_json,
 };
 
@@ -38,6 +40,8 @@ pub(super) fn rewrite_responses_request_as_chat(
     backend_model: Option<&str>,
     tool_schema_mode: ToolSchemaMode,
     chat_stream_usage: ChatStreamUsagePolicy,
+    extra_body: &BTreeMap<String, toml::Value>,
+    route_label: &str,
 ) -> Result<Vec<u8>, RequestRewriteError> {
     if body.is_empty() {
         return Err(RequestRewriteError::new(
@@ -145,6 +149,7 @@ pub(super) fn rewrite_responses_request_as_chat(
         );
     }
     apply_chat_stream_usage_policy(&mut chat, chat_stream_usage);
+    apply_extra_body(&mut chat, extra_body, route_label);
 
     serde_json::to_vec(&Value::Object(chat)).map_err(|_| {
         RequestRewriteError::new(
@@ -160,6 +165,8 @@ pub(super) fn rewrite_chat_request_as_responses(
     backend_model: Option<&str>,
     responses_store: ResponsesStorePolicy,
     responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
+    extra_body: &BTreeMap<String, toml::Value>,
+    route_label: &str,
 ) -> Result<Vec<u8>, RequestRewriteError> {
     if body.is_empty() {
         return Err(RequestRewriteError::new(
@@ -268,6 +275,7 @@ pub(super) fn rewrite_chat_request_as_responses(
         responses.insert("store".to_owned(), Value::Bool(false));
     }
     rewrite_native_responses_max_output_tokens(&mut responses, responses_max_output_tokens);
+    apply_extra_body(&mut responses, extra_body, route_label);
 
     serde_json::to_vec(&Value::Object(responses)).map_err(|_| {
         RequestRewriteError::new(

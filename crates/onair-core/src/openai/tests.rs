@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::config::{
     ChatStreamUsagePolicy, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, ToolSchemaMode,
 };
@@ -26,6 +28,8 @@ fn rewrite_request_body_for_mode_with_tool_schema_mode(
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
 }
 
@@ -158,6 +162,8 @@ fn chat_completions_request_converts_to_responses() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -228,6 +234,8 @@ fn chat_completions_to_responses_applies_responses_policies() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
             chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -258,6 +266,8 @@ fn chat_completions_to_responses_rejects_unsupported_options() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .expect_err("expected n > 1 to be rejected");
     assert_eq!(error.param().as_deref(), Some("n"));
@@ -279,6 +289,8 @@ fn chat_completions_to_responses_rejects_unsupported_options() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .expect_err("expected logprobs to be rejected");
     assert_eq!(error.param().as_deref(), Some("logprobs"));
@@ -300,6 +312,8 @@ fn chat_completions_to_responses_rejects_unsupported_options() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .expect_err("expected top_logprobs to be rejected");
     assert_eq!(error.param().as_deref(), Some("top_logprobs"));
@@ -319,6 +333,8 @@ fn chat_completions_to_responses_requires_json_and_messages() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .expect_err("expected non-json request to be rejected");
     assert_eq!(
@@ -338,6 +354,8 @@ fn chat_completions_to_responses_requires_json_and_messages() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .expect_err("expected missing messages to be rejected");
     assert_eq!(error.param().as_deref(), Some("messages"));
@@ -424,6 +442,8 @@ fn native_responses_can_rewrite_max_output_tokens_for_wrapper_quirks() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let dropped: Value = serde_json::from_slice(&dropped).unwrap();
@@ -442,6 +462,8 @@ fn native_responses_can_rewrite_max_output_tokens_for_wrapper_quirks() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::RenameToMaxTokens,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let renamed: Value = serde_json::from_slice(&renamed).unwrap();
@@ -470,6 +492,8 @@ fn native_responses_max_output_tokens_policy_preserves_other_paths_and_existing_
                 ResponsesMaxOutputTokensPolicy::RenameToMaxCompletionTokens,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let rewritten_responses: Value = serde_json::from_slice(&rewritten_responses).unwrap();
@@ -493,6 +517,8 @@ fn native_responses_max_output_tokens_policy_preserves_other_paths_and_existing_
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let rewritten_chat: Value = serde_json::from_slice(&rewritten_chat).unwrap();
@@ -519,6 +545,8 @@ fn chat_stream_usage_policy_inserts_usage_request_for_chat_streams() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let preserved: Value = serde_json::from_slice(&preserved).unwrap();
@@ -536,6 +564,8 @@ fn chat_stream_usage_policy_inserts_usage_request_for_chat_streams() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let inserted: Value = serde_json::from_slice(&inserted).unwrap();
@@ -565,6 +595,8 @@ fn chat_stream_usage_policy_preserves_client_stream_options() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -593,6 +625,8 @@ fn chat_stream_usage_policy_preserves_client_stream_options() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -625,6 +659,8 @@ fn chat_stream_usage_policy_force_true_overrides_client_value() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -654,6 +690,8 @@ fn chat_stream_usage_policy_force_true_replaces_non_object_stream_options() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -682,6 +720,8 @@ fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let responses: Value = serde_json::from_slice(&responses).unwrap();
@@ -699,6 +739,8 @@ fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let embeddings: Value = serde_json::from_slice(&embeddings).unwrap();
@@ -722,6 +764,8 @@ fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let non_stream_chat: Value = serde_json::from_slice(&non_stream_chat).unwrap();
@@ -748,6 +792,8 @@ fn chat_stream_usage_policy_applies_after_responses_to_chat_conversion() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .unwrap();
     let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
@@ -1131,6 +1177,8 @@ fn native_responses_rejects_function_calls_without_matching_outputs() {
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
         },
+        &BTreeMap::new(),
+        "test",
     )
     .expect_err("expected missing tool output to be rejected");
 
@@ -1903,4 +1951,194 @@ fn responses_stream_finishes_response_when_done_marker_is_missing() {
         output.contains("event: response.completed"),
         "expected response.completed on finish() even without [DONE], got: {output}"
     );
+}
+
+#[test]
+fn extra_body_merges_arbitrary_keys_into_rewritten_native_request() {
+    let body = br#"{
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hi"}]
+    }"#;
+    let mut extra_body = BTreeMap::new();
+    extra_body.insert("reasoning_split".to_owned(), toml::Value::Boolean(true));
+    extra_body.insert("temperature".to_owned(), toml::Value::Float(0.7));
+    extra_body.insert(
+        "stop".to_owned(),
+        toml::Value::Array(vec![toml::Value::String("END".to_owned())]),
+    );
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body,
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        &RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+        &extra_body,
+        "public=public-model",
+    )
+    .unwrap();
+    let json: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    // onair's own rewrite wins: model is the backend name.
+    assert_eq!(json["model"], "backend-model");
+    // extra_body fields are merged in.
+    assert_eq!(json["reasoning_split"], true);
+    assert_eq!(json["temperature"], 0.7);
+    assert_eq!(json["stop"][0], "END");
+    // Untouched fields pass through.
+    assert_eq!(json["messages"][0]["role"], "user");
+}
+
+#[test]
+fn extra_body_drops_protected_keys_with_warn() {
+    let body = br#"{
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": false
+    }"#;
+    let mut extra_body = BTreeMap::new();
+    // All these are onair-managed and must be dropped, not merged.
+    for key in [
+        "model",
+        "stream",
+        "messages",
+        "input",
+        "tools",
+        "tool_choice",
+        "store",
+        "max_output_tokens",
+        "max_tokens",
+        "max_completion_tokens",
+        "stream_options",
+    ] {
+        extra_body.insert(key.to_owned(), toml::Value::String("attacker".to_owned()));
+    }
+    // A non-protected key should still merge.
+    extra_body.insert("reasoning_split".to_owned(), toml::Value::Boolean(true));
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body,
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::Native,
+        &RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+        &extra_body,
+        "public=public-model",
+    )
+    .unwrap();
+    let json: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    // Protected keys were dropped; onair's rewrite is what we see.
+    assert_eq!(json["model"], "backend-model");
+    assert_eq!(json["stream"], false);
+    assert_eq!(json["messages"][0]["role"], "user");
+    // The non-protected key landed.
+    assert_eq!(json["reasoning_split"], true);
+    // None of the protected keys ever carried the attacker's "attacker" string.
+    for key in [
+        "tools",
+        "tool_choice",
+        "store",
+        "max_output_tokens",
+        "max_tokens",
+        "max_completion_tokens",
+        "stream_options",
+    ] {
+        assert!(
+            json.get(key).is_none(),
+            "protected key {key} should have been dropped, found: {}",
+            json.get(key).unwrap()
+        );
+    }
+}
+
+#[test]
+fn extra_body_merges_into_responses_to_chat_compat_path() {
+    let body = br#"{
+        "model": "public-model",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+        ]
+    }"#;
+    let mut extra_body = BTreeMap::new();
+    extra_body.insert(
+        "chat_template_kwargs".to_owned(),
+        toml::Value::Table(toml::map::Map::from_iter([(
+            "enable_thinking".to_owned(),
+            toml::Value::Boolean(true),
+        )])),
+    );
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body,
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/responses",
+        RequestMode::ResponsesViaChatCompletions,
+        &RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+        &extra_body,
+        "public=public-model",
+    )
+    .unwrap();
+    let json: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    // Compat path produced a chat shape; extra_body still merged.
+    assert_eq!(json["model"], "backend-model");
+    assert_eq!(json["messages"][0]["role"], "user");
+    assert_eq!(json["chat_template_kwargs"]["enable_thinking"], true);
+}
+
+#[test]
+fn extra_body_merges_into_chat_to_responses_compat_path() {
+    let body = br#"{
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hi"}]
+    }"#;
+    let mut extra_body = BTreeMap::new();
+    extra_body.insert(
+        "metadata".to_owned(),
+        toml::Value::Table(toml::map::Map::from_iter([(
+            "user_id".to_owned(),
+            toml::Value::String("u-1".to_owned()),
+        )])),
+    );
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body,
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaResponses,
+        &RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+        },
+        &extra_body,
+        "public=public-model",
+    )
+    .unwrap();
+    let json: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    // Compat path produced a responses shape; extra_body still merged.
+    assert_eq!(json["model"], "backend-model");
+    assert_eq!(json["metadata"]["user_id"], "u-1");
 }
