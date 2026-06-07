@@ -177,9 +177,7 @@ pub(super) async fn buffered_response(
         "buffered response completed"
     );
     if let Some(capture) = &mut debug_capture {
-        capture.record_outcome(CaptureOutcome::Success {
-            upstream_status,
-        });
+        capture.record_outcome(CaptureOutcome::Success { upstream_status });
     }
     state.health.record_success(
         &labels.backend,
@@ -676,8 +674,11 @@ impl Drop for StreamMetrics {
                 error_kind,
             );
         } else if self.body_complete {
-            self.health_store
-                .record_success(&self.labels.backend, duration, self.status_code.as_u16());
+            self.health_store.record_success(
+                &self.labels.backend,
+                duration,
+                self.status_code.as_u16(),
+            );
         }
         if let Some(capture) = &mut self.debug_capture {
             capture.record_stream_usage(self.usage_diagnostics.clone());

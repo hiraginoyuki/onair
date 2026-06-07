@@ -410,11 +410,11 @@ async fn do_proxy<'a>(
             .await
             {
                 Ok(error_body) => {
-                if let Some(capture) = &mut context.debug_capture {
-                    capture.record_upstream_error_response(
-                        upstream_status,
-                        upstream_content_type.as_deref(),
-                        &error_body.bytes,
+                    if let Some(capture) = &mut context.debug_capture {
+                        capture.record_upstream_error_response(
+                            upstream_status,
+                            upstream_content_type.as_deref(),
+                            &error_body.bytes,
                             error_body.truncated,
                         );
                     }
