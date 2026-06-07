@@ -197,6 +197,7 @@ jobs:
           name: ${{ needs.meta.outputs.tag }}
           prerelease: ${{ needs.meta.outputs.prerelease }}
           generate_release_notes: true
+          replace: true
           fail_on_unmatched_files: true
           files: |
             dist/onair-x86_64-unknown-linux-gnu
