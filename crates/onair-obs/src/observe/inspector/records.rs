@@ -126,6 +126,15 @@ pub struct InspectorRequestBase {
     pub request_body_bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debug_capture_id: Option<String>,
+    /// `true` only when this request took the
+    /// `expose_backend_errors` opt-in branch: the upstream's
+    /// non-2xx response was forwarded to the client (with the
+    /// status mapped through `map_upstream_status`, the body
+    /// capped at 1 MiB, and a strict header allowlist) instead of
+    /// being replaced with the sanitized OpenAI error envelope.
+    /// See `docs/configuration.md` and `docs/security.md`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exposed_backend_error: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -148,6 +157,10 @@ pub struct InspectorTokenCounts {
     pub input: u64,
     pub cached_input: u64,
     pub output: u64,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 // 0 is the sentinel for "the system clock is unavailable or the

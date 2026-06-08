@@ -64,6 +64,7 @@ fn test_record(record_id: &str) -> InspectorRequestRecord {
             user_agent: "none".to_owned(),
             request_body_bytes: 12,
             debug_capture_id: None,
+            exposed_backend_error: false,
         },
         outcome: InspectorOutcome::Completed,
         status: 200,

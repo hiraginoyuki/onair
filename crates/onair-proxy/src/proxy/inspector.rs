@@ -69,6 +69,7 @@ pub(super) fn routed_inspector_base(
         user_agent: observation.client_info.user_agent().to_owned(),
         request_body_bytes: observation.request_body_bytes,
         debug_capture_id: None,
+        exposed_backend_error: false,
     }
 }
 
@@ -105,6 +106,7 @@ fn preflight_inspector_base(record: &PreflightInspectorRecord<'_>) -> InspectorR
         user_agent: record.observation.client_info.user_agent().to_owned(),
         request_body_bytes: record.observation.request_body_bytes,
         debug_capture_id: None,
+        exposed_backend_error: false,
     }
 }
 
@@ -237,6 +239,7 @@ pub(super) fn initial_live_record(
         user_agent: observation.client_info.user_agent().to_owned(),
         request_body_bytes: observation.request_body_bytes,
         debug_capture_id: None,
+        exposed_backend_error: false,
     };
     InspectorRequestRecord::new(InspectorRequestRecordInit {
         base,

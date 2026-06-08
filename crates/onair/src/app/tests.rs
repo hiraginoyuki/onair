@@ -25,6 +25,7 @@ use onair_core::config::{
     ResolvedRoute, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RouteBackendBinding,
     RouteKey, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
+use onair_obs::observe::InspectorOutcome;
 use onair_obs::observe::inspector_persisted_count;
 
 const CLIENT_KEY: &str = "sk-test";
@@ -2902,6 +2903,46 @@ fn test_chat_backend(id: &str, base_url: String) -> TestEndpoint {
     }
 }
 
+fn expose_backend_errors_endpoint(
+    id: &str,
+    base_url: String,
+    backend_default: bool,
+    route_override: Option<bool>,
+) -> TestEndpoint {
+    let resolved_route_value = route_override.unwrap_or(backend_default);
+    TestEndpoint {
+        backend: ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            supports: btree_set(["responses", "streaming"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            extra_body: BTreeMap::new(),
+            expose_backend_errors: backend_default,
+        },
+        route: ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["responses"]),
+            context_length: ContextLengthSpec::None,
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: id.to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            }],
+            extra_body: BTreeMap::new(),
+            expose_backend_errors: resolved_route_value,
+        },
+    }
+}
+
 fn json_request(uri: &str, body: Value) -> Request<Body> {
     Request::builder()
         .method("POST")
@@ -3100,6 +3141,49 @@ impl TestBackend {
             .route("/v1/models", get(backend_models))
             .route("/v1/responses", post(slow_backend_responses))
             .with_state(state.clone());
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        Self {
+            address,
+            state,
+            handle,
+        }
+    }
+
+    /// Spawn a backend that always returns the given status code,
+    /// body, and (optional) extra response headers on
+    /// `/v1/responses`. `content_type` is sent only when `Some` so
+    /// the new `forward_upstream_error` branch can be tested with
+    /// the upstream-omits-content-type case.
+    async fn spawn_error_with_headers(
+        name: &str,
+        status: StatusCode,
+        content_type: Option<&'static str>,
+        body: &'static str,
+        extra_headers: Vec<(&'static str, &'static str)>,
+    ) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let state = BackendState {
+            name: name.to_owned(),
+            requests: Arc::new(Mutex::new(Vec::new())),
+            hits: Arc::new(AtomicUsize::new(0)),
+        };
+        let app = Router::new()
+            .route("/v1/models", get(backend_models))
+            .route("/v1/responses", post(error_backend_responses_with_headers))
+            .with_state(ExtraErrorState {
+                inner: state.clone(),
+                status,
+                content_type: content_type.map(str::to_owned),
+                body: body.to_owned(),
+                extra_headers: extra_headers
+                    .into_iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect(),
+            });
         let handle = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
@@ -3336,6 +3420,31 @@ async fn error_backend_responses(
         .unwrap()
 }
 
+#[derive(Clone)]
+struct ExtraErrorState {
+    inner: BackendState,
+    status: StatusCode,
+    content_type: Option<String>,
+    body: String,
+    extra_headers: Vec<(String, String)>,
+}
+
+async fn error_backend_responses_with_headers(
+    State(state): State<ExtraErrorState>,
+    Json(payload): Json<Value>,
+) -> Response<Body> {
+    state.inner.hits.fetch_add(1, Ordering::SeqCst);
+    state.inner.requests.lock().unwrap().push(payload.clone());
+    let mut builder = Response::builder().status(state.status);
+    if let Some(content_type) = &state.content_type {
+        builder = builder.header(CONTENT_TYPE, content_type);
+    }
+    for (name, value) in &state.extra_headers {
+        builder = builder.header(name, value);
+    }
+    builder.body(Body::from(state.body.clone())).unwrap()
+}
+
 async fn slow_backend_responses(
     State(state): State<BackendState>,
     Json(payload): Json<Value>,
@@ -3488,4 +3597,416 @@ async fn wait_for_backend_health(app: &Router, status: &str) {
     })
     .await
     .unwrap_or_else(|_| panic!("timed out waiting for backend health '{status}'"));
+}
+
+// ---- expose_backend_errors tests ----
+
+const EXPOSED_BODY: &str =
+    r#"{"error":{"message":"upstream says no","code":"upstream_518","type":"server_error"}}"#;
+
+#[tokio::test]
+async fn expose_off_default_sanitizes_error() {
+    // Default `expose_backend_errors = false`. Upstream 500 must
+    // be replaced with the generic OpenAI error envelope and the
+    // upstream body must NOT reach the client.
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Some("application/json"),
+        EXPOSED_BODY,
+        vec![],
+    )
+    .await;
+    let endpoint = expose_backend_errors_endpoint("backend-a", backend.base_url(), false, None);
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(
+        !body.contains("upstream_518"),
+        "upstream body must not leak; got: {body}"
+    );
+    assert!(
+        body.contains("server_error"),
+        "sanitized envelope must be present; got: {body}"
+    );
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_on_per_backend_forwards_upstream_body_and_status() {
+    // Backend default `expose_backend_errors = true`. The 5xx
+    // body is forwarded verbatim and the status is mapped through
+    // `map_upstream_status` (500 → 502).
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Some("application/json"),
+        EXPOSED_BODY,
+        vec![],
+    )
+    .await;
+    let endpoint = expose_backend_errors_endpoint("backend-a", backend.base_url(), true, None);
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert_eq!(bytes.as_ref(), EXPOSED_BODY.as_bytes());
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_on_per_route_overrides_backend_off() {
+    // Backend default off, route on -> route wins.
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Some("application/json"),
+        EXPOSED_BODY,
+        vec![],
+    )
+    .await;
+    let endpoint =
+        expose_backend_errors_endpoint("backend-a", backend.base_url(), false, Some(true));
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert_eq!(bytes.as_ref(), EXPOSED_BODY.as_bytes());
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_off_per_route_overrides_backend_on() {
+    // Backend default on, route off -> route wins, body sanitized.
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Some("application/json"),
+        EXPOSED_BODY,
+        vec![],
+    )
+    .await;
+    let endpoint =
+        expose_backend_errors_endpoint("backend-a", backend.base_url(), true, Some(false));
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(!body.contains("upstream_518"), "body={body}");
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_on_oversize_body_falls_back_to_sanitize() {
+    // The cap is 1 MiB. A 1.5 MiB body must NOT be forwarded; the
+    // client gets the sanitized envelope. (The truncation is still
+    // recorded in debug capture, but we don't enable it here.)
+    let mut body = String::with_capacity(2 * 1024 * 1024);
+    body.push_str(&"x".repeat(1_500_000));
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Some("application/json"),
+        Box::leak(body.into_boxed_str()),
+        vec![],
+    )
+    .await;
+    let endpoint = expose_backend_errors_endpoint("backend-a", backend.base_url(), true, None);
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    // The forward-fallback returns the sanitized envelope, not a
+    // megabyte of `x` characters.
+    assert!(body.len() < 1024, "body length={} too large", body.len());
+    assert!(body.contains("server_error"), "body={body}");
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_on_unset_content_type_defaults_to_application_json() {
+    // The upstream returns no content-type. The forwarded
+    // response must still declare a content-type of
+    // `application/json` so the client can parse the body.
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        None,
+        EXPOSED_BODY,
+        vec![],
+    )
+    .await;
+    let endpoint = expose_backend_errors_endpoint("backend-a", backend.base_url(), true, None);
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap()),
+        Some("application/json"),
+    );
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert_eq!(bytes.as_ref(), EXPOSED_BODY.as_bytes());
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_on_unknown_status_maps_to_502() {
+    // Upstream returns 518 (which `map_upstream_status` collapses
+    // to 502) with a custom body. Client sees 502 + the body.
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::from_u16(518).unwrap(),
+        Some("application/json"),
+        EXPOSED_BODY,
+        vec![],
+    )
+    .await;
+    let endpoint = expose_backend_errors_endpoint("backend-a", backend.base_url(), true, None);
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert_eq!(bytes.as_ref(), EXPOSED_BODY.as_bytes());
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_on_no_body_still_sends_default_content_type() {
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        None,
+        "",
+        vec![],
+    )
+    .await;
+    let endpoint = expose_backend_errors_endpoint("backend-a", backend.base_url(), true, None);
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap()),
+        Some("application/json"),
+    );
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert!(bytes.is_empty(), "body should be empty, got: {bytes:?}");
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_on_retry_after_is_forwarded() {
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::TOO_MANY_REQUESTS,
+        Some("application/json"),
+        EXPOSED_BODY,
+        vec![("retry-after", "30")],
+    )
+    .await;
+    let endpoint = expose_backend_errors_endpoint("backend-a", backend.base_url(), true, None);
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response
+            .headers()
+            .get("retry-after")
+            .map(|v| v.to_str().unwrap()),
+        Some("30"),
+    );
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_on_does_not_forward_server_header() {
+    // The `server` header is not in the strict allowlist and must
+    // not leak the backend implementation.
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Some("application/json"),
+        EXPOSED_BODY,
+        vec![("server", "llama.cpp/1234")],
+    )
+    .await;
+    let endpoint = expose_backend_errors_endpoint("backend-a", backend.base_url(), true, None);
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert!(response.headers().get("server").is_none());
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_on_records_exposed_backend_error_in_inspector() {
+    // The inspector must record `exposed_backend_error = true` for
+    // a forwarded non-success response, and `false` for the
+    // sanitized path.
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Some("application/json"),
+        EXPOSED_BODY,
+        vec![],
+    )
+    .await;
+    let endpoint = expose_backend_errors_endpoint("backend-a", backend.base_url(), true, None);
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![endpoint],
+        InspectorConfig {
+            enabled: true,
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state.clone());
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+    // Pull the inspector snapshot via the public endpoint.
+    let snap = state.inspector.records_limited(10);
+    assert!(!snap.is_empty(), "expected at least one inspector record");
+    let rec = &snap[0];
+    let outcome_is_upstream_non_success =
+        matches!(rec.outcome, InspectorOutcome::UpstreamNonSuccess);
+    assert!(
+        outcome_is_upstream_non_success,
+        "expected UpstreamNonSuccess, got: {:?}",
+        rec.outcome
+    );
+    assert!(rec.base.exposed_backend_error);
+    backend.abort();
+}
+
+#[tokio::test]
+async fn expose_off_records_exposed_backend_error_false_in_inspector() {
+    let backend = TestBackend::spawn_error_with_headers(
+        "backend-a",
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Some("application/json"),
+        EXPOSED_BODY,
+        vec![],
+    )
+    .await;
+    let endpoint = expose_backend_errors_endpoint("backend-a", backend.base_url(), false, None);
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![endpoint],
+        InspectorConfig {
+            enabled: true,
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state.clone());
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({"model": PUBLIC_MODEL, "input": "hi"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+    let snap = state.inspector.records_limited(10);
+    assert!(!snap.is_empty());
+    let rec = &snap[0];
+    assert!(!rec.base.exposed_backend_error);
+    backend.abort();
 }

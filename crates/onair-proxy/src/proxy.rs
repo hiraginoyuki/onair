@@ -8,7 +8,7 @@ use std::time::Instant;
 use axum::body::{Body, Bytes};
 use axum::http::header::{
     ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderName,
-    HeaderValue,
+    HeaderValue, RETRY_AFTER,
 };
 use axum::http::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use tower::Layer;
@@ -49,9 +49,11 @@ use self::logging::{
 };
 use self::response::{buffered_response, streaming_response};
 use self::upstream::{
-    BufferedBodyReadError, UpstreamSendError, backend_target, read_capped_upstream_error_body,
-    retryable_send_error, send_upstream_request, upstream_error_kind, upstream_path, upstream_url,
+    BufferedBodyReadError, CapturedUpstreamErrorBody, UpstreamSendError, backend_target,
+    read_capped_upstream_error_body, retryable_send_error, send_upstream_request,
+    upstream_error_kind, upstream_path, upstream_url,
 };
+use onair_core::error::map_upstream_status;
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
 
@@ -393,6 +395,7 @@ async fn do_proxy<'a>(
     if !upstream_status.is_success() {
         let upstream_content_type =
             header_str(upstream.headers(), &CONTENT_TYPE).map(str::to_owned);
+        let upstream_headers = upstream.headers().clone();
         ensure_failure_debug_capture(
             &context.debug_capture_config,
             &mut context.pending_debug_capture,
@@ -400,7 +403,14 @@ async fn do_proxy<'a>(
             &mut context.timeline,
             context.current_attempt.as_mut(),
         );
-        if context.debug_capture.is_some() {
+
+        // The expose_backend_errors opt-in needs the body even when
+        // debug capture is disabled, so always read the body when
+        // either consumer is active. Reuse the same capped reader
+        // as the sanitized path so both consumers see the same
+        // truncated-or-complete flag.
+        let mut captured: Option<CapturedUpstreamErrorBody> = None;
+        if context.debug_capture.is_some() || context.route.expose_backend_errors {
             match read_capped_upstream_error_body(
                 upstream,
                 &mut context.timeline,
@@ -409,16 +419,7 @@ async fn do_proxy<'a>(
             )
             .await
             {
-                Ok(error_body) => {
-                    if let Some(capture) = &mut context.debug_capture {
-                        capture.record_upstream_error_response(
-                            upstream_status,
-                            upstream_content_type.as_deref(),
-                            &error_body.bytes,
-                            error_body.truncated,
-                        );
-                    }
-                }
+                Ok(error_body) => captured = Some(error_body),
                 Err(BufferedBodyReadError::Shutdown) => {
                     warn!("shutdown signaled while capturing upstream error body");
                 }
@@ -431,6 +432,35 @@ async fn do_proxy<'a>(
                 }
             }
         }
+
+        if let Some(capture) = &mut context.debug_capture
+            && let Some(body) = &captured
+        {
+            capture.record_upstream_error_response(
+                upstream_status,
+                upstream_content_type.as_deref(),
+                &body.bytes,
+                body.truncated,
+            );
+        }
+
+        // Forward the upstream error to the client only when
+        // expose_backend_errors is on AND the body was read cleanly
+        // without truncation. A truncated body would be a
+        // half-JSON fragment; the sanitize fallback always returns a
+        // parseable envelope.
+        let forwarded_body = if context.route.expose_backend_errors {
+            captured
+                .as_ref()
+                .filter(|c| !c.truncated)
+                .map(|c| c.bytes.clone())
+        } else {
+            None
+        };
+        if let Some(body_bytes) = forwarded_body {
+            return forward_upstream_error(context, upstream_status, &upstream_headers, body_bytes);
+        }
+
         let api_error = ApiError::upstream(upstream_status);
         warn!(
             upstream_status = upstream_status.as_u16(),
@@ -493,6 +523,110 @@ async fn do_proxy<'a>(
     } else {
         buffered_response(context, upstream).await
     }
+}
+
+/// Build a response that forwards a non-2xx upstream error body to
+/// the client under the `expose_backend_errors` opt-in. Status is
+/// mapped through `map_upstream_status`; only the strict allowlist
+/// of response headers (`content-type`, `retry-after`) is forwarded
+/// from the upstream — the inbound `x-request-id` is echoed by
+/// `PropagateRequestIdLayer`. Health receives the **original**
+/// upstream status; the recorded inspector carries
+/// `exposed_backend_error = true`. Returns the sanitized fallback
+/// `ApiError` if the response builder is somehow invalid (should not
+/// happen in practice).
+fn forward_upstream_error(
+    mut context: ProxyContext<'_>,
+    upstream_status: StatusCode,
+    upstream_headers: &HeaderMap,
+    body_bytes: Bytes,
+) -> Result<Response<Body>, ApiError> {
+    let mapped_status = map_upstream_status(upstream_status);
+    let mut response = Response::builder().status(mapped_status);
+    // Errors are not cacheable.
+    response = response.header(CACHE_CONTROL, "no-store");
+    // Forward the upstream content-type verbatim; default to
+    // `application/json` when the upstream did not set one, so the
+    // client can always parse what we forward.
+    if let Some(value) = upstream_headers
+        .get(CONTENT_TYPE)
+        .and_then(valid_header_value)
+        .cloned()
+    {
+        response = response.header(CONTENT_TYPE, value);
+    } else {
+        response = response.header(CONTENT_TYPE, "application/json");
+    }
+    // Optional: forward `retry-after` if the upstream set one. The
+    // header is rare and useful for 429/503 callers.
+    if let Some(value) = upstream_headers
+        .get(RETRY_AFTER)
+        .and_then(valid_header_value)
+        .cloned()
+    {
+        response = response.header(RETRY_AFTER, value);
+    }
+
+    // Metrics: the client sees the mapped status, matching the
+    // existing sanitized path.
+    context.state.metrics.record_request(
+        &context.labels,
+        mapped_status.as_u16(),
+        context.request_timer.elapsed(),
+    );
+    if let Some(capture) = &mut context.debug_capture {
+        capture.record_outcome(CaptureOutcome::UpstreamNonSuccess {
+            upstream_status,
+            client_status: mapped_status,
+        });
+    }
+    // Health: record the **original** upstream status so the
+    // operator's health view reflects the true cause, not the
+    // conservative remap.
+    context.state.health.record_failure(
+        &context.labels.backend,
+        context.request_timer.elapsed(),
+        upstream_status.as_u16(),
+        "upstream_non_success",
+    );
+    context.record_final_attempt(
+        mapped_status,
+        Some(upstream_status.as_u16()),
+        "upstream_non_success",
+        None,
+    );
+    warn!(
+        upstream_status = upstream_status.as_u16(),
+        client_status = mapped_status.as_u16(),
+        backend = %context.labels.backend,
+        route = %context.labels.route,
+        requested_model = %context.model_log_fields.requested,
+        public_model = %context.model_log_fields.public,
+        backend_model = %context.model_log_fields.backend,
+        attempt = context.attempt,
+        max_attempts = context.max_attempts,
+        exposed = true,
+        response_body_bytes = body_bytes.len(),
+        "upstream returned non-success status (exposed to client)"
+    );
+    warn_proxy_failure(
+        &context,
+        mapped_status,
+        "upstream_non_success",
+        "upstream returned non-success status; body forwarded to client via expose_backend_errors",
+    );
+    context.inspector_base.exposed_backend_error = true;
+    record_context_inspector(
+        context,
+        InspectorOutcome::UpstreamNonSuccess,
+        mapped_status,
+        None,
+        Some(body_bytes.len()),
+        InspectorTokenCounts::default(),
+    );
+    response
+        .body(Body::from(body_bytes))
+        .map_err(|_| ApiError::internal())
 }
 
 fn response_builder(
