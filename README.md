@@ -212,6 +212,14 @@ and tool-call constraints.
   errors/headers, debug-capture risk, inspector exposure, and secret hygiene.
 - [ROADMAP.md](ROADMAP.md): implemented milestones and future work.
 
+## Versioning
+
+onair follows [Pride Versioning](https://pridever.org/) with
+`PROUD.DEFAULT.SHAME` (breaking / feature / fix). See
+[docs/versioning.md](docs/versioning.md) for the full policy,
+including the lenient deprecation-alias pattern for PROUD bumps
+and the CVSS thresholds for security disclosures.
+
 ## License
 
 MIT. See [LICENSE](LICENSE). Binary distributions bundle a

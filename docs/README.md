@@ -17,6 +17,11 @@ Planned work belongs in [../ROADMAP.md](../ROADMAP.md).
   inspector/operator endpoints, health probes, and logging.
 - [security.md](security.md): backend anonymity boundary, sanitized
   errors/headers, debug-capture risk, inspector exposure, and secret hygiene.
+- [versioning.md](versioning.md): the project's
+  `PROUD.DEFAULT.SHAME` versioning policy (Pride Versioning),
+  including what counts as a breaking change, the
+  deprecation-alias pattern for PROUD bumps, and the CVSS
+  thresholds for security disclosures.
 
 ## Documentation Rules
 
