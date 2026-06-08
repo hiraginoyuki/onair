@@ -36,6 +36,13 @@ pub struct SelectedRoute {
     /// Per-route upstream request body overrides, merged on top of
     /// the bound backend's defaults. See `docs/configuration.md`.
     pub extra_body: BTreeMap<String, onair_core::TomlValue>,
+    /// Resolved per-route value: forward non-2xx upstream
+    /// responses (status mapped via `map_upstream_status`, body
+    /// capped at 1 MiB, strict header allowlist) to the client
+    /// instead of replacing them with the sanitized OpenAI error
+    /// envelope. See `docs/configuration.md` and
+    /// `docs/security.md`.
+    pub expose_backend_errors: bool,
 }
 
 pub struct NonEmptyVec<T> {
@@ -337,6 +344,7 @@ impl<'a> BackendSelector<'a> {
             None => "none".to_owned(),
         };
         let extra_body = route.map(|r| r.extra_body.clone()).unwrap_or_default();
+        let expose_backend_errors = route.map(|r| r.expose_backend_errors).unwrap_or(false);
         SelectedRoute {
             backend_id: backend.id.clone(),
             base_url: backend.base_url.clone(),
@@ -352,6 +360,7 @@ impl<'a> BackendSelector<'a> {
             weight: backend.weight,
             route_key_label,
             extra_body,
+            expose_backend_errors,
         }
     }
 }
