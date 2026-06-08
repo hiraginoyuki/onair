@@ -335,6 +335,67 @@ policy on protected keys does not apply (it is not a protected key)
 and the field is forwarded as-is. The upstream will either use it
 or ignore it; either way onair does not interpret the value.
 
+## Exposing backend errors
+
+By default, onair converts every non-2xx upstream response into a
+generic OpenAI-style error envelope and discards the upstream body.
+This is the privacy-target default; see
+[security.md](security.md#backend-secrecy). Operators who want the
+client to see the upstream's actual error body can opt in per
+backend and override per route:
+
+```toml
+[[backend]]
+id = "minimax"
+base_url = "https://api.minimax.io/v1"
+supports = ["chat", "responses", "streaming"]
+# Opt every route bound to this backend in.
+expose_backend_errors = true
+
+[[route]]
+public = "minimax-m3"
+expose = ["chat", "responses"]
+backends = ["minimax-m3@minimax"]
+# Route override: wins over the backend's default. Use `false` to
+# opt a single route back out of a backend that has it on.
+expose_backend_errors = false
+```
+
+Behavior with the field on:
+
+- The upstream status is mapped through `map_upstream_status`
+  (4xx and 429/408 keep their value; other 5xx collapse to
+  `502 Bad Gateway`) and returned on the wire.
+- The upstream body is forwarded verbatim, capped at 1 MiB. If the
+  body is larger than the cap, the request falls back to the
+  generic sanitized envelope; the truncation is still recorded in
+  debug capture.
+- Response headers use a strict allowlist: `content-type`
+  (forwarded verbatim from the upstream, defaulting to
+  `application/json` when the upstream omits it) and `retry-after`
+  (only if the upstream set one). `x-request-id` is always
+  echoed by the inbound value via `PropagateRequestIdLayer`; the
+  upstream's own `x-request-id` is never forwarded, to avoid
+  leaking backend-internal request ids.
+- The client never sees `server`, `set-cookie`, `www-authenticate`,
+  or `x-ratelimit-*` headers.
+- Health-snapshot failures record the **original** upstream
+  status, so the operator's health view reflects the true cause.
+  Metrics record the **mapped** status the client sees, matching
+  the sanitized path.
+- The inspector records `exposed_backend_error: true` and the
+  request card shows an `exposed` marker in the status column. A
+  quick filter ("exposed") is also available.
+
+Behavior with the field off (the default): unchanged from the
+pre-existing privacy-target default — non-2xx responses are
+replaced with the sanitized OpenAI error envelope.
+
+The field is hot-reloadable. Per-route `Some(value)` wins over the
+backend's default; `None` inherits. When a route binds to multiple
+backends, the first binding's backend contributes the default,
+matching the `extra_body` "first binding wins" rule. Operators
+who need different per-binding overrides should split the route.
 
 ### Strict-require-route
 

@@ -115,6 +115,10 @@ context_length = "upstream"
 # Route-level extra_body overrides backend-level on key conflict. See
 # docs/configuration.md#upstream-request-body-overrides for the protected-key
 # list and merge rules.
+# Optional: expose_backend_errors = true forwards non-2xx upstream error bodies
+# to the client (status mapped through ApiError::upstream, body capped at 1 MiB,
+# strict header allowlist). Default false. See
+# docs/configuration.md#exposing-backend-errors and docs/security.md.
 # expose = ["chat", "responses", "tools"] # if this route supports function tools
 
 [[route]]

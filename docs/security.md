@@ -19,7 +19,9 @@ fingerprints can still reveal information about the backing service.
 - Successful JSON and SSE responses rewrite backend model IDs back to public
   model IDs when a model mapping is known.
 - Non-success backend responses are converted to generic OpenAI-style errors;
-  backend error bodies are discarded.
+  backend error bodies are discarded. This default can be relaxed
+  per-route with `expose_backend_errors = true`; see
+  [Exposing backend errors](configuration.md#exposing-backend-errors).
 - Response headers use an allowlist. onair keeps useful API headers such as
   `content-type` and `content-disposition`, sets its own cache policy, and
   echoes only a client-supplied `x-request-id`.
@@ -33,7 +35,7 @@ fingerprints can still reveal information about the backing service.
 | --- | --- | --- |
 | `/v1/models` and `/v1/models/{model}` | yes | no, synthesized from public config |
 | Proxied successful JSON/SSE responses | yes | backend model IDs are rewritten when a mapping is known |
-| Proxied upstream non-success responses | yes | no, converted to generic OpenAI-style errors |
+| Proxied upstream non-success responses | yes | no, converted to generic OpenAI-style errors (override: `expose_backend_errors` per route, see [Exposing backend errors](configuration.md#exposing-backend-errors)) |
 | Response headers | yes | only allowlisted headers plus client `x-request-id` |
 | Debug capture files | local only | yes, may include exact request/upstream bodies |
 | Inspector/operator endpoints | operator only | yes, may include backend IDs, URLs, model IDs, paths, and metadata |

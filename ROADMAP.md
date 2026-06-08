@@ -16,6 +16,7 @@ These items are ordered roughly by dependency and operator value, not by impleme
 - Default-off SQLite persistence for the latest retained inspector records, with restart recovery and per-process writer-thread panic logging. Bodies are still excluded from inspector records.
 - Round-robin and weighted-random routing strategies for spreading traffic across multiple backends that serve the same public model.
 - Background context-size cache for upstream-mode models: onair polls each owning backend's `/props?model=<backend_model>` on a 60 s interval and forwards the live `default_generation_settings.n_ctx` to `/v1/models` and `/props`. The old `[[backend]].context_length` field and `"inherit"` mode are replaced by a single per-model `"upstream"` policy; failures hide the value until the next successful refresh.
+- Per-route `expose_backend_errors` opt-in for forwarding non-2xx upstream error bodies to the client (status mapped through `map_upstream_status`, body capped at 1 MiB, strict header allowlist of `content-type` + `retry-after`). Default is off and preserves the privacy-target default that converts non-2xx upstream responses to a generic OpenAI error envelope.
 
 ## Priority 1
 
