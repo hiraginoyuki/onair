@@ -344,7 +344,7 @@ jobs:
           git tag -f "$TAG"
           git push origin "tag" "$TAG" --force
 
-      - name: Push moving tags (vX, latest) for stable releases
+      - name: Push moving tags (vX.Y, vX, latest) for stable releases
         if: ${{ needs.meta.outputs.is_stable == 'true' }}
         env:
           TAG: ${{ needs.meta.outputs.tag }}
@@ -352,6 +352,9 @@ jobs:
         run: |
           set -euo pipefail
           major="v$(echo "$VERSION" | cut -d. -f1)"
+          minor="v$(echo "$VERSION" | cut -d. -f1,2)"
+          git tag -f "$minor" "$TAG"
+          git push origin "tag" "$minor" --force
           git tag -f "$major" "$TAG"
           git push origin "tag" "$major" --force
           git tag -f "latest" "$TAG"

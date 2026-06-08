@@ -105,6 +105,7 @@ binaries are downloaded:
 | Command | Behavior |
 | --- | --- |
 | `nix run github:hiraginoyuki/onair?ref=v0.1.0` | Immutable — pinned to v0.1.0 |
+| `nix run github:hiraginoyuki/onair?ref=v0.1` | Moving — latest v0.1.x (safe across patch releases; does not pick up v0.2.0 if a minor release has breaking changes) |
 | `nix run github:hiraginoyuki/onair?ref=v0` | Moving — latest v0.x |
 | `nix run github:hiraginoyuki/onair?ref=latest` | Moving — newest release |
 | `nix run github:hiraginoyuki/onair/unstable` | Moving — rolling unstable (force-pushed to main HEAD on every release) |
