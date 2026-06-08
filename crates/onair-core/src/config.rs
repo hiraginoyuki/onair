@@ -422,6 +422,15 @@ pub struct BackendConfig {
     /// each. Route-level `extra_body` overrides backend-level on key
     /// conflict. See `docs/configuration.md` for the full rules.
     pub extra_body: BTreeMap<String, toml::Value>,
+    /// When `true`, non-2xx upstream responses are forwarded to the
+    /// client with the upstream status mapped through
+    /// `ApiError::upstream`, the upstream error body (capped at 1
+    /// MiB), and a strict allowlist of response headers. When
+    /// `false` (the default), non-2xx responses are replaced with
+    /// the generic OpenAI-style error envelope. See
+    /// `docs/configuration.md` and `docs/security.md`. Per-route
+    /// `expose_backend_errors = true|false` overrides this default.
+    pub expose_backend_errors: bool,
 }
 
 impl Default for BackendConfig {
@@ -439,6 +448,7 @@ impl Default for BackendConfig {
             supports: BTreeSet::new(),
             weight: 1,
             extra_body: BTreeMap::new(),
+            expose_backend_errors: false,
         }
     }
 }
@@ -507,6 +517,12 @@ pub struct RouteConfig {
     /// `docs/configuration.md`.
     #[serde(default)]
     pub extra_body: BTreeMap<String, toml::Value>,
+    /// Per-route override for `[[backend]].expose_backend_errors`.
+    /// `Some(true)` or `Some(false)` wins over the backend's value;
+    /// `None` inherits the backend's value. See
+    /// `docs/configuration.md` and `docs/security.md`.
+    #[serde(default)]
+    pub expose_backend_errors: Option<bool>,
 }
 
 impl RouteConfig {
@@ -579,6 +595,10 @@ pub struct ResolvedBackend {
     pub chat_stream_usage: ChatStreamUsagePolicy,
     pub weight: u32,
     pub extra_body: BTreeMap<String, toml::Value>,
+    /// Resolved per-backend `expose_backend_errors` default.
+    /// Resolved at config load; routes override via
+    /// `ResolvedRoute.expose_backend_errors`.
+    pub expose_backend_errors: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -602,6 +622,12 @@ pub struct ResolvedRoute {
     /// `extra_body` on key conflict; non-conflicting keys from
     /// either side are preserved. See `docs/configuration.md`.
     pub extra_body: BTreeMap<String, toml::Value>,
+    /// Resolved per-route value: the route's own
+    /// `expose_backend_errors` (if set) wins; otherwise the bound
+    /// backend's `expose_backend_errors` is inherited. The proxy
+    /// reads this resolved bool to decide whether to forward
+    /// non-2xx upstream bodies.
+    pub expose_backend_errors: bool,
 }
 
 impl Config {
@@ -721,6 +747,8 @@ fn resolve_routes(
         let context_length =
             resolve_context_lengths(&key, &route_config.context_length, &bindings)?;
         let extra_body = merge_extra_body(&bindings, backends, &route_config.extra_body);
+        let expose_backend_errors =
+            resolve_expose_backend_errors(route_config.expose_backend_errors, &bindings, backends);
         resolved_routes.push(ResolvedRoute {
             key: key.clone(),
             expose,
@@ -731,9 +759,30 @@ fn resolve_routes(
             chat_stream_usage,
             backends: bindings,
             extra_body,
+            expose_backend_errors,
         });
     }
     Ok(resolved_routes)
+}
+
+/// Resolve a route's `expose_backend_errors` value. The route's own
+/// `Some(value)` wins over the bound backend's value. When unset, the
+/// first binding's backend contributes its default (matching the
+/// `extra_body` "first binding wins" rule). When a route has no
+/// backend bindings, the value falls back to `false`.
+fn resolve_expose_backend_errors(
+    route_value: Option<bool>,
+    bindings: &[RouteBackendBinding],
+    backends: &[ResolvedBackend],
+) -> bool {
+    if let Some(value) = route_value {
+        return value;
+    }
+    bindings
+        .first()
+        .and_then(|first| backends.iter().find(|b| b.id == first.backend_id))
+        .map(|backend| backend.expose_backend_errors)
+        .unwrap_or(false)
 }
 
 /// Merge per-backend `extra_body` defaults into the per-route
@@ -1030,6 +1079,7 @@ fn resolve_backends(
             chat_stream_usage: backend.chat_stream_usage,
             weight: backend.weight,
             extra_body: backend.extra_body,
+            expose_backend_errors: backend.expose_backend_errors,
         });
     }
 
@@ -1914,6 +1964,140 @@ mod tests {
             route.extra_body.get("from"),
             Some(&toml::Value::String("a".to_owned()))
         );
+    }
+
+    #[test]
+    fn expose_backend_errors_defaults_to_false_when_omitted() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        assert!(!config.backends[0].expose_backend_errors);
+        let route = route_by_public(&config, "public-model");
+        assert!(!route.expose_backend_errors);
+    }
+
+    #[test]
+    fn expose_backend_errors_route_inherits_backend() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+            expose_backend_errors = true
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        assert!(config.backends[0].expose_backend_errors);
+        let route = route_by_public(&config, "public-model");
+        // Route omitted the field, so it inherits the backend's
+        // `expose_backend_errors = true`.
+        assert!(route.expose_backend_errors);
+    }
+
+    #[test]
+    fn expose_backend_errors_route_overrides_backend() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model-on", "public-model-off"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+            expose_backend_errors = true
+
+            [[route]]
+            public = "public-model-on"
+            expose = ["responses"]
+            backends = ["private-on@backend-a"]
+            expose_backend_errors = true
+
+            [[route]]
+            public = "public-model-off"
+            expose = ["responses"]
+            backends = ["private-off@backend-a"]
+            expose_backend_errors = false
+            "#,
+        );
+
+        assert!(config.backends[0].expose_backend_errors);
+        let route_on = route_by_public(&config, "public-model-on");
+        assert!(route_on.expose_backend_errors);
+        let route_off = route_by_public(&config, "public-model-off");
+        // Route-level `false` overrides the backend-level `true`.
+        assert!(!route_off.expose_backend_errors);
+    }
+
+    #[test]
+    fn expose_backend_errors_with_multiple_bindings_uses_first_bindings_backend() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+            expose_backend_errors = true
+
+            [[backend]]
+            id = "backend-b"
+            base_url = "http://127.0.0.1:8001"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["model-a@backend-a", "model-b@backend-b"]
+            "#,
+        );
+
+        let route = route_by_public(&config, "public-model");
+        // First binding's backend (which has `expose_backend_errors = true`)
+        // wins; second binding's default is ignored, matching the
+        // `extra_body` "first binding wins" rule.
+        assert!(route.expose_backend_errors);
     }
 
     #[test]

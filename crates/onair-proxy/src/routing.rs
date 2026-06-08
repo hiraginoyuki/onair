@@ -1430,6 +1430,7 @@ mod tests {
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
             weight: 1,
             extra_body: BTreeMap::new(),
+            expose_backend_errors: false,
         }
     }
 
@@ -1470,6 +1471,7 @@ mod tests {
                 })
                 .collect(),
             extra_body: BTreeMap::new(),
+            expose_backend_errors: false,
         }
     }
 

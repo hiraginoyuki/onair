@@ -315,6 +315,7 @@ mod tests {
                 chat_stream_usage: ChatStreamUsagePolicy::Preserve,
                 weight: 1,
                 extra_body: BTreeMap::new(),
+                expose_backend_errors: false,
             }],
             routes: vec![
                 ResolvedRoute {
@@ -334,6 +335,7 @@ mod tests {
                         backend_model: "shared-a".to_owned(),
                     }],
                     extra_body: BTreeMap::new(),
+                    expose_backend_errors: false,
                 },
                 ResolvedRoute {
                     key: RouteKey::Public("shared".to_owned()),
@@ -352,6 +354,7 @@ mod tests {
                         backend_model: "shared-b".to_owned(),
                     }],
                     extra_body: BTreeMap::new(),
+                    expose_backend_errors: false,
                 },
             ],
         };
