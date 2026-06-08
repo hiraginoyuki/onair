@@ -176,7 +176,7 @@ impl ApiError {
                 param: None,
             },
             _ => Self {
-                status: StatusCode::BAD_GATEWAY,
+                status: map_upstream_status(status),
                 message: "The selected model could not complete the request.".to_owned(),
                 kind: "server_error".to_owned(),
                 code: Some("upstream_error".to_owned()),
@@ -220,9 +220,76 @@ impl ApiError {
     }
 }
 
+/// Map an upstream response status to the closest onair client-side
+/// status. Statuses that are safe to forward verbatim (4xx, 429,
+/// 408) keep their value; everything else collapses to
+/// `BAD_GATEWAY` (502) so the client does not see obscure upstream
+/// codes the proxy cannot categorize. The sanitized
+/// `ApiError::upstream` path uses this mapping; the
+/// `expose_backend_errors` opt-in path also uses it (but forwards
+/// the body verbatim).
+pub fn map_upstream_status(status: StatusCode) -> StatusCode {
+    match status {
+        StatusCode::BAD_REQUEST
+        | StatusCode::UNPROCESSABLE_ENTITY
+        | StatusCode::TOO_MANY_REQUESTS
+        | StatusCode::REQUEST_TIMEOUT => status,
+        _ => StatusCode::BAD_GATEWAY,
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, body) = self.into_parts();
         (status, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_upstream_status_keeps_pass_through_codes() {
+        for code in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::REQUEST_TIMEOUT,
+        ] {
+            assert_eq!(map_upstream_status(code), code, "code={code}");
+        }
+    }
+
+    #[test]
+    fn map_upstream_status_collapses_other_codes_to_bad_gateway() {
+        for code in [
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+            StatusCode::IM_A_TEAPOT,
+            StatusCode::OK,
+        ] {
+            assert_eq!(
+                map_upstream_status(code),
+                StatusCode::BAD_GATEWAY,
+                "code={code}"
+            );
+        }
+    }
+
+    #[test]
+    fn api_error_upstream_message_preserved_per_status() {
+        // The refactor must not regress the per-status messaging of
+        // the sanitized path.
+        let bad_request = ApiError::upstream(StatusCode::BAD_REQUEST);
+        assert_eq!(bad_request.kind, "invalid_request_error");
+        assert_eq!(bad_request.code, None);
+        let rate_limited = ApiError::upstream(StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(rate_limited.kind, "rate_limit_error");
+        assert_eq!(rate_limited.code.as_deref(), Some("rate_limit_exceeded"));
+        let server_error = ApiError::upstream(StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(server_error.status, StatusCode::BAD_GATEWAY);
+        assert_eq!(server_error.code.as_deref(), Some("upstream_error"));
     }
 }
