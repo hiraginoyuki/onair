@@ -77,8 +77,8 @@
         headerClass: "c-status",
         defaultVisible: true,
         value: record => record.status,
-        className: record => `status-code ${statusClass(Number(record.status), record)}`,
-        help: "Client-facing response status.",
+        className: record => `status-code ${statusClass(Number(record.status), record)}${record.exposed_backend_error ? " exposed" : ""}`,
+        help: "Client-facing response status. A trailing 'exposed' marker means the upstream's non-2xx body was forwarded to the client because the route had `expose_backend_errors = true`.",
       },
       {
         key: "total_ms",
@@ -274,6 +274,12 @@
         label: "slow ≥5s",
         title: "Show requests whose total onair-observed time is at least 5 seconds.",
         matches: record => Number((record.timeline || {}).total_us || 0) >= slowRequestThresholdUs,
+      },
+      {
+        key: "exposed",
+        label: "exposed",
+        title: "Show non-2xx responses whose upstream body was forwarded to the client via expose_backend_errors.",
+        matches: record => record.exposed_backend_error === true,
       },
     ];
     const quickFilterKeys = new Set(quickFilterDefinitions.map(definition => definition.key));
@@ -850,6 +856,7 @@
         record.path,
         record.query,
         outcomeText(record),
+        record.exposed_backend_error ? "exposed" : "",
         ...attemptRecords(record).flatMap(attempt => [
           attempt.backend,
           attempt.backend_target,
@@ -1381,7 +1388,7 @@
       return card;
     }
 
-    function renderDetail(record) {
+      function renderDetail(record) {
       const cards = [
         kvCard("request", [
           ["record id", record.record_id],
@@ -1396,6 +1403,7 @@
           ["status", record.status],
           ["outcome", outcomeText(record)],
           ["error kind", record.error_kind],
+          ["exposed backend error", record.exposed_backend_error ? "yes" : "no"],
         ]),
         kvCard("routing", [
           ["requested model", record.requested_model],
