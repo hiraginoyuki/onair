@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -4008,5 +4009,240 @@ async fn expose_off_records_exposed_backend_error_false_in_inspector() {
     assert!(!snap.is_empty());
     let rec = &snap[0];
     assert!(!rec.base.exposed_backend_error);
+    backend.abort();
+}
+
+// ---- access-control union: default_models + [[client]].models ----
+
+/// `Config::load` reads the TOML, runs `resolve_clients`, and
+/// returns the resolved `Config`. The app tests need this when
+/// the behavior under test (e.g. the `default_models ∪
+/// [[client]].models` union) lives in the resolve path rather
+/// than in already-resolved structs.
+fn app_state_from_toml(toml: &str) -> Arc<AppState> {
+    let path = env::temp_dir().join(format!(
+        "onair-models-access-{}-{}.toml",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(&path, toml).unwrap();
+    let config = Config::load(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    Arc::new(
+        AppState::new(
+            config,
+            Metrics::new(),
+            tokio::sync::watch::channel(false).0,
+        )
+        .unwrap(),
+    )
+}
+
+const DEFAULT_ONLY_MODEL: &str = "gpt-default-only";
+const CLIENT_ONLY_MODEL: &str = "gpt-client-only";
+
+/// Two models, two clients, four `[[route]]` declarations: each
+/// public model has a route so the `/v1/models` listing is gated
+/// only by the per-client whitelist, not by missing routes.
+const MODELS_ACCESS_TOML: &str = r#"
+[access]
+default_models = ["gpt-default-only", "gpt-shared"]
+
+[[client]]
+id = "dev-rich"
+api_key = "sk-test"
+models = ["gpt-shared", "gpt-client-only"]
+
+[[client]]
+id = "dev-default"
+api_key = "sk-test-default"
+
+[[backend]]
+id = "backend-a"
+base_url = "http://127.0.0.1:9"
+supports = ["responses"]
+
+[[route]]
+public = "gpt-default-only"
+expose = ["responses"]
+backends = ["backend-private@backend-a"]
+
+[[route]]
+public = "gpt-shared"
+expose = ["responses"]
+backends = ["backend-private@backend-a"]
+
+[[route]]
+public = "gpt-client-only"
+expose = ["responses"]
+backends = ["backend-private@backend-a"]
+"#;
+
+#[tokio::test]
+async fn models_listing_unions_default_models_and_client_models() {
+    // A client's effective whitelist is the UNION of
+    // `[access].default_models` and `[[client]].models`.
+    // `/v1/models` must list every public model that is both in
+    // the union AND has a matching `[[route]]` declaration. The
+    // two clients in this fixture (dev-rich, dev-default) have
+    // different effective whitelists; the test asserts each.
+    let backend = TestBackend::spawn("backend-a").await;
+    let mut toml = MODELS_ACCESS_TOML.to_owned();
+    toml = toml.replace("http://127.0.0.1:9", &backend.base_url());
+    let state = app_state_from_toml(&toml);
+    let app = router(state);
+
+    // dev-rich sees BOTH the default-only and the client-only
+    // models, plus the shared one.
+    let response = app.clone().oneshot(authed_get("/v1/models")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["object"], "list");
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(&"gpt-default-only"),
+        "dev-rich must see the default-only model; got {ids:?}"
+    );
+    assert!(
+        ids.contains(&"gpt-shared"),
+        "dev-rich must see the shared model; got {ids:?}"
+    );
+    assert!(
+        ids.contains(&"gpt-client-only"),
+        "dev-rich must see the client-only model; got {ids:?}"
+    );
+    assert_eq!(
+        ids.len(),
+        3,
+        "dev-rich must see exactly 3 models; got {ids:?}"
+    );
+
+    // The /v1/models/{model} endpoint agrees for every model in
+    // the effective whitelist and 404s for everything else.
+    for model in &["gpt-default-only", "gpt-shared", "gpt-client-only"] {
+        let response = app
+            .clone()
+            .oneshot(authed_get(&format!("/v1/models/{model}")))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "dev-rich GET /v1/models/{model} must be 200"
+        );
+    }
+
+    // dev-default sees only the default models (NOT the
+    // client-only one that dev-rich has). This pins the access
+    // boundary: a client's client.models list is private to that
+    // client.
+    let response = app
+        .clone()
+        .oneshot(request_with_key("/v1/models", "sk-test-default"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"gpt-default-only"));
+    assert!(ids.contains(&"gpt-shared"));
+    assert!(
+        !ids.contains(&"gpt-client-only"),
+        "dev-default must NOT see dev-rich's client-only model; got {ids:?}"
+    );
+    assert_eq!(ids.len(), 2);
+
+    let response = app
+        .clone()
+        .oneshot(request_with_key(
+            "/v1/models/gpt-client-only",
+            "sk-test-default",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "dev-default GET /v1/models/gpt-client-only must be 404"
+    );
+
+    // A model that is in NEITHER default_models NOR client.models
+    // (and has no [[route]]) must 404 for every client, even the
+    // privileged one.
+    let response = app
+        .oneshot(authed_get("/v1/models/completely-unconfigured"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    backend.abort();
+}
+
+fn request_with_key(uri: &str, api_key: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header(AUTHORIZATION, format!("Bearer {api_key}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn models_request_unauthorized_for_models_outside_effective_whitelist() {
+    // Companion to the listing test: a request that names a
+    // model the client cannot access (e.g. a fresh client that
+    // has only the defaults, asking for a model that exists in
+    // a different client's whitelist) must surface as
+    // model_not_found, not silently fall through to some other
+    // client's session.
+    let backend = TestBackend::spawn("backend-a").await;
+    let mut toml = MODELS_ACCESS_TOML.to_owned();
+    toml = toml.replace("http://127.0.0.1:9", &backend.base_url());
+    let state = app_state_from_toml(&toml);
+    let app = router(state);
+
+    // dev-default asks the proxy to route a request to a model
+    // it cannot see. The proxy must reject at the access check
+    // before any backend is contacted. dev-rich's
+    // gpt-client-only is gated by the model's presence in
+    // dev-default's effective whitelist, which is empty for
+    // that model.
+    let negative = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header(AUTHORIZATION, "Bearer sk-test-default")
+                .header(CONTENT_TYPE, "application/json")
+                .extension(ConnectInfo(
+                    "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(
+                    json!({"model": "gpt-client-only", "input": "hi"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        negative.status(),
+        StatusCode::NOT_FOUND,
+        "dev-default must not be able to route gpt-client-only"
+    );
+    let _ = DEFAULT_ONLY_MODEL;
+    let _ = CLIENT_ONLY_MODEL;
     backend.abort();
 }
