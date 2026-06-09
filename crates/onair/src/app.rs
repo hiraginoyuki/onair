@@ -172,17 +172,28 @@ async fn model(
         &headers,
         "models_retrieve",
         &model,
-        |_identity, available| match available.get(&model) {
-            Some(ContextLengthSpec::None) => {
-                openai::model_response(model.clone(), None).into_response()
+        |identity, available| {
+            // The identity's effective whitelist is the union of
+            // `[access].default_models` and `[[client]].models`. A
+            // model that has a `[[route]]` declaration but is not in
+            // the identity's whitelist must 404 for symmetry with
+            // the proxy's preflight check and with the `/v1/models`
+            // listing, which already filters by whitelist.
+            if !identity.models.contains(&model) {
+                return ApiError::model_not_found(&model).into_response();
             }
-            Some(ContextLengthSpec::Static { n_ctx }) => {
-                openai::model_response_with_n_ctx_train(model.clone(), *n_ctx).into_response()
+            match available.get(&model) {
+                Some(ContextLengthSpec::None) => {
+                    openai::model_response(model.clone(), None).into_response()
+                }
+                Some(ContextLengthSpec::Static { n_ctx }) => {
+                    openai::model_response_with_n_ctx_train(model.clone(), *n_ctx).into_response()
+                }
+                Some(ContextLengthSpec::Upstream { n_ctx, .. }) => {
+                    openai::model_response(model.clone(), *n_ctx).into_response()
+                }
+                None => ApiError::model_not_found(&model).into_response(),
             }
-            Some(ContextLengthSpec::Upstream { n_ctx, .. }) => {
-                openai::model_response(model.clone(), *n_ctx).into_response()
-            }
-            None => ApiError::model_not_found(&model).into_response(),
         },
     )
     .await
@@ -204,8 +215,15 @@ async fn props(
         &headers,
         "props",
         &label,
-        move |_identity, available| match query_model.as_deref() {
-            Some(model) => match available.get(model) {
+        move |identity, available| {
+            let Some(model) = query_model.as_deref() else {
+                return openai::props_response(Some("router"), Some("llama-server".to_owned()), 0)
+                    .into_response();
+            };
+            if !identity.models.contains(model) {
+                return ApiError::model_not_found(model).into_response();
+            }
+            match available.get(model) {
                 Some(resolved) => {
                     let n_ctx = match resolved {
                         ContextLengthSpec::None => 0,
@@ -216,9 +234,7 @@ async fn props(
                         .into_response()
                 }
                 None => ApiError::model_not_found(model).into_response(),
-            },
-            None => openai::props_response(Some("router"), Some("llama-server".to_owned()), 0)
-                .into_response(),
+            }
         },
     )
     .await

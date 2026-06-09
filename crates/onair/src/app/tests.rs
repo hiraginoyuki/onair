@@ -4031,14 +4031,7 @@ fn app_state_from_toml(toml: &str) -> Arc<AppState> {
     std::fs::write(&path, toml).unwrap();
     let config = Config::load(&path).unwrap();
     let _ = std::fs::remove_file(&path);
-    Arc::new(
-        AppState::new(
-            config,
-            Metrics::new(),
-            tokio::sync::watch::channel(false).0,
-        )
-        .unwrap(),
-    )
+    Arc::new(AppState::new(config, Metrics::new(), tokio::sync::watch::channel(false).0).unwrap())
 }
 
 const DEFAULT_ONLY_MODEL: &str = "gpt-default-only";
@@ -4178,6 +4171,42 @@ async fn models_listing_unions_default_models_and_client_models() {
         StatusCode::NOT_FOUND,
         "dev-default GET /v1/models/gpt-client-only must be 404"
     );
+
+    // /v1/props?model=... enforces the same whitelist. dev-default
+    // must not be able to query metadata for gpt-client-only.
+    let response = app
+        .clone()
+        .oneshot(request_with_key(
+            "/props?model=gpt-client-only",
+            "sk-test-default",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "dev-default GET /props?model=gpt-client-only must be 404"
+    );
+    // dev-rich can.
+    let response = app
+        .clone()
+        .oneshot(authed_get("/props?model=gpt-shared"))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "dev-rich GET /props?model=gpt-shared must be 200"
+    );
+    // /props with no model is a server-info call, not a model
+    // access call, so it stays accessible to every authenticated
+    // client.
+    let response = app
+        .clone()
+        .oneshot(request_with_key("/props", "sk-test-default"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 
     // A model that is in NEITHER default_models NOR client.models
     // (and has no [[route]]) must 404 for every client, even the
