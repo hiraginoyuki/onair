@@ -229,6 +229,10 @@ Fields:
   merged into the upstream request body. See
   [Upstream request body overrides](#upstream-request-body-overrides)
   below for the merge rules and protected-key list.
+- `request_headers = { ... }` (inline table of strings, default `{}`):
+  arbitrary HTTP headers injected into the upstream request. See
+  [Upstream request header overrides](#upstream-request-header-overrides)
+  below for the precedence rules.
 
 The previous `[[backend.model]]` block and its `endpoints` field are
 removed. Any public model name that was previously listed in
@@ -334,6 +338,44 @@ If the upstream does not recognize this field, the warn-and-drop
 policy on protected keys does not apply (it is not a protected key)
 and the field is forwarded as-is. The upstream will either use it
 or ignore it; either way onair does not interpret the value.
+
+## Upstream request header overrides
+
+`request_headers` lets operators inject arbitrary HTTP headers into
+the upstream request for a `[[route]]`. The canonical use cases are
+backend-specific headers such as `anthropic-version` or `x-api-key`
+that are not part of onair's managed request rewriting.
+
+```toml
+[[route]]
+public = "claude-local"
+expose = ["messages"]
+backends = ["llama-3.1-8b-instruct@local-llama"]
+[route.request_headers]
+anthropic-version = "2023-06-01"
+x-api-key = "backend-specific-key"
+```
+
+Precedence (last writer wins):
+
+1. Client-provided `content-type` (only when the request has a body).
+2. `accept: text/event-stream` (only for streaming requests).
+3. Client-provided `x-request-id`.
+4. Route `request_headers` values, in the order declared in the
+   config file. These override any same-name header from the steps
+   above.
+5. The backend `api_key` sent as `Authorization: Bearer <key>`. This
+   wins over a route `request_headers.authorization` value, so the
+   upstream always receives a single, unambiguous auth header.
+
+Header names are validated at config load; an invalid name causes
+config load to fail. Header values are also validated at config load
+in current versions; a value that is not a legal HTTP header value
+fails fast with a clear error naming the route and offending value.
+
+`request_headers` is hot-reloadable. Changing the value and saving
+the config file causes the new headers to take effect on the next
+request without restarting onair.
 
 ## Exposing backend errors
 

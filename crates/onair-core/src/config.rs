@@ -1319,10 +1319,16 @@ fn validate_request_headers(
     headers: &BTreeMap<String, String>,
     route_key: &RouteKey,
 ) -> Result<()> {
-    for name in headers.keys() {
+    for (name, value) in headers {
         axum::http::HeaderName::from_str(name).map_err(|_| {
             Error::Config(ConfigError::Message(format!(
                 "route '{}' has invalid HTTP header name '{name}'",
+                format_route_key(route_key),
+            )))
+        })?;
+        axum::http::HeaderValue::from_str(value).map_err(|_| {
+            Error::Config(ConfigError::Message(format!(
+                "route '{}' has invalid HTTP header value for '{name}'",
                 format_route_key(route_key),
             )))
         })?;
@@ -3479,6 +3485,44 @@ mod tests {
         assert!(
             error.contains("invalid header!"),
             "error should mention the offending name: {error}"
+        );
+    }
+
+    #[test]
+    fn request_headers_rejects_invalid_header_value() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+
+            [route.request_headers]
+            x-custom = "bad\nvalue"
+            "#,
+        )
+        .unwrap();
+
+        let error = resolve_error(file);
+        assert!(
+            error.contains("invalid HTTP header value"),
+            "expected invalid header value error, got: {error}"
+        );
+        assert!(
+            error.contains("x-custom"),
+            "error should mention the offending header name: {error}"
         );
     }
 
