@@ -875,37 +875,46 @@ fn prepare_outbound(
         .request(method.clone(), upstream_url)
         .timeout(context.route.timeout);
 
-    if !outbound_body.is_empty() {
+    let body_is_empty = outbound_body.is_empty();
+    if !body_is_empty {
         upstream_request = upstream_request.body(outbound_body);
-        if let Some(content_type) = context
+    }
+
+    // Build upstream headers with explicit override precedence:
+    // 1. client content-type (if body present)
+    // 2. accept: text/event-stream (if streaming)
+    // 3. x-request-id from client
+    // 4. route.request_headers (overrides any of the above)
+    // 5. route.api_key Authorization (final override)
+    let mut upstream_headers = HeaderMap::new();
+    if !body_is_empty
+        && let Some(content_type) = context
             .client_headers
             .get(CONTENT_TYPE)
             .and_then(valid_header_value)
             .cloned()
-        {
-            upstream_request = upstream_request.header(CONTENT_TYPE, content_type);
-        }
+    {
+        upstream_headers.insert(CONTENT_TYPE, content_type);
     }
     if stream {
-        upstream_request = upstream_request.header(ACCEPT, "text/event-stream");
+        upstream_headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
     }
-    // Apply route-level request_headers with override semantics.
-    // These override any same-name client-provided header (e.g.
-    // content-type, accept, x-request-id) but authorization from
-    // api_key is applied afterwards and always wins.
+    if let Some(client_request_id) = client_request_id(context.client_headers) {
+        upstream_headers.insert(X_REQUEST_ID, client_request_id);
+    }
     for (name, value) in &context.route.request_headers {
         if let Ok(header_name) = HeaderName::from_bytes(name.as_bytes())
             && let Ok(header_value) = HeaderValue::from_str(value)
         {
-            upstream_request = upstream_request.header(header_name, header_value);
+            upstream_headers.insert(header_name, header_value);
         }
     }
-    if let Some(api_key) = &context.route.api_key {
-        upstream_request = upstream_request.header(AUTHORIZATION, format!("Bearer {api_key}"));
+    if let Some(api_key) = &context.route.api_key
+        && let Ok(value) = HeaderValue::from_str(&format!("Bearer {api_key}"))
+    {
+        upstream_headers.insert(AUTHORIZATION, value);
     }
-    if let Some(client_request_id) = client_request_id(context.client_headers) {
-        upstream_request = upstream_request.header(X_REQUEST_ID, client_request_id);
-    }
+    upstream_request = upstream_request.headers(upstream_headers);
 
     attempt_record
         .mark_backend_forward_start(context.timeline.mark(TimelineEvent::BackendForwardStart));

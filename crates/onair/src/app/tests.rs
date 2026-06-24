@@ -3228,7 +3228,7 @@ impl TestBackend {
 
 #[derive(Clone)]
 struct HeaderCaptureState {
-    requests: Arc<Mutex<Vec<(Value, BTreeMap<String, String>)>>>,
+    requests: Arc<Mutex<Vec<(Value, BTreeMap<String, Vec<String>>)>>>,
 }
 
 struct HeaderCaptureBackend {
@@ -3268,7 +3268,29 @@ impl HeaderCaptureBackend {
     }
 
     fn captured_requests(&self) -> Vec<(Value, BTreeMap<String, String>)> {
-        self.state.requests.lock().unwrap().clone()
+        self.state
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(body, headers)| {
+                let flattened: BTreeMap<String, String> = headers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.last().cloned().unwrap_or_default()))
+                    .collect();
+                (body.clone(), flattened)
+            })
+            .collect()
+    }
+
+    fn captured_request_header_counts(&self) -> Vec<BTreeMap<String, usize>> {
+        self.state
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, headers)| headers.iter().map(|(k, v)| (k.clone(), v.len())).collect())
+            .collect()
     }
 
     fn abort(self) {
@@ -3281,18 +3303,21 @@ async fn header_capture_chat_completions(
     headers: axum::http::HeaderMap,
     Json(payload): Json<Value>,
 ) -> Response<Body> {
-    let captured_headers: BTreeMap<String, String> = headers
-        .iter()
-        .filter(|(k, _)| {
-            *k != axum::http::header::HOST
-                && *k != axum::http::header::TRANSFER_ENCODING
-                && *k != axum::http::header::CONTENT_LENGTH
-        })
-        .filter_map(|(k, v)| {
-            let val = v.to_str().ok()?.to_owned();
-            Some((k.as_str().to_owned(), val))
-        })
-        .collect();
+    let mut captured_headers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (k, v) in headers.iter() {
+        if *k == axum::http::header::HOST
+            || *k == axum::http::header::TRANSFER_ENCODING
+            || *k == axum::http::header::CONTENT_LENGTH
+        {
+            continue;
+        }
+        if let Ok(val) = v.to_str() {
+            captured_headers
+                .entry(k.as_str().to_owned())
+                .or_default()
+                .push(val.to_owned());
+        }
+    }
     state
         .requests
         .lock()
@@ -3390,8 +3415,47 @@ fn request_headers_override_endpoint(id: &str, base_url: String) -> TestEndpoint
             extra_body: BTreeMap::new(),
             request_headers: {
                 let mut m = BTreeMap::new();
-                // Override the client's content-type.
-                m.insert("x-client-override".to_owned(), "from-route".to_owned());
+                // Override the client's x-request-id.
+                m.insert("x-request-id".to_owned(), "route-req-id".to_owned());
+                m
+            },
+            expose_backend_errors: false,
+        },
+    }
+}
+
+fn request_headers_api_key_endpoint(id: &str, base_url: String, api_key: &str) -> TestEndpoint {
+    TestEndpoint {
+        backend: ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: Some(api_key.to_owned()),
+            timeout: std::time::Duration::from_secs(5),
+            supports: btree_set(["chat", "streaming"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            extra_body: BTreeMap::new(),
+            expose_backend_errors: false,
+        },
+        route: ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["chat"]),
+            context_length: ContextLengthSpec::None,
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: id.to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            }],
+            extra_body: BTreeMap::new(),
+            request_headers: {
+                let mut m = BTreeMap::new();
+                m.insert("authorization".to_owned(), "Bearer route-token".to_owned());
                 m
             },
             expose_backend_errors: false,
@@ -3450,6 +3514,61 @@ async fn request_headers_overrides_client_header() {
     let app = router(state);
 
     let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(AUTHORIZATION, format!("Bearer {CLIENT_KEY}"))
+                .header(CONTENT_TYPE, "application/json")
+                .header("x-request-id", "client-req-id")
+                .extension(ConnectInfo(
+                    "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(
+                    json!({
+                        "model": PUBLIC_MODEL,
+                        "messages": [{"role": "user", "content": "hi"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let captured = backend.captured_requests();
+    assert_eq!(captured.len(), 1);
+    let headers = &captured[0].1;
+    assert_eq!(
+        headers.get("x-request-id").map(String::as_str),
+        Some("route-req-id"),
+        "route.request_headers should override client-provided x-request-id"
+    );
+    let counts = backend.captured_request_header_counts();
+    assert_eq!(
+        counts[0].get("x-request-id"),
+        Some(&1),
+        "overridden header must be sent exactly once"
+    );
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn request_headers_api_key_takes_precedence() {
+    let backend = HeaderCaptureBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![request_headers_api_key_endpoint(
+            "backend-a",
+            backend.base_url(),
+            "backend-token",
+        )],
+    );
+    let app = router(state);
+
+    let response = app
         .oneshot(json_request(
             "/v1/chat/completions",
             json!({
@@ -3465,9 +3584,15 @@ async fn request_headers_overrides_client_header() {
     assert_eq!(captured.len(), 1);
     let headers = &captured[0].1;
     assert_eq!(
-        headers.get("x-client-override").map(String::as_str),
-        Some("from-route"),
-        "route.request_headers should override client-provided same-name header"
+        headers.get("authorization").map(String::as_str),
+        Some("Bearer backend-token"),
+        "route.api_key should override route.request_headers authorization"
+    );
+    let counts = backend.captured_request_header_counts();
+    assert_eq!(
+        counts[0].get("authorization"),
+        Some(&1),
+        "authorization header must be sent exactly once"
     );
 
     backend.abort();
