@@ -5,6 +5,17 @@
 //! safe to embed in a filesystem path, JSON key, or
 //! developer-facing log line.
 
+/// Maximum segment length for filesystem-safe storage paths (directory
+/// names, capture ids).  160 codepoints keeps the total name well under
+/// POSIX `NAME_MAX` (255) even after a timestamp-sequence prefix is
+/// prepended.
+pub const STORAGE_SEGMENT_MAX_CHARS: usize = 160;
+
+/// Maximum segment length for display/JSON/SQLite fields such as
+/// inspector text.  512 codepoints is generous enough for logging while
+/// staying well within SQLite and JSON string limits.
+pub const DISPLAY_SEGMENT_MAX_CHARS: usize = 512;
+
 /// Project a free-form string into the shape that is safe to embed
 /// in a storage path, filename, or log line: keep ASCII
 /// alphanumerics and `-` `_` `.` verbatim, replace any other
@@ -67,5 +78,35 @@ mod tests {
     #[test]
     fn sanitize_returns_none_for_all_dropped_input() {
         assert!(sanitize_for_storage("\x00\x07", 80).is_none());
+    }
+
+    #[test]
+    fn storage_segment_cap_is_160() {
+        let long = "a".repeat(200);
+        let result = sanitize_for_storage(&long, STORAGE_SEGMENT_MAX_CHARS).unwrap();
+        assert_eq!(result.len(), 160);
+    }
+
+    #[test]
+    fn display_segment_cap_is_512() {
+        let long = "b".repeat(600);
+        let result = sanitize_for_storage(&long, DISPLAY_SEGMENT_MAX_CHARS).unwrap();
+        assert_eq!(result.len(), 512);
+    }
+
+    #[test]
+    fn capture_id_stays_under_name_max() {
+        // Build a capture id similar to debug_capture::capture_id:
+        //   "{timestamp}-{pid}-{seq}-{sanitized_request_id}"
+        let request_id = "r".repeat(400);
+        let sanitized = sanitize_for_storage(&request_id, STORAGE_SEGMENT_MAX_CHARS).unwrap();
+        let prefix = format!("1234567890123-12345-1-");
+        let capture_id = format!("{prefix}{sanitized}");
+        // NAME_MAX is 255 on POSIX; the full dir name must stay under that.
+        assert!(
+            capture_id.len() <= 200,
+            "capture id len {} exceeds bound",
+            capture_id.len()
+        );
     }
 }

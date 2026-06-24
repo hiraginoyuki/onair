@@ -14,7 +14,7 @@ use tracing::warn;
 use crate::metrics::MetricLabels;
 use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
 use onair_core::openai::UsageDiagnostics;
-use onair_core::sanitize_for_storage;
+use onair_core::sanitize::{STORAGE_SEGMENT_MAX_CHARS, sanitize_for_storage};
 
 const INBOUND_BODY_FILE: &str = "inbound.body";
 const UPSTREAM_BODY_FILE: &str = "upstream.body";
@@ -322,7 +322,9 @@ fn create_capture(
 fn capture_id(captured_at_unix_ms: u128, request_id: Option<&str>) -> String {
     let sequence = CAPTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut id = format!("{captured_at_unix_ms}-{}-{sequence}", std::process::id());
-    if let Some(request_id) = request_id.and_then(|value| sanitize_for_storage(value, 80)) {
+    if let Some(request_id) =
+        request_id.and_then(|value| sanitize_for_storage(value, STORAGE_SEGMENT_MAX_CHARS))
+    {
         id.push('-');
         id.push_str(&request_id);
     }

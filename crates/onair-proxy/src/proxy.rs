@@ -54,8 +54,8 @@ use self::upstream::{
     upstream_error_kind, upstream_path, upstream_url,
 };
 use onair_core::error::map_upstream_status;
+use onair_core::sanitize::DISPLAY_SEGMENT_MAX_CHARS;
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
-const MAX_INSPECTOR_TEXT_CHARS: usize = 512;
 
 pub(super) fn client_request_id(headers: &HeaderMap) -> Option<HeaderValue> {
     headers
@@ -754,7 +754,7 @@ fn inspector_text(value: &str) -> String {
                 character
             }
         })
-        .take(MAX_INSPECTOR_TEXT_CHARS)
+        .take(DISPLAY_SEGMENT_MAX_CHARS)
         .collect()
 }
 

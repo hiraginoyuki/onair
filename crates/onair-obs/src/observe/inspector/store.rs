@@ -10,7 +10,7 @@ use tracing::error;
 
 use onair_core::config::InspectorConfig;
 use onair_core::error::Result;
-use onair_core::sanitize_for_storage;
+use onair_core::sanitize::{DISPLAY_SEGMENT_MAX_CHARS, sanitize_for_storage};
 
 use super::records::{InspectorOutcome, InspectorRequestRecord};
 use crate::observe::inspector_persistence::{InspectorPersistenceWriter, restore_records};
@@ -262,8 +262,8 @@ impl InspectorStore {
     pub fn next_record_id(started_at_unix_ms: u64, client_request_id: Option<&str>) -> String {
         let sequence = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut record_id = format!("{started_at_unix_ms}-{}-{sequence}", std::process::id());
-        if let Some(client_request_id) =
-            client_request_id.and_then(|value| sanitize_for_storage(value, 80))
+        if let Some(client_request_id) = client_request_id
+            .and_then(|value| sanitize_for_storage(value, DISPLAY_SEGMENT_MAX_CHARS))
         {
             record_id.push('-');
             record_id.push_str(&client_request_id);
