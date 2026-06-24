@@ -889,6 +889,17 @@ fn prepare_outbound(
     if stream {
         upstream_request = upstream_request.header(ACCEPT, "text/event-stream");
     }
+    // Apply route-level request_headers with override semantics.
+    // These override any same-name client-provided header (e.g.
+    // content-type, accept, x-request-id) but authorization from
+    // api_key is applied afterwards and always wins.
+    for (name, value) in &context.route.request_headers {
+        if let Ok(header_name) = HeaderName::from_bytes(name.as_bytes())
+            && let Ok(header_value) = HeaderValue::from_str(value)
+        {
+            upstream_request = upstream_request.header(header_name, header_value);
+        }
+    }
     if let Some(api_key) = &context.route.api_key {
         upstream_request = upstream_request.header(AUTHORIZATION, format!("Bearer {api_key}"));
     }

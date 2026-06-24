@@ -146,6 +146,7 @@ fn extra_body_test_endpoint(id: &str, base_url: String) -> TestEndpoint {
             m.insert("stream".to_owned(), onair_core::TomlValue::Boolean(true));
             m
         },
+        request_headers: BTreeMap::new(),
         expose_backend_errors: false,
     };
     TestEndpoint { backend, route }
@@ -192,6 +193,7 @@ fn extra_body_backend_endpoint(id: &str, base_url: String) -> TestEndpoint {
         }],
         // Route has no extra_body, so it inherits the backend's.
         extra_body: backend_extra,
+        request_headers: BTreeMap::new(),
         expose_backend_errors: false,
     };
     TestEndpoint { backend, route }
@@ -2302,6 +2304,7 @@ async fn models_respect_context_length_output_policy() {
                     backend_model: BACKEND_MODEL.to_owned(),
                 }],
                 extra_body: BTreeMap::new(),
+                request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
             },
             ResolvedRoute {
@@ -2317,6 +2320,7 @@ async fn models_respect_context_length_output_policy() {
                     backend_model: "backend-no-context".to_owned(),
                 }],
                 extra_body: BTreeMap::new(),
+                request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
             },
         ],
@@ -2415,6 +2419,7 @@ async fn upstream_context_size_is_forwarded_to_v1_models() {
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
             extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
             expose_backend_errors: false,
         }],
         btree_set([PUBLIC_MODEL]),
@@ -2485,6 +2490,7 @@ async fn upstream_context_size_is_forwarded_to_props() {
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
             extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
             expose_backend_errors: false,
         }],
         btree_set([PUBLIC_MODEL]),
@@ -2550,6 +2556,7 @@ async fn upstream_unreachable_hides_value() {
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
             extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
             expose_backend_errors: false,
         }],
         btree_set([PUBLIC_MODEL]),
@@ -2616,6 +2623,7 @@ async fn operator_models_reports_upstream_source() {
                     backend_model: BACKEND_MODEL.to_owned(),
                 }],
                 extra_body: BTreeMap::new(),
+                request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
             },
         }],
@@ -2865,6 +2873,7 @@ fn test_backend(id: &str, base_url: String) -> TestEndpoint {
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
             extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
             expose_backend_errors: false,
         },
     }
@@ -2899,6 +2908,7 @@ fn test_chat_backend(id: &str, base_url: String) -> TestEndpoint {
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
             extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
             expose_backend_errors: false,
         },
     }
@@ -2939,6 +2949,7 @@ fn expose_backend_errors_endpoint(
                 backend_model: BACKEND_MODEL.to_owned(),
             }],
             extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
             expose_backend_errors: resolved_route_value,
         },
     }
@@ -3211,6 +3222,346 @@ impl TestBackend {
     fn abort(self) {
         self.handle.abort();
     }
+}
+
+// --- Header-capturing backend for request_headers integration tests ---
+
+#[derive(Clone)]
+struct HeaderCaptureState {
+    requests: Arc<Mutex<Vec<(Value, BTreeMap<String, String>)>>>,
+}
+
+struct HeaderCaptureBackend {
+    address: SocketAddr,
+    state: HeaderCaptureState,
+    handle: JoinHandle<()>,
+}
+
+impl HeaderCaptureBackend {
+    async fn spawn(name: &str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let state = HeaderCaptureState {
+            requests: Arc::new(Mutex::new(Vec::new())),
+        };
+        let state_clone = state.clone();
+        let app = Router::new()
+            .route("/v1/models", get(backend_models))
+            .route(
+                "/v1/chat/completions",
+                post(header_capture_chat_completions),
+            )
+            .with_state((name.to_owned(), state_clone));
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        Self {
+            address,
+            state,
+            handle,
+        }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.address)
+    }
+
+    fn captured_requests(&self) -> Vec<(Value, BTreeMap<String, String>)> {
+        self.state.requests.lock().unwrap().clone()
+    }
+
+    fn abort(self) {
+        self.handle.abort();
+    }
+}
+
+async fn header_capture_chat_completions(
+    State((name, state)): State<(String, HeaderCaptureState)>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<Value>,
+) -> Response<Body> {
+    let captured_headers: BTreeMap<String, String> = headers
+        .iter()
+        .filter(|(k, _)| {
+            *k != axum::http::header::HOST
+                && *k != axum::http::header::TRANSFER_ENCODING
+                && *k != axum::http::header::CONTENT_LENGTH
+        })
+        .filter_map(|(k, v)| {
+            let val = v.to_str().ok()?.to_owned();
+            Some((k.as_str().to_owned(), val))
+        })
+        .collect();
+    state
+        .requests
+        .lock()
+        .unwrap()
+        .push((payload.clone(), captured_headers));
+
+    let response = json!({
+        "id": format!("chatcmpl_{name}"),
+        "object": "chat.completion",
+        "created": 123,
+        "model": payload["model"],
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "ok"},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(response.to_string()))
+        .unwrap()
+}
+
+fn request_headers_endpoint(id: &str, base_url: String) -> TestEndpoint {
+    TestEndpoint {
+        backend: ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            supports: btree_set(["chat", "streaming"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            extra_body: BTreeMap::new(),
+            expose_backend_errors: false,
+        },
+        route: ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["chat"]),
+            context_length: ContextLengthSpec::None,
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: id.to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            }],
+            extra_body: BTreeMap::new(),
+            request_headers: {
+                let mut m = BTreeMap::new();
+                m.insert("x-route-header".to_owned(), "from-route".to_owned());
+                m.insert("x-another-header".to_owned(), "another-value".to_owned());
+                m
+            },
+            expose_backend_errors: false,
+        },
+    }
+}
+
+fn request_headers_override_endpoint(id: &str, base_url: String) -> TestEndpoint {
+    TestEndpoint {
+        backend: ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            supports: btree_set(["chat", "streaming"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            extra_body: BTreeMap::new(),
+            expose_backend_errors: false,
+        },
+        route: ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["chat"]),
+            context_length: ContextLengthSpec::None,
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: id.to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            }],
+            extra_body: BTreeMap::new(),
+            request_headers: {
+                let mut m = BTreeMap::new();
+                // Override the client's content-type.
+                m.insert("x-client-override".to_owned(), "from-route".to_owned());
+                m
+            },
+            expose_backend_errors: false,
+        },
+    }
+}
+
+#[tokio::test]
+async fn request_headers_injects_into_upstream_request() {
+    let backend = HeaderCaptureBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![request_headers_endpoint("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let captured = backend.captured_requests();
+    assert_eq!(captured.len(), 1);
+    let headers = &captured[0].1;
+    assert_eq!(
+        headers.get("x-route-header").map(String::as_str),
+        Some("from-route"),
+        "x-route-header should be injected from route.request_headers"
+    );
+    assert_eq!(
+        headers.get("x-another-header").map(String::as_str),
+        Some("another-value"),
+        "x-another-header should be injected from route.request_headers"
+    );
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn request_headers_overrides_client_header() {
+    let backend = HeaderCaptureBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![request_headers_override_endpoint(
+            "backend-a",
+            backend.base_url(),
+        )],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let captured = backend.captured_requests();
+    assert_eq!(captured.len(), 1);
+    let headers = &captured[0].1;
+    assert_eq!(
+        headers.get("x-client-override").map(String::as_str),
+        Some("from-route"),
+        "route.request_headers should override client-provided same-name header"
+    );
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn request_headers_hot_reload() {
+    let backend = HeaderCaptureBackend::spawn("backend-a").await;
+    let toml_v1 = format!(
+        r#"
+        [access]
+        default_models = ["{PUBLIC_MODEL}"]
+
+        [[client]]
+        id = "dev"
+        api_key = "{CLIENT_KEY}"
+
+        [[backend]]
+        id = "backend-a"
+        base_url = "{base_url}"
+        supports = ["chat", "streaming"]
+
+        [[route]]
+        public = "{PUBLIC_MODEL}"
+        expose = ["chat"]
+        backends = ["{BACKEND_MODEL}@backend-a"]
+
+        [route.request_headers]
+        x-config-version = "v1"
+        "#,
+        base_url = backend.base_url()
+    );
+    let path = env::temp_dir().join(format!(
+        "onair-request-headers-reload-{}-{}.toml",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(&path, &toml_v1).unwrap();
+    let config = Config::load(&path).unwrap();
+    let state = Arc::new(AppState::new(config, Metrics::new(), watch::channel(false).0).unwrap());
+    let app = router(state.clone());
+
+    // First request: should see x-config-version = v1
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let captured = backend.captured_requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0].1.get("x-config-version").map(String::as_str),
+        Some("v1"),
+        "first request should use v1 config"
+    );
+
+    // Reload config with updated request_headers
+    let toml_v2 = toml_v1.replace("x-config-version = \"v1\"", "x-config-version = \"v2\"");
+    std::fs::write(&path, &toml_v2).unwrap();
+    let new_config = Config::load(&path).unwrap();
+    state.config.replace(new_config);
+
+    // Second request: should see x-config-version = v2
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let captured = backend.captured_requests();
+    assert_eq!(captured.len(), 2);
+    assert_eq!(
+        captured[1].1.get("x-config-version").map(String::as_str),
+        Some("v2"),
+        "after hot reload, request should use v2 config"
+    );
+
+    let _ = std::fs::remove_file(&path);
+    backend.abort();
 }
 
 struct RedirectBackend {

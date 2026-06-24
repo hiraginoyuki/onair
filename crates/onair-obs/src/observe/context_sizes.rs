@@ -335,6 +335,7 @@ mod tests {
                         backend_model: "shared-a".to_owned(),
                     }],
                     extra_body: BTreeMap::new(),
+                    request_headers: BTreeMap::new(),
                     expose_backend_errors: false,
                 },
                 ResolvedRoute {
@@ -354,6 +355,7 @@ mod tests {
                         backend_model: "shared-b".to_owned(),
                     }],
                     extra_body: BTreeMap::new(),
+                    request_headers: BTreeMap::new(),
                     expose_backend_errors: false,
                 },
             ],

@@ -36,6 +36,9 @@ pub struct SelectedRoute {
     /// Per-route upstream request body overrides, merged on top of
     /// the bound backend's defaults. See `docs/configuration.md`.
     pub extra_body: BTreeMap<String, onair_core::TomlValue>,
+    /// Per-route extra headers injected into the upstream request
+    /// with override semantics. See `docs/configuration.md`.
+    pub request_headers: BTreeMap<String, String>,
     /// Resolved per-route value: forward non-2xx upstream
     /// responses (status mapped via `map_upstream_status`, body
     /// capped at 1 MiB, strict header allowlist) to the client
@@ -344,6 +347,7 @@ impl<'a> BackendSelector<'a> {
             None => "none".to_owned(),
         };
         let extra_body = route.map(|r| r.extra_body.clone()).unwrap_or_default();
+        let request_headers = route.map(|r| r.request_headers.clone()).unwrap_or_default();
         let expose_backend_errors = route.map(|r| r.expose_backend_errors).unwrap_or(false);
         SelectedRoute {
             backend_id: backend.id.clone(),
@@ -360,6 +364,7 @@ impl<'a> BackendSelector<'a> {
             weight: backend.weight,
             route_key_label,
             extra_body,
+            request_headers,
             expose_backend_errors,
         }
     }
@@ -1480,6 +1485,7 @@ mod tests {
                 })
                 .collect(),
             extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
             expose_backend_errors: false,
         }
     }

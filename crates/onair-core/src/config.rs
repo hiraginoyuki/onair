@@ -3,6 +3,7 @@ use std::env;
 use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -523,6 +524,13 @@ pub struct RouteConfig {
     /// `docs/configuration.md` and `docs/security.md`.
     #[serde(default)]
     pub expose_backend_errors: Option<bool>,
+    /// Extra headers injected into the upstream request for this
+    /// route, with override semantics: later entries and
+    /// `[[route]].request_headers` win over client-provided
+    /// same-name headers, but `authorization` from `api_key`
+    /// always takes final precedence.
+    #[serde(default)]
+    pub request_headers: BTreeMap<String, String>,
 }
 
 impl RouteConfig {
@@ -628,6 +636,9 @@ pub struct ResolvedRoute {
     /// reads this resolved bool to decide whether to forward
     /// non-2xx upstream bodies.
     pub expose_backend_errors: bool,
+    /// Per-route extra headers injected into the upstream request
+    /// with override semantics. See `docs/configuration.md`.
+    pub request_headers: BTreeMap<String, String>,
 }
 
 impl Config {
@@ -749,6 +760,7 @@ fn resolve_routes(
         let extra_body = merge_extra_body(&bindings, backends, &route_config.extra_body);
         let expose_backend_errors =
             resolve_expose_backend_errors(route_config.expose_backend_errors, &bindings, backends);
+        let request_headers = route_config.request_headers.clone();
         resolved_routes.push(ResolvedRoute {
             key: key.clone(),
             expose,
@@ -760,6 +772,7 @@ fn resolve_routes(
             backends: bindings,
             extra_body,
             expose_backend_errors,
+            request_headers,
         });
     }
     Ok(resolved_routes)
@@ -836,6 +849,7 @@ fn validate_routes(
             MarkerKind::Endpoint,
             &format!("route '{}'", format_route_key(&key)),
         )?;
+        validate_request_headers(&route_config.request_headers, &key)?;
         validated.push((key, route_config.clone()));
     }
     Ok(validated)
@@ -1297,6 +1311,21 @@ fn validate_markers(
                 ))));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_request_headers(
+    headers: &BTreeMap<String, String>,
+    route_key: &RouteKey,
+) -> Result<()> {
+    for name in headers.keys() {
+        axum::http::HeaderName::from_str(name).map_err(|_| {
+            Error::Config(ConfigError::Message(format!(
+                "route '{}' has invalid HTTP header name '{name}'",
+                format_route_key(route_key),
+            )))
+        })?;
     }
     Ok(())
 }
@@ -3353,5 +3382,144 @@ mod tests {
             .iter()
             .find(|route| matches!(&route.key, RouteKey::Public(name) if name == public))
             .unwrap_or_else(|| panic!("no route with public={public}"))
+    }
+
+    #[test]
+    fn request_headers_defaults_to_empty_when_omitted() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        let route = route_by_public(&config, "public-model");
+        assert!(route.request_headers.is_empty());
+    }
+
+    #[test]
+    fn request_headers_resolves_from_config() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+
+            [route.request_headers]
+            x-custom = "value1"
+            x-another = "value2"
+            "#,
+        );
+
+        let route = route_by_public(&config, "public-model");
+        assert_eq!(route.request_headers.len(), 2);
+        assert_eq!(route.request_headers.get("x-custom").unwrap(), "value1");
+        assert_eq!(route.request_headers.get("x-another").unwrap(), "value2");
+    }
+
+    #[test]
+    fn request_headers_rejects_invalid_header_name() {
+        let file: ConfigFile = toml::from_str(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+
+            [route.request_headers]
+            "invalid header!" = "value"
+            "#,
+        )
+        .unwrap();
+
+        let error = resolve_error(file);
+        assert!(
+            error.contains("invalid HTTP header name"),
+            "expected invalid header name error, got: {error}"
+        );
+        assert!(
+            error.contains("invalid header!"),
+            "error should mention the offending name: {error}"
+        );
+    }
+
+    #[test]
+    fn request_headers_accepts_valid_header_names() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+
+            [route.request_headers]
+            x-custom-id = "abc"
+            authorization = "Bearer test"
+            content-type = "application/json"
+            "#,
+        );
+
+        let route = route_by_public(&config, "public-model");
+        assert_eq!(route.request_headers.len(), 3);
+        assert_eq!(route.request_headers.get("x-custom-id").unwrap(), "abc");
+        assert_eq!(
+            route.request_headers.get("authorization").unwrap(),
+            "Bearer test"
+        );
+        assert_eq!(
+            route.request_headers.get("content-type").unwrap(),
+            "application/json"
+        );
     }
 }
