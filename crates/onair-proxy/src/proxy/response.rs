@@ -10,7 +10,7 @@ use tracing::{debug, warn};
 
 use onair_core::config::DebugCaptureConfig;
 use onair_core::error::ApiError;
-use onair_core::openai::{self, SseNormalizer, UsageDiagnostics, UsageTotals};
+use onair_core::openai::{self, SseStrategy, UsageDiagnostics, UsageTotals};
 use onair_obs::metrics::MetricLabels;
 use onair_obs::observe::debug_capture::{CaptureOutcome, RequestCapture};
 use onair_obs::observe::{
@@ -332,25 +332,12 @@ pub(super) fn streaming_response(
         let mut chunks = upstream.bytes_stream();
 
         if normalize_sse {
-            let mut normalizer = match request_mode {
-                openai::RequestMode::ResponsesViaChatCompletions => {
-                    EitherNormalizer::Responses(openai::ResponsesSseNormalizer::new(backend_model, public_model))
-                }
-                openai::RequestMode::ChatCompletionsViaResponses => {
-                    EitherNormalizer::ChatCompletions(openai::ChatCompletionsSseNormalizer::new_with_usage_visibility(
-                        backend_model,
-                        public_model,
-                        emit_usage_to_client,
-                    ))
-                }
-                openai::RequestMode::Native => {
-                    EitherNormalizer::Native(SseNormalizer::new_with_usage_visibility(
-                        backend_model,
-                        public_model,
-                        emit_usage_to_client,
-                    ))
-                }
-            };
+            let mut strategy = SseStrategy::new(
+                request_mode,
+                backend_model,
+                public_model,
+                emit_usage_to_client,
+            );
             while let Some(chunk) = next_stream_chunk(&mut chunks, &mut shutdown).await {
                 let chunk = match chunk {
                     Ok(chunk) => chunk,
@@ -362,20 +349,20 @@ pub(super) fn streaming_response(
                     }
                 };
                 stream_metrics.mark_body_chunk();
-                let normalized = normalizer.push(&chunk);
+                let normalized = strategy.push(&chunk);
                 if !normalized.is_empty() {
-                    stream_metrics.add_usage(normalizer.usage());
-                    stream_metrics.add_usage_diagnostics(normalizer.diagnostics());
-                    normalizer.clear_usage();
-                    normalizer.clear_diagnostics();
+                    stream_metrics.add_usage(strategy.usage());
+                    stream_metrics.add_usage_diagnostics(strategy.diagnostics());
+                    strategy.clear_usage();
+                    strategy.clear_diagnostics();
                     yield Bytes::from(normalized);
                 }
             }
             stream_metrics.mark_body_complete();
-            let tail = normalizer.finish();
+            let tail = strategy.finish();
             if !tail.is_empty() {
-                stream_metrics.add_usage(normalizer.usage());
-                stream_metrics.add_usage_diagnostics(normalizer.diagnostics());
+                stream_metrics.add_usage(strategy.usage());
+                stream_metrics.add_usage_diagnostics(strategy.diagnostics());
                 yield Bytes::from(tail);
             }
         } else {
@@ -406,64 +393,6 @@ pub(super) fn streaming_response(
     )
     .body(Body::from_stream(stream))
     .expect("stream response builder is valid")
-}
-
-enum EitherNormalizer {
-    Native(SseNormalizer),
-    Responses(openai::ResponsesSseNormalizer),
-    ChatCompletions(openai::ChatCompletionsSseNormalizer),
-}
-
-impl EitherNormalizer {
-    fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
-        match self {
-            Self::Native(normalizer) => normalizer.push(chunk),
-            Self::Responses(normalizer) => normalizer.push(chunk),
-            Self::ChatCompletions(normalizer) => normalizer.push(chunk),
-        }
-    }
-
-    fn finish(&mut self) -> Vec<u8> {
-        match self {
-            Self::Native(normalizer) => normalizer.finish(),
-            Self::Responses(normalizer) => normalizer.finish(),
-            Self::ChatCompletions(normalizer) => normalizer.finish(),
-        }
-    }
-
-    fn usage(&self) -> UsageTotals {
-        match self {
-            Self::Native(normalizer) => normalizer.usage,
-            Self::Responses(normalizer) => normalizer.usage,
-            Self::ChatCompletions(normalizer) => normalizer.usage,
-        }
-    }
-
-    fn diagnostics(&self) -> UsageDiagnostics {
-        match self {
-            Self::Native(normalizer) => normalizer.diagnostics.clone(),
-            Self::Responses(normalizer) => normalizer.diagnostics.clone(),
-            Self::ChatCompletions(normalizer) => normalizer.diagnostics.clone(),
-        }
-    }
-
-    fn clear_usage(&mut self) {
-        match self {
-            Self::Native(normalizer) => normalizer.usage = UsageTotals::default(),
-            Self::Responses(normalizer) => normalizer.usage = UsageTotals::default(),
-            Self::ChatCompletions(normalizer) => normalizer.usage = UsageTotals::default(),
-        }
-    }
-
-    fn clear_diagnostics(&mut self) {
-        match self {
-            Self::Native(normalizer) => normalizer.diagnostics = UsageDiagnostics::default(),
-            Self::Responses(normalizer) => normalizer.diagnostics = UsageDiagnostics::default(),
-            Self::ChatCompletions(normalizer) => {
-                normalizer.diagnostics = UsageDiagnostics::default()
-            }
-        }
-    }
 }
 
 struct StreamMetrics {

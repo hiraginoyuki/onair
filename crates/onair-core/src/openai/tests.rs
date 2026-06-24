@@ -2142,3 +2142,248 @@ fn extra_body_merges_into_chat_to_responses_compat_path() {
     assert_eq!(json["model"], "backend-model");
     assert_eq!(json["metadata"]["user_id"], "u-1");
 }
+
+// ---------------------------------------------------------------------------
+// SseStrategy regression tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sse_strategy_native_passthrough_matches_sse_normalizer() {
+    let mut direct = SseNormalizer::new_with_usage_visibility(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        true,
+    );
+    let mut strategy = SseStrategy::new(
+        RequestMode::Native,
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        true,
+    );
+
+    let chunk = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": "backend-model",
+        "choices": [{"delta": {"content": "hello"}, "finish_reason": null}]
+    });
+    let input = format!("data: {chunk}\n\n");
+
+    let out_direct = direct.push(input.as_bytes());
+    let out_strategy = strategy.push(input.as_bytes());
+
+    assert_eq!(out_direct, out_strategy);
+    assert_eq!(direct.usage, strategy.usage());
+    assert_eq!(
+        direct.diagnostics.usage_object_count,
+        strategy.diagnostics().usage_object_count
+    );
+}
+
+#[test]
+fn sse_strategy_responses_to_chat_matches_responses_normalizer() {
+    let mut direct = ResponsesSseNormalizer::new(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+    );
+    let mut strategy = SseStrategy::new(
+        RequestMode::ResponsesViaChatCompletions,
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        false,
+    );
+
+    let chunk = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": "backend-model",
+        "choices": [{"delta": {"content": "hello"}, "finish_reason": null}]
+    });
+    let input = format!("data: {chunk}\n\n");
+
+    let mut out_direct = direct.push(input.as_bytes());
+    out_direct.extend(direct.push(b"data: [DONE]\n\n"));
+    let mut out_strategy = strategy.push(input.as_bytes());
+    out_strategy.extend(strategy.push(b"data: [DONE]\n\n"));
+
+    assert_eq!(out_direct, out_strategy);
+    assert_eq!(direct.usage, strategy.usage());
+}
+
+#[test]
+fn sse_strategy_chat_to_responses_matches_chat_completions_normalizer() {
+    let mut direct = ChatCompletionsSseNormalizer::new_with_usage_visibility(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        true,
+    );
+    let mut strategy = SseStrategy::new(
+        RequestMode::ChatCompletionsViaResponses,
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        true,
+    );
+
+    let created = json!({
+        "type": "response.created",
+        "response": {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 123,
+            "model": "backend-model"
+        }
+    });
+    let delta = json!({
+        "type": "response.output_text.delta",
+        "delta": "hello"
+    });
+
+    let mut out_direct =
+        direct.push(format!("event: response.created\ndata: {created}\n\n").as_bytes());
+    out_direct.extend(direct.push(format!("data: {delta}\n\n").as_bytes()));
+    out_direct.extend(direct.finish());
+
+    let mut out_strategy =
+        strategy.push(format!("event: response.created\ndata: {created}\n\n").as_bytes());
+    out_strategy.extend(strategy.push(format!("data: {delta}\n\n").as_bytes()));
+    out_strategy.extend(strategy.finish());
+
+    assert_eq!(out_direct, out_strategy);
+    assert_eq!(direct.usage, strategy.usage());
+}
+
+#[test]
+fn sse_strategy_usage_gating_filters_usage_chunk() {
+    // emit_usage_to_client = false → usage-only chunks should be stripped
+    let mut strategy = SseStrategy::new(
+        RequestMode::Native,
+        None,
+        Some("public-model".to_owned()),
+        false,
+    );
+    let mut direct = SseNormalizer::new_with_usage_visibility(None, None, false);
+
+    let usage_chunk = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "model": "public-model",
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 6,
+            "prompt_tokens_details": {"cached_tokens": 1},
+            "completion_tokens": 2,
+            "total_tokens": 8
+        }
+    });
+    let input = format!("data: {usage_chunk}\n\n");
+
+    let out_direct = direct.push(input.as_bytes());
+    let out_strategy = strategy.push(input.as_bytes());
+
+    assert_eq!(out_direct, out_strategy);
+    assert!(!String::from_utf8_lossy(&out_strategy).contains("\"usage\""));
+    assert_eq!(direct.usage, strategy.usage());
+}
+
+#[test]
+fn sse_strategy_finish_emits_closing_events() {
+    // Each variant should emit closing events on finish()
+    // --- Native ---
+    let mut native = SseStrategy::new(
+        RequestMode::Native,
+        None,
+        Some("public-model".to_owned()),
+        true,
+    );
+    let tail_native = native.finish();
+    // Native finish is a no-op (empty) when there is no pending data.
+    assert!(tail_native.is_empty());
+
+    // --- Responses ---
+    // Use finish_reason: null so the response is NOT completed during push();
+    // finish() must emit the response.completed closure.
+    let mut responses = SseStrategy::new(
+        RequestMode::ResponsesViaChatCompletions,
+        None,
+        Some("public-model".to_owned()),
+        false,
+    );
+    let chunk = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": "backend-model",
+        "choices": [{"delta": {"content": "hi"}, "finish_reason": null}]
+    });
+    responses.push(format!("data: {chunk}\n\n").as_bytes());
+    let tail_responses = responses.finish();
+    let tail_str = String::from_utf8_lossy(&tail_responses);
+    assert!(
+        tail_str.contains("event: response.completed"),
+        "Responses finish must emit response.completed, got: {tail_str}"
+    );
+
+    // --- ChatCompletions ---
+    let mut chat = SseStrategy::new(
+        RequestMode::ChatCompletionsViaResponses,
+        None,
+        Some("public-model".to_owned()),
+        true,
+    );
+    let created = json!({
+        "type": "response.created",
+        "response": {
+            "id": "resp_1",
+            "created_at": 123,
+            "model": "public-model"
+        }
+    });
+    let delta = json!({
+        "type": "response.output_text.delta",
+        "delta": "hello"
+    });
+    chat.push(format!("data: {created}\n\n").as_bytes());
+    chat.push(format!("data: {delta}\n\n").as_bytes());
+    let tail_chat = chat.finish();
+    let tail_str = String::from_utf8_lossy(&tail_chat);
+    assert!(
+        tail_str.contains("\"finish_reason\":\"stop\""),
+        "ChatCompletions finish must emit finish_reason, got: {tail_str}"
+    );
+    assert!(
+        tail_str.contains("data: [DONE]"),
+        "ChatCompletions finish must emit [DONE], got: {tail_str}"
+    );
+}
+
+#[test]
+fn sse_strategy_clear_usage_and_diagnostics_resets_counters() {
+    let mut strategy = SseStrategy::new(
+        RequestMode::Native,
+        None,
+        Some("public-model".to_owned()),
+        true,
+    );
+
+    let chunk = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "model": "public-model",
+        "choices": [],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
+    });
+    strategy.push(format!("data: {chunk}\n\n").as_bytes());
+
+    assert!(strategy.usage().input > 0);
+    assert!(strategy.diagnostics().usage_object_count > 0);
+
+    strategy.clear_usage();
+    strategy.clear_diagnostics();
+
+    assert_eq!(strategy.usage().input, 0);
+    assert_eq!(strategy.usage().output, 0);
+    assert_eq!(strategy.usage().total, 0);
+    assert_eq!(strategy.diagnostics().usage_object_count, 0);
+}

@@ -17,8 +17,9 @@ pub use request::{
 
 pub(crate) use response::is_json_content_type;
 pub use response::{
-    ChatCompletionsSseNormalizer, ResponsesSseNormalizer, SseNormalizer, UsageDiagnostics,
-    UsageTotals, is_event_stream_content_type, rewrite_response_body, rewrite_response_models,
+    ChatCompletionsSseNormalizer, ResponsesSseNormalizer, SseNormalizer, SseStrategy,
+    UsageDiagnostics, UsageTotals, is_event_stream_content_type, rewrite_response_body,
+    rewrite_response_models,
 };
 
 #[cfg(test)]

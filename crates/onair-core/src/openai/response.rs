@@ -413,7 +413,7 @@ fn message_id_from_response(response_id: &str, index: usize) -> String {
     format!("msg_{response_id}_{index}")
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct UsageTotals {
     pub input: u64,
     pub cached_input: u64,
@@ -1777,6 +1777,108 @@ fn sse_data(data: Value) -> Vec<u8> {
     output.extend_from_slice(&data);
     output.extend_from_slice(b"\n\n");
     output
+}
+
+/// Unified dispatch enum that wraps the three SSE normalizers behind a
+/// uniform `push` / `finish` / `usage` / `diagnostics` API.
+///
+/// Call [`SseStrategy::new`] with the routing parameters to obtain the
+/// correct variant; then delegate `push` and `finish` for every upstream
+/// chunk.  The caller reads `usage()` / `diagnostics()` after each
+/// `push` and resets them via `clear_usage()` / `clear_diagnostics()`.
+#[derive(Debug)]
+pub enum SseStrategy {
+    /// Native passthrough — no protocol conversion.
+    Native(SseNormalizer),
+    /// Responses backend → Chat Completions client.
+    Responses(ResponsesSseNormalizer),
+    /// Chat Completions backend → Responses client.
+    ChatCompletions(ChatCompletionsSseNormalizer),
+}
+
+impl SseStrategy {
+    /// Build the right normalizer variant for the given routing
+    /// parameters.
+    pub fn new(
+        request_mode: RequestMode,
+        backend_model: Option<String>,
+        public_model: Option<String>,
+        emit_usage_to_client: bool,
+    ) -> Self {
+        match request_mode {
+            RequestMode::ResponsesViaChatCompletions => {
+                Self::Responses(ResponsesSseNormalizer::new(backend_model, public_model))
+            }
+            RequestMode::ChatCompletionsViaResponses => {
+                Self::ChatCompletions(ChatCompletionsSseNormalizer::new_with_usage_visibility(
+                    backend_model,
+                    public_model,
+                    emit_usage_to_client,
+                ))
+            }
+            RequestMode::Native => Self::Native(SseNormalizer::new_with_usage_visibility(
+                backend_model,
+                public_model,
+                emit_usage_to_client,
+            )),
+        }
+    }
+
+    /// Feed a raw upstream chunk through the normalizer.
+    pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
+        match self {
+            Self::Native(normalizer) => normalizer.push(chunk),
+            Self::Responses(normalizer) => normalizer.push(chunk),
+            Self::ChatCompletions(normalizer) => normalizer.push(chunk),
+        }
+    }
+
+    /// Flush any remaining buffered state and emit closing events.
+    pub fn finish(&mut self) -> Vec<u8> {
+        match self {
+            Self::Native(normalizer) => normalizer.finish(),
+            Self::Responses(normalizer) => normalizer.finish(),
+            Self::ChatCompletions(normalizer) => normalizer.finish(),
+        }
+    }
+
+    /// Accumulated usage counters observed so far.
+    pub fn usage(&self) -> UsageTotals {
+        match self {
+            Self::Native(normalizer) => normalizer.usage,
+            Self::Responses(normalizer) => normalizer.usage,
+            Self::ChatCompletions(normalizer) => normalizer.usage,
+        }
+    }
+
+    /// Accumulated diagnostic metadata observed so far.
+    pub fn diagnostics(&self) -> UsageDiagnostics {
+        match self {
+            Self::Native(normalizer) => normalizer.diagnostics.clone(),
+            Self::Responses(normalizer) => normalizer.diagnostics.clone(),
+            Self::ChatCompletions(normalizer) => normalizer.diagnostics.clone(),
+        }
+    }
+
+    /// Reset the usage counters to zero.
+    pub fn clear_usage(&mut self) {
+        match self {
+            Self::Native(normalizer) => normalizer.usage = UsageTotals::default(),
+            Self::Responses(normalizer) => normalizer.usage = UsageTotals::default(),
+            Self::ChatCompletions(normalizer) => normalizer.usage = UsageTotals::default(),
+        }
+    }
+
+    /// Reset the diagnostics to the default.
+    pub fn clear_diagnostics(&mut self) {
+        match self {
+            Self::Native(normalizer) => normalizer.diagnostics = UsageDiagnostics::default(),
+            Self::Responses(normalizer) => normalizer.diagnostics = UsageDiagnostics::default(),
+            Self::ChatCompletions(normalizer) => {
+                normalizer.diagnostics = UsageDiagnostics::default()
+            }
+        }
+    }
 }
 
 fn sse_event(event: &str, data: Value) -> Vec<u8> {
