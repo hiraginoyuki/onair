@@ -99,6 +99,111 @@ Security guidance:
 
 See [security.md](security.md) for the privacy boundary around debug capture.
 
+## Streaming Debug Capture
+
+`stream_capture` is an opt-in layer on top of `[debug_capture]` that records
+every event on every side of the proxy for a streaming response with per-event
+microsecond timestamps. It is the diagnostic for "what did the upstream
+actually stream back, and what did onair emit to the client, and when" — the
+question that pre-stream `inbound.body` / `upstream.body` snapshots cannot
+answer.
+
+```toml
+[[backend]]
+id = "minimax-io"
+base_url = "https://api.minimax.io"
+api_key = "..."
+supports = ["chat", "responses_via_chat_completions"]
+
+# Per-backend default; routes can override.
+stream_capture = false
+
+[[route]]
+public = "gpt-5.5"
+backends = ["minimax-io"]
+
+# Per-route opt-in for streaming capture.
+stream_capture = true
+
+[debug_capture]
+enabled = true
+mode = "failures"
+directory = "onair-debug-captures"
+```
+
+Resolution: the route's `stream_capture` (if `Some`) wins; otherwise the bound
+backend's value is inherited, matching the `expose_backend_errors` and
+`extra_body` precedence rules. Default is `false` for both, matching the
+privacy-target posture.
+
+When `stream_capture = true` and the request is streamed, onair writes two
+NDJSON files per capture directory in addition to the existing files:
+
+- `<capture-dir>/<request-id>/upstream_response.ndjson` — one JSON object per
+  line, recording:
+  - `kind: "header"` with `name` (e.g. `:status`, `content-type`) and `value`
+  - `kind: "body_chunk"` with `bytes` (raw byte count) and `data` (UTF-8 lossy
+    of the chunk; replacement characters for invalid UTF-8)
+  - `kind: "done"` once the upstream stream completes
+  - `kind: "error"` if a chunk read fails (with `error_kind` from
+    `upstream_error_kind`)
+- `<capture-dir>/<request-id>/client_response.ndjson` — same shape, but
+  recorded after onair's `SseStrategy` normalization so the events reflect
+  what onair actually sent to the client. SSE frames are parsed: each
+  `kind: "sse"` event carries the original `event:` name and the joined
+  `data:` lines. Partial frames at chunk boundaries are buffered and
+  emitted on the next chunk.
+
+The hot path uses `try_send` against a bounded `mpsc` channel (256 events
+in flight); overflow increments `dropped_events` and sets `truncated = true`
+in the per-side summary. The writer task drains with a 500 ms default
+budget on completion; a future P4 size-cap policy will add retention.
+
+`metadata.json` adds:
+
+- `files.upstream_response = "upstream_response.ndjson"` (or absent)
+- `files.client_response = "client_response.ndjson"` (or absent)
+- `timings.upstream_response` and `timings.client_response`, each carrying:
+  - `started_at_unix_us`, `first_event_at_unix_us`, `completed_at_unix_us`
+  - `total_duration_us`
+  - `event_count`, `dropped_events`, `truncated`
+
+Both `timings` fields are absent for non-streaming responses or when
+`stream_capture` is disabled, so existing readers that ignore unknown fields
+keep working.
+
+Reading the captures during an incident:
+
+```sh
+# Find the capture directory for a failing request
+ls -lt onair-debug-captures/ | head
+
+# Walk upstream-side events chronologically; ts_us is monotonic per file
+jq -c '.' onair-debug-captures/1782449307393-17484-1/upstream_response.ndjson
+
+# Same for the client side
+jq -c '.' onair-debug-captures/1782449307393-17484-1/client_response.ndjson
+
+# Inspect timings + truncation flag
+jq .metadata.timings onair-debug-captures/1782449307393-17484-1/metadata.json
+```
+
+The motivating incident (Codex → onair → `MiniMax-M3`, three captures from
+PID 17484 returning upstream 400 `invalid_prompt`) had no NDJSON files
+because `stream_capture` was off; with the feature on, the next incident of
+that shape records every upstream chunk and every client-emitted SSE event
+with timestamps, so the operator can replay the wire without rerunning the
+request. See `.local/decisions/2026-06-27-streaming-debug-capture.md` for
+the durable rationale.
+
+Not in P1 (deferred):
+
+- `inbound_stream.ndjson` / `outbound_stream.ndjson` for streamed uploads
+  (rare today, common tomorrow). See
+  `.local/plans/streaming-debug-capture-plan.md` for P2.
+- Replay tooling that visualizes the timeline (P3).
+- Size-cap and retention policy (P4).
+
 ## Inspector
 
 `[inspector]` is a default-off, in-process request inspector for timing and
