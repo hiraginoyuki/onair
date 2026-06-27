@@ -16,9 +16,13 @@ use onair_core::config::{DebugCaptureConfig, DebugCaptureMode};
 use onair_core::openai::UsageDiagnostics;
 use onair_core::sanitize::{STORAGE_SEGMENT_MAX_CHARS, sanitize_for_storage};
 
+use super::stream_capture::{StreamCapture, StreamTimings};
+
 const INBOUND_BODY_FILE: &str = "inbound.body";
 const UPSTREAM_BODY_FILE: &str = "upstream.body";
 const UPSTREAM_ERROR_BODY_FILE: &str = "upstream_error.body";
+const UPSTREAM_RESPONSE_FILE: &str = "upstream_response.ndjson";
+const CLIENT_RESPONSE_FILE: &str = "client_response.ndjson";
 const METADATA_FILE: &str = "metadata.json";
 
 static CAPTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -109,6 +113,71 @@ impl RequestCapture {
         }
     }
 
+    /// Open a streaming capture for one side of the proxy
+    /// (`upstream_response` or `client_response`). Returns
+    /// `None` if the directory cannot be opened. The caller owns
+    /// the returned `StreamCapture` and is responsible for calling
+    /// `finish` to drain it. On finish, the proxy passes the
+    /// resulting `StreamTimings` and the NDJSON file path to
+    /// `record_stream_summary` so `metadata.json` can reference
+    /// them.
+    pub fn open_stream_capture(&self, side: &'static str) -> Option<StreamCapture> {
+        StreamCapture::new(&self.directory, side, None).ok()
+    }
+
+    /// Record that a streaming capture ran on this request. Adds
+    /// the NDJSON file reference and the per-side timings to
+    /// `metadata.json`. Idempotent for the same `side` (later calls
+    /// overwrite the earlier timings).
+    pub fn record_stream_summary(
+        &mut self,
+        side: &'static str,
+        file_path: &Path,
+        timings: &StreamTimings,
+    ) {
+        if side == "upstream_response" {
+            self.metadata.files.upstream_response = Some(UPSTREAM_RESPONSE_FILE);
+            self.metadata.timings.upstream_response = Some(StoredTimings {
+                file: UPSTREAM_RESPONSE_FILE.to_owned(),
+                started_at_unix_us: timings.started_at_unix_us,
+                first_event_at_unix_us: timings.first_event_at_unix_us,
+                completed_at_unix_us: timings.completed_at_unix_us,
+                total_duration_us: timings.total_duration_us,
+                event_count: timings.event_count,
+                dropped_events: timings.dropped_events,
+                truncated: timings.truncated,
+            });
+        } else if side == "client_response" {
+            self.metadata.files.client_response = Some(CLIENT_RESPONSE_FILE);
+            self.metadata.timings.client_response = Some(StoredTimings {
+                file: CLIENT_RESPONSE_FILE.to_owned(),
+                started_at_unix_us: timings.started_at_unix_us,
+                first_event_at_unix_us: timings.first_event_at_unix_us,
+                completed_at_unix_us: timings.completed_at_unix_us,
+                total_duration_us: timings.total_duration_us,
+                event_count: timings.event_count,
+                dropped_events: timings.dropped_events,
+                truncated: timings.truncated,
+            });
+        } else {
+            warn!(
+                capture_id = %self.metadata.id,
+                side,
+                path = %file_path.display(),
+                "record_stream_summary called with unknown side; ignoring"
+            );
+            return;
+        }
+        if let Err(error) = self.write_metadata() {
+            warn!(
+                capture_id = %self.metadata.id,
+                directory = %self.directory.display(),
+                ?error,
+                "failed to update debug capture stream summary metadata"
+            );
+        }
+    }
+
     fn write_upstream_error_response(
         &mut self,
         upstream_status: StatusCode,
@@ -170,7 +239,19 @@ struct CaptureMetadata {
     upstream_error_body_truncated: Option<bool>,
     stream_usage: UsageDiagnostics,
     files: CaptureFiles,
+    /// Streaming capture summary, populated by
+    /// `RequestCapture::record_stream_summary` when `stream_capture`
+    /// is enabled for the request. Default-omitted in JSON so
+    /// non-streaming captures do not grow.
+    #[serde(default, skip_serializing_if = "CaptureTimings::is_empty")]
+    timings: CaptureTimings,
     outcome: CaptureOutcome,
+}
+
+impl CaptureTimings {
+    fn is_empty(&self) -> bool {
+        self.upstream_response.is_none() && self.client_response.is_none()
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -179,6 +260,44 @@ struct CaptureFiles {
     upstream_body: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     upstream_error_body: Option<&'static str>,
+    /// NDJSON file path for the per-event upstream response
+    /// stream capture (only present when `stream_capture` was
+    /// enabled for this request). See
+    /// `.local/decisions/2026-06-27-streaming-debug-capture.md`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upstream_response: Option<&'static str>,
+    /// NDJSON file path for the per-event client response stream
+    /// capture (only present when `stream_capture` was enabled).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_response: Option<&'static str>,
+}
+
+/// Per-side streaming capture summary, written into `metadata.json`
+/// when `record_stream_summary` is called. Holds only the
+/// summary; the events themselves live in the NDJSON file
+/// referenced by `file`.
+#[derive(Clone, Serialize)]
+struct StoredTimings {
+    file: String,
+    started_at_unix_us: u64,
+    first_event_at_unix_us: Option<u64>,
+    completed_at_unix_us: Option<u64>,
+    total_duration_us: u64,
+    event_count: u64,
+    dropped_events: u64,
+    truncated: bool,
+}
+
+/// Combined streaming-capture summary in `metadata.json`. Each
+/// field is set when the corresponding side's `StreamCapture`
+/// finishes. Both are absent for non-streaming requests or when
+/// `stream_capture` was disabled.
+#[derive(Clone, Serialize, Default)]
+struct CaptureTimings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upstream_response: Option<StoredTimings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_response: Option<StoredTimings>,
 }
 
 #[derive(Clone, Serialize)]
@@ -308,7 +427,10 @@ fn create_capture(
             inbound_body: INBOUND_BODY_FILE,
             upstream_body: UPSTREAM_BODY_FILE,
             upstream_error_body: None,
+            upstream_response: None,
+            client_response: None,
         },
+        timings: CaptureTimings::default(),
         outcome: CaptureOutcome::SentToUpstream,
     };
     let capture = RequestCapture {
