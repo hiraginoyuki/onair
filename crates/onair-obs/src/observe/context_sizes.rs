@@ -316,6 +316,7 @@ mod tests {
                 weight: 1,
                 extra_body: BTreeMap::new(),
                 expose_backend_errors: false,
+                stream_capture: false,
             }],
             routes: vec![
                 ResolvedRoute {
@@ -337,6 +338,7 @@ mod tests {
                     extra_body: BTreeMap::new(),
                     request_headers: BTreeMap::new(),
                     expose_backend_errors: false,
+                    stream_capture: false,
                 },
                 ResolvedRoute {
                     key: RouteKey::Public("shared".to_owned()),
@@ -357,6 +359,7 @@ mod tests {
                     extra_body: BTreeMap::new(),
                     request_headers: BTreeMap::new(),
                     expose_backend_errors: false,
+                    stream_capture: false,
                 },
             ],
         };

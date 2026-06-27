@@ -432,6 +432,16 @@ pub struct BackendConfig {
     /// `docs/configuration.md` and `docs/security.md`. Per-route
     /// `expose_backend_errors = true|false` overrides this default.
     pub expose_backend_errors: bool,
+    /// When `true`, streaming responses to and from this backend
+    /// are recorded per-event to `upstream_response.ndjson` and
+    /// `client_response.ndjson` in the debug capture directory,
+    /// with `timings.json` summarising TTFB, totals, and
+    /// truncation. Default `false`. Per-route
+    /// `stream_capture = true|false` overrides this default. The
+    /// feature inherits `debug_capture.mode` (failures-only by
+    /// default) and never blocks the streaming hot path — see
+    /// `crates/onair-obs/src/observe/stream_capture.rs`.
+    pub stream_capture: bool,
 }
 
 impl Default for BackendConfig {
@@ -450,6 +460,7 @@ impl Default for BackendConfig {
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         }
     }
 }
@@ -524,6 +535,12 @@ pub struct RouteConfig {
     /// `docs/configuration.md` and `docs/security.md`.
     #[serde(default)]
     pub expose_backend_errors: Option<bool>,
+    /// Per-route override for `[[backend]].stream_capture`. Same
+    /// `Some(value)` wins, `None` inherits semantics as
+    /// `expose_backend_errors`. See
+    /// `.local/decisions/2026-06-27-streaming-debug-capture.md`.
+    #[serde(default)]
+    pub stream_capture: Option<bool>,
     /// Extra headers injected into the upstream request for this
     /// route, with override semantics: later entries and
     /// `[[route]].request_headers` win over client-provided
@@ -607,6 +624,10 @@ pub struct ResolvedBackend {
     /// Resolved at config load; routes override via
     /// `ResolvedRoute.expose_backend_errors`.
     pub expose_backend_errors: bool,
+    /// Resolved per-backend `stream_capture` default. Resolved at
+    /// config load; routes override via
+    /// `ResolvedRoute.stream_capture`.
+    pub stream_capture: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -636,6 +657,11 @@ pub struct ResolvedRoute {
     /// reads this resolved bool to decide whether to forward
     /// non-2xx upstream bodies.
     pub expose_backend_errors: bool,
+    /// Resolved per-route value: same `Some(value)` wins /
+    /// otherwise-inherits semantics as `expose_backend_errors`.
+    /// The proxy reads this to decide whether to record streaming
+    /// SSE events to disk.
+    pub stream_capture: bool,
     /// Per-route extra headers injected into the upstream request
     /// with override semantics. See `docs/configuration.md`.
     pub request_headers: BTreeMap<String, String>,
@@ -760,6 +786,8 @@ fn resolve_routes(
         let extra_body = merge_extra_body(&bindings, backends, &route_config.extra_body);
         let expose_backend_errors =
             resolve_expose_backend_errors(route_config.expose_backend_errors, &bindings, backends);
+        let stream_capture =
+            resolve_stream_capture(route_config.stream_capture, &bindings, backends);
         let request_headers = route_config.request_headers.clone();
         resolved_routes.push(ResolvedRoute {
             key: key.clone(),
@@ -772,6 +800,7 @@ fn resolve_routes(
             backends: bindings,
             extra_body,
             expose_backend_errors,
+            stream_capture,
             request_headers,
         });
     }
@@ -795,6 +824,25 @@ fn resolve_expose_backend_errors(
         .first()
         .and_then(|first| backends.iter().find(|b| b.id == first.backend_id))
         .map(|backend| backend.expose_backend_errors)
+        .unwrap_or(false)
+}
+
+/// Resolve a route's `stream_capture` value. Same precedence as
+/// `resolve_expose_backend_errors`: the route's `Some(value)` wins;
+/// otherwise the first binding's backend contributes its default;
+/// otherwise `false`.
+fn resolve_stream_capture(
+    route_value: Option<bool>,
+    bindings: &[RouteBackendBinding],
+    backends: &[ResolvedBackend],
+) -> bool {
+    if let Some(value) = route_value {
+        return value;
+    }
+    bindings
+        .first()
+        .and_then(|first| backends.iter().find(|b| b.id == first.backend_id))
+        .map(|backend| backend.stream_capture)
         .unwrap_or(false)
 }
 
@@ -1094,6 +1142,7 @@ fn resolve_backends(
             weight: backend.weight,
             extra_body: backend.extra_body,
             expose_backend_errors: backend.expose_backend_errors,
+            stream_capture: backend.stream_capture,
         });
     }
 

@@ -91,6 +91,10 @@ base_url = "http://127.0.0.1:8000"
 # upstream request body. Route-level extra_body overrides backend-level on key
 # conflict. See docs/configuration.md#upstream-request-body-overrides for the
 # protected-key list and merge rules.
+# Optional: stream_capture = true records per-event upstream_response.ndjson
+# and client_response.ndjson for streaming requests, with per-event ts_us and a
+# timings summary in metadata.json. Default false. See
+# docs/observability.md#streaming-debug-capture.
 supports = ["chat", "responses", "streaming"]
 timeout_ms = 120000
 
@@ -119,6 +123,11 @@ context_length = "upstream"
 # to the client (status mapped through ApiError::upstream, body capped at 1 MiB,
 # strict header allowlist). Default false. See
 # docs/configuration.md#exposing-backend-errors and docs/security.md.
+# Optional: stream_capture = true records per-event upstream_response.ndjson
+# and client_response.ndjson for streaming requests to this route, with
+# per-event ts_us and a timings summary in metadata.json. Default false
+# (route inherits the bound backend's value). See
+# docs/observability.md#streaming-debug-capture.
 # expose = ["chat", "responses", "tools"] # if this route supports function tools
 
 [[route]]

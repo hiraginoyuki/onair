@@ -121,6 +121,7 @@ fn extra_body_test_endpoint(id: &str, base_url: String) -> TestEndpoint {
         weight: 1,
         extra_body: BTreeMap::new(),
         expose_backend_errors: false,
+            stream_capture: false,
     };
 
     let route = ResolvedRoute {
@@ -148,6 +149,7 @@ fn extra_body_test_endpoint(id: &str, base_url: String) -> TestEndpoint {
         },
         request_headers: BTreeMap::new(),
         expose_backend_errors: false,
+            stream_capture: false,
     };
     TestEndpoint { backend, route }
 }
@@ -177,6 +179,7 @@ fn extra_body_backend_endpoint(id: &str, base_url: String) -> TestEndpoint {
         weight: 1,
         extra_body: backend_extra.clone(),
         expose_backend_errors: false,
+            stream_capture: false,
     };
 
     let route = ResolvedRoute {
@@ -195,6 +198,7 @@ fn extra_body_backend_endpoint(id: &str, base_url: String) -> TestEndpoint {
         extra_body: backend_extra,
         request_headers: BTreeMap::new(),
         expose_backend_errors: false,
+            stream_capture: false,
     };
     TestEndpoint { backend, route }
 }
@@ -2289,6 +2293,7 @@ async fn models_respect_context_length_output_policy() {
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         }],
         vec![
             ResolvedRoute {
@@ -2306,6 +2311,7 @@ async fn models_respect_context_length_output_policy() {
                 extra_body: BTreeMap::new(),
                 request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
+            stream_capture: false,
             },
             ResolvedRoute {
                 key: RouteKey::Public("gpt-no-context".to_owned()),
@@ -2322,6 +2328,7 @@ async fn models_respect_context_length_output_policy() {
                 extra_body: BTreeMap::new(),
                 request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
+            stream_capture: false,
             },
         ],
         btree_set([PUBLIC_MODEL, "gpt-no-context"]),
@@ -2401,6 +2408,7 @@ async fn upstream_context_size_is_forwarded_to_v1_models() {
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         }],
         vec![ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2421,6 +2429,7 @@ async fn upstream_context_size_is_forwarded_to_v1_models() {
             extra_body: BTreeMap::new(),
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         }],
         btree_set([PUBLIC_MODEL]),
     );
@@ -2472,6 +2481,7 @@ async fn upstream_context_size_is_forwarded_to_props() {
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         }],
         vec![ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2492,6 +2502,7 @@ async fn upstream_context_size_is_forwarded_to_props() {
             extra_body: BTreeMap::new(),
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         }],
         btree_set([PUBLIC_MODEL]),
     );
@@ -2538,6 +2549,7 @@ async fn upstream_unreachable_hides_value() {
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         }],
         vec![ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2558,6 +2570,7 @@ async fn upstream_unreachable_hides_value() {
             extra_body: BTreeMap::new(),
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         }],
         btree_set([PUBLIC_MODEL]),
     );
@@ -2605,6 +2618,7 @@ async fn operator_models_reports_upstream_source() {
                 weight: 1,
                 extra_body: BTreeMap::new(),
                 expose_backend_errors: false,
+            stream_capture: false,
             },
             route: ResolvedRoute {
                 key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2625,6 +2639,7 @@ async fn operator_models_reports_upstream_source() {
                 extra_body: BTreeMap::new(),
                 request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
+            stream_capture: false,
             },
         }],
         InspectorConfig {
@@ -2859,6 +2874,7 @@ fn test_backend(id: &str, base_url: String) -> TestEndpoint {
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         },
         route: ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2875,6 +2891,7 @@ fn test_backend(id: &str, base_url: String) -> TestEndpoint {
             extra_body: BTreeMap::new(),
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         },
     }
 }
@@ -2894,6 +2911,7 @@ fn test_chat_backend(id: &str, base_url: String) -> TestEndpoint {
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         },
         route: ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2910,6 +2928,7 @@ fn test_chat_backend(id: &str, base_url: String) -> TestEndpoint {
             extra_body: BTreeMap::new(),
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         },
     }
 }
@@ -2935,6 +2954,7 @@ fn expose_backend_errors_endpoint(
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: backend_default,
+            stream_capture: false,
         },
         route: ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2951,6 +2971,7 @@ fn expose_backend_errors_endpoint(
             extra_body: BTreeMap::new(),
             request_headers: BTreeMap::new(),
             expose_backend_errors: resolved_route_value,
+            stream_capture: false,
         },
     }
 }
@@ -3359,6 +3380,7 @@ fn request_headers_endpoint(id: &str, base_url: String) -> TestEndpoint {
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         },
         route: ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -3380,6 +3402,7 @@ fn request_headers_endpoint(id: &str, base_url: String) -> TestEndpoint {
                 m
             },
             expose_backend_errors: false,
+            stream_capture: false,
         },
     }
 }
@@ -3399,6 +3422,7 @@ fn request_headers_override_endpoint(id: &str, base_url: String) -> TestEndpoint
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         },
         route: ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -3420,6 +3444,7 @@ fn request_headers_override_endpoint(id: &str, base_url: String) -> TestEndpoint
                 m
             },
             expose_backend_errors: false,
+            stream_capture: false,
         },
     }
 }
@@ -3439,6 +3464,7 @@ fn request_headers_api_key_endpoint(id: &str, base_url: String, api_key: &str) -
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         },
         route: ResolvedRoute {
             key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -3459,6 +3485,7 @@ fn request_headers_api_key_endpoint(id: &str, base_url: String, api_key: &str) -
                 m
             },
             expose_backend_errors: false,
+            stream_capture: false,
         },
     }
 }

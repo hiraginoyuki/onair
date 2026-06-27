@@ -46,6 +46,11 @@ pub struct SelectedRoute {
     /// envelope. See `docs/configuration.md` and
     /// `docs/security.md`.
     pub expose_backend_errors: bool,
+    /// Resolved per-route value: record per-event SSE / chunk
+    /// captures for streaming responses to `upstream_response.ndjson`
+    /// and `client_response.ndjson` in the debug capture directory.
+    /// See `.local/decisions/2026-06-27-streaming-debug-capture.md`.
+    pub stream_capture: bool,
 }
 
 pub struct NonEmptyVec<T> {
@@ -349,6 +354,7 @@ impl<'a> BackendSelector<'a> {
         let extra_body = route.map(|r| r.extra_body.clone()).unwrap_or_default();
         let request_headers = route.map(|r| r.request_headers.clone()).unwrap_or_default();
         let expose_backend_errors = route.map(|r| r.expose_backend_errors).unwrap_or(false);
+        let stream_capture = route.map(|r| r.stream_capture).unwrap_or(false);
         SelectedRoute {
             backend_id: backend.id.clone(),
             base_url: backend.base_url.clone(),
@@ -366,6 +372,7 @@ impl<'a> BackendSelector<'a> {
             extra_body,
             request_headers,
             expose_backend_errors,
+            stream_capture,
         }
     }
 }
@@ -1445,6 +1452,7 @@ mod tests {
             weight: 1,
             extra_body: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         }
     }
 
@@ -1487,6 +1495,7 @@ mod tests {
             extra_body: BTreeMap::new(),
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
+            stream_capture: false,
         }
     }
 
