@@ -16,7 +16,7 @@ use onair_obs::observe::debug_capture::{CaptureOutcome, RequestCapture};
 use onair_obs::observe::{
     BackendHealthStore, ClientInfo, InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase,
     InspectorRequestRecord, InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts,
-    LiveRecord, RequestTimeline, TimelineEvent,
+    LiveRecord, RequestTimeline, StreamCapture, TimelineEvent,
 };
 
 use super::attempt::InspectorAttemptBuilder;
@@ -279,6 +279,40 @@ pub(super) fn streaming_response(
     live_record.update(|r| {
         r.timeline = timeline.snapshot();
     });
+
+    // Open streaming captures for both sides of the wire when the
+    // route opted in via `stream_capture = true` and the existing
+    // `debug_capture` succeeded. The handles are cheap to clone
+    // and live in the stream loop. They never block the hot path
+    // (try_send only); overflow marks `truncated = true` in the
+    // summary.
+    let stream_capture_enabled = route.stream_capture;
+    let upstream_stream_capture = if stream_capture_enabled {
+        debug_capture
+            .as_ref()
+            .and_then(|capture| capture.open_stream_capture("upstream_response"))
+    } else {
+        None
+    };
+    let client_stream_capture = if stream_capture_enabled {
+        debug_capture
+            .as_ref()
+            .and_then(|capture| capture.open_stream_capture("client_response"))
+    } else {
+        None
+    };
+    let upstream_stream_handle = upstream_stream_capture.as_ref().map(StreamCapture::handle);
+    let client_stream_handle = client_stream_capture.as_ref().map(StreamCapture::handle);
+
+    if let Some(handle) = &upstream_stream_handle {
+        handle.record_header(":status", upstream_status.as_str());
+        if let Some(ct) = content_type.as_deref() {
+            handle.record_header("content-type", ct);
+        }
+    }
+    if let Some(handle) = &client_stream_handle {
+        handle.record_header(":status", upstream_status.as_str());
+    }
     let stream_metrics = StreamMetrics::new(StreamMetricsInit {
         metrics: (*state.metrics).clone(),
         health_store: (*state.health).clone(),
@@ -303,6 +337,8 @@ pub(super) fn streaming_response(
         retried_attempts,
         current_attempt,
         live_record,
+        upstream_stream_capture,
+        client_stream_capture,
     });
     debug!(
         upstream_status = upstream_status.as_u16(),
@@ -330,6 +366,8 @@ pub(super) fn streaming_response(
     let stream = try_stream! {
         let mut stream_metrics = stream_metrics;
         let mut chunks = upstream.bytes_stream();
+        let upstream_handle = stream_metrics.upstream_stream_capture.as_ref().map(StreamCapture::handle);
+        let client_handle = stream_metrics.client_stream_capture.as_ref().map(StreamCapture::handle);
 
         if normalize_sse {
             let mut strategy = SseStrategy::new(
@@ -344,26 +382,48 @@ pub(super) fn streaming_response(
                     Err(error) => {
                         let error_kind = upstream_error_kind(&error);
                         stream_metrics.mark_stream_error(error_kind);
+                        if let Some(handle) = &upstream_handle {
+                            handle.record_error(
+                                "upstream stream chunk failed",
+                                Some(error_kind),
+                                None,
+                            );
+                        }
                         warn!(error_kind, "upstream stream chunk failed");
                         Err(error)?
                     }
                 };
                 stream_metrics.mark_body_chunk();
+                if let Some(handle) = &upstream_handle {
+                    handle.record_body_chunk(chunk.len(), &chunk);
+                }
                 let normalized = strategy.push(&chunk);
                 if !normalized.is_empty() {
                     stream_metrics.add_usage(strategy.usage());
                     stream_metrics.add_usage_diagnostics(strategy.diagnostics());
                     strategy.clear_usage();
                     strategy.clear_diagnostics();
+                    if let Some(handle) = &client_handle {
+                        handle.record_sse_frame(&normalized);
+                    }
                     yield Bytes::from(normalized);
                 }
             }
             stream_metrics.mark_body_complete();
+            if let Some(handle) = &upstream_handle {
+                handle.record_done();
+            }
             let tail = strategy.finish();
             if !tail.is_empty() {
                 stream_metrics.add_usage(strategy.usage());
                 stream_metrics.add_usage_diagnostics(strategy.diagnostics());
+                if let Some(handle) = &client_handle {
+                    handle.record_sse_frame(&tail);
+                }
                 yield Bytes::from(tail);
+            }
+            if let Some(handle) = &client_handle {
+                handle.record_done();
             }
         } else {
             while let Some(chunk) = next_stream_chunk(&mut chunks, &mut shutdown).await {
@@ -372,14 +432,33 @@ pub(super) fn streaming_response(
                     Err(error) => {
                         let error_kind = upstream_error_kind(&error);
                         stream_metrics.mark_stream_error(error_kind);
+                        if let Some(handle) = &upstream_handle {
+                            handle.record_error(
+                                "upstream stream chunk failed",
+                                Some(error_kind),
+                                None,
+                            );
+                        }
                         warn!(error_kind, "upstream stream chunk failed");
                         Err(error)?
                     }
                 };
                 stream_metrics.mark_body_chunk();
+                if let Some(handle) = &upstream_handle {
+                    handle.record_body_chunk(chunk.len(), &chunk);
+                }
+                if let Some(handle) = &client_handle {
+                    handle.record_body_chunk(chunk.len(), &chunk);
+                }
                 yield chunk;
             }
             stream_metrics.mark_body_complete();
+            if let Some(handle) = &upstream_handle {
+                handle.record_done();
+            }
+            if let Some(handle) = &client_handle {
+                handle.record_done();
+            }
         }
     }
     .map_err(|error: reqwest::Error| -> axum::BoxError { Box::new(error) });
@@ -424,6 +503,17 @@ struct StreamMetrics {
     body_complete: bool,
     stream_error_kind: Option<&'static str>,
     live_record: LiveRecord,
+    /// Owning side of the upstream-response stream capture. Held
+    /// until Drop so the writer task lives for the full stream
+    /// lifetime. `Option` because `stream_capture` is opt-in per
+    /// route and defaults off. The stream loop obtains its
+    /// handle via `StreamCapture::handle` borrowed from this
+    /// owner; on Drop the capture is finalized and its
+    /// `StreamTimings` is written into the parent
+    /// `RequestCapture`'s `metadata.json`.
+    upstream_stream_capture: Option<StreamCapture>,
+    /// Owning side of the client-response stream capture.
+    client_stream_capture: Option<StreamCapture>,
 }
 
 struct StreamMetricsInit {
@@ -450,6 +540,8 @@ struct StreamMetricsInit {
     retried_attempts: Vec<InspectorAttemptRecord>,
     current_attempt: Option<InspectorAttemptBuilder>,
     live_record: LiveRecord,
+    upstream_stream_capture: Option<StreamCapture>,
+    client_stream_capture: Option<StreamCapture>,
 }
 
 impl StreamMetrics {
@@ -483,6 +575,8 @@ impl StreamMetrics {
             body_complete: false,
             stream_error_kind: None,
             live_record: init.live_record,
+            upstream_stream_capture: init.upstream_stream_capture,
+            client_stream_capture: init.client_stream_capture,
         }
     }
 
@@ -609,6 +703,40 @@ impl Drop for StreamMetrics {
                 self.status_code.as_u16(),
             );
         }
+
+        // Finalize streaming captures and write per-side summaries
+        // back into the debug capture's metadata.json. The handles
+        // (taken by the stream loop) must already be dropped; if
+        // not, the channel stays open and `finish()` blocks until
+        // the writer's drain deadline expires. We `take()` here to
+        // avoid that race: the loop stored `Option<StreamCaptureHandle>`,
+        // and the loop scope ends before this Drop runs because the
+        // stream body returns and `StreamMetrics` is then dropped.
+        let upstream_timings = self
+            .upstream_stream_capture
+            .take()
+            .map(|capture| capture.finish());
+        let client_timings = self
+            .client_stream_capture
+            .take()
+            .map(|capture| capture.finish());
+        if let Some(capture) = &mut self.debug_capture {
+            if let Some(timings) = upstream_timings {
+                capture.record_stream_summary(
+                    "upstream_response",
+                    std::path::Path::new("upstream_response.ndjson"),
+                    &timings,
+                );
+            }
+            if let Some(timings) = client_timings {
+                capture.record_stream_summary(
+                    "client_response",
+                    std::path::Path::new("client_response.ndjson"),
+                    &timings,
+                );
+            }
+        }
+
         if let Some(capture) = &mut self.debug_capture {
             capture.record_stream_usage(self.usage_diagnostics.clone());
             let capture_outcome = match self.stream_error_kind {
