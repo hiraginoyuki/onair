@@ -1,5 +1,6 @@
 pub mod debug_capture;
 pub mod inspector;
+pub mod stream_capture;
 
 mod client_info;
 mod context_sizes;
@@ -18,4 +19,5 @@ pub use inspector::{
     InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts, LiveRecord,
 };
 pub use inspector_persistence::stored_count as inspector_persisted_count;
+pub use stream_capture::{StreamCapture, StreamCaptureHandle, StreamEvent, StreamTimings};
 pub use timeline::{RequestTimeline, TimelineEvent, TimelineSnapshot};
