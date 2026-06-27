@@ -121,7 +121,7 @@ fn extra_body_test_endpoint(id: &str, base_url: String) -> TestEndpoint {
         weight: 1,
         extra_body: BTreeMap::new(),
         expose_backend_errors: false,
-            stream_capture: false,
+        stream_capture: false,
     };
 
     let route = ResolvedRoute {
@@ -149,7 +149,7 @@ fn extra_body_test_endpoint(id: &str, base_url: String) -> TestEndpoint {
         },
         request_headers: BTreeMap::new(),
         expose_backend_errors: false,
-            stream_capture: false,
+        stream_capture: false,
     };
     TestEndpoint { backend, route }
 }
@@ -179,7 +179,7 @@ fn extra_body_backend_endpoint(id: &str, base_url: String) -> TestEndpoint {
         weight: 1,
         extra_body: backend_extra.clone(),
         expose_backend_errors: false,
-            stream_capture: false,
+        stream_capture: false,
     };
 
     let route = ResolvedRoute {
@@ -198,7 +198,7 @@ fn extra_body_backend_endpoint(id: &str, base_url: String) -> TestEndpoint {
         extra_body: backend_extra,
         request_headers: BTreeMap::new(),
         expose_backend_errors: false,
-            stream_capture: false,
+        stream_capture: false,
     };
     TestEndpoint { backend, route }
 }
@@ -2311,7 +2311,7 @@ async fn models_respect_context_length_output_policy() {
                 extra_body: BTreeMap::new(),
                 request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
-            stream_capture: false,
+                stream_capture: false,
             },
             ResolvedRoute {
                 key: RouteKey::Public("gpt-no-context".to_owned()),
@@ -2328,7 +2328,7 @@ async fn models_respect_context_length_output_policy() {
                 extra_body: BTreeMap::new(),
                 request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
-            stream_capture: false,
+                stream_capture: false,
             },
         ],
         btree_set([PUBLIC_MODEL, "gpt-no-context"]),
@@ -2618,7 +2618,7 @@ async fn operator_models_reports_upstream_source() {
                 weight: 1,
                 extra_body: BTreeMap::new(),
                 expose_backend_errors: false,
-            stream_capture: false,
+                stream_capture: false,
             },
             route: ResolvedRoute {
                 key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
@@ -2639,7 +2639,7 @@ async fn operator_models_reports_upstream_source() {
                 extra_body: BTreeMap::new(),
                 request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
-            stream_capture: false,
+                stream_capture: false,
             },
         }],
         InspectorConfig {
@@ -4777,4 +4777,237 @@ async fn models_request_unauthorized_for_models_outside_effective_whitelist() {
     let _ = DEFAULT_ONLY_MODEL;
     let _ = CLIENT_ONLY_MODEL;
     backend.abort();
+}
+#[tokio::test]
+async fn stream_capture_records_upstream_and_client_ndjson_with_monotonic_timestamps() {
+    // Enable streaming capture, run a streaming `/v1/responses`
+    // request, and verify both NDJSON files exist with strictly
+    // non-decreasing `ts_us` values and at least one body_chunk
+    // and one SSE event. Mirrors the plan's P1 integration test
+    // shape (`upstream_response_ndjson_records_sse_events_with_monotonic_timestamps`).
+    let backend = TestBackend::spawn_json_labeled_stream("backend-a").await;
+    let mut endpoint = test_backend("backend-a", backend.base_url());
+    endpoint.route.stream_capture = true;
+    let capture_dir = temp_capture_root("stream-capture-monotonic");
+    let debug_capture = DebugCaptureConfig {
+        enabled: true,
+        mode: DebugCaptureMode::All,
+        directory: capture_dir.clone(),
+    };
+    let state =
+        test_state_with_debug_capture(RoutingStrategy::Priority, vec![endpoint], debug_capture);
+    let app = router(state.clone());
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({
+                "model": PUBLIC_MODEL,
+                "input": "hello",
+                "stream": true
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let body = String::from_utf8(body_bytes.to_vec()).unwrap();
+    // The SSE stream was relayed to the client.
+    assert!(body.contains("event: response.created"), "body={body}");
+    assert!(
+        body.contains("event: response.output_text.delta"),
+        "body={body}"
+    );
+    assert!(body.contains("event: response.completed"), "body={body}");
+    // Give the streaming writer thread a moment to drain.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(state);
+
+    // The capture directory holds one subdirectory per captured
+    // request (named `{timestamp}-{pid}-{seq}`); find it.
+    let capture_subdir = std::fs::read_dir(&capture_dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .find(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .unwrap_or_else(|| panic!("no capture subdirectory in {}", capture_dir.display()))
+        .path();
+    let upstream_path = capture_subdir.join("upstream_response.ndjson");
+    let client_path = capture_subdir.join("client_response.ndjson");
+    let metadata_path = capture_subdir.join("metadata.json");
+
+    let upstream_lines: Vec<String> = std::fs::read_to_string(&upstream_path)
+        .unwrap_or_else(|error| panic!("upstream_response.ndjson missing: {error}"))
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let client_lines: Vec<String> = std::fs::read_to_string(&client_path)
+        .unwrap_or_else(|error| panic!("client_response.ndjson missing: {error}"))
+        .lines()
+        .map(str::to_owned)
+        .collect();
+
+    assert!(
+        upstream_lines.len() >= 3,
+        "expected ≥3 upstream lines, got {}: {upstream_lines:?}",
+        upstream_lines.len()
+    );
+    let mut upstream_ts = 0u64;
+    let mut saw_header = false;
+    let mut saw_body_chunk = false;
+    let mut saw_done = false;
+    for line in &upstream_lines {
+        let v: Value = serde_json::from_str(line).unwrap();
+        let ts = v["ts_us"].as_u64().unwrap();
+        assert!(
+            ts >= upstream_ts,
+            "upstream ts_us must be non-decreasing: {upstream_ts} -> {ts}"
+        );
+        upstream_ts = ts;
+        match v["kind"].as_str() {
+            Some("header") => saw_header = true,
+            Some("body_chunk") => saw_body_chunk = true,
+            Some("done") => saw_done = true,
+            _ => {}
+        }
+    }
+    assert!(saw_header, "expected a header event on upstream side");
+    assert!(
+        saw_body_chunk,
+        "expected a body_chunk event on upstream side"
+    );
+    assert!(saw_done, "expected a done event on upstream side");
+
+    let mut client_ts = 0u64;
+    let mut saw_client_sse = false;
+    let mut saw_client_done = false;
+    for line in &client_lines {
+        let v: Value = serde_json::from_str(line).unwrap();
+        let ts = v["ts_us"].as_u64().unwrap();
+        assert!(
+            ts >= client_ts,
+            "client ts_us must be non-decreasing: {client_ts} -> {ts}"
+        );
+        client_ts = ts;
+        match v["kind"].as_str() {
+            Some("sse") => saw_client_sse = true,
+            Some("done") => saw_client_done = true,
+            _ => {}
+        }
+    }
+    assert!(
+        saw_client_sse,
+        "expected at least one SSE event on client side"
+    );
+    assert!(saw_client_done, "expected done event on client side");
+
+    let metadata_text = std::fs::read_to_string(&metadata_path).unwrap();
+    let metadata: Value = serde_json::from_str(&metadata_text).unwrap();
+    assert_eq!(
+        metadata["files"]["upstream_response"],
+        "upstream_response.ndjson"
+    );
+    assert_eq!(
+        metadata["files"]["client_response"],
+        "client_response.ndjson"
+    );
+    let upstream_timings = &metadata["timings"]["upstream_response"];
+    let client_timings = &metadata["timings"]["client_response"];
+    assert!(
+        upstream_timings.is_object(),
+        "missing upstream timings: {metadata_text}"
+    );
+    assert!(
+        client_timings.is_object(),
+        "missing client timings: {metadata_text}"
+    );
+    assert!(upstream_timings["event_count"].as_u64().unwrap() > 0);
+    assert!(client_timings["event_count"].as_u64().unwrap() > 0);
+
+    let mut saw_named_event = false;
+    for line in &client_lines {
+        let v: Value = serde_json::from_str(line).unwrap();
+        if v["kind"] == "sse" && v["event"].is_string() {
+            saw_named_event = true;
+            break;
+        }
+    }
+    assert!(
+        saw_named_event,
+        "expected at least one sse event with a non-null event field on the client side"
+    );
+
+    backend.abort();
+    let _ = std::fs::remove_dir_all(&capture_dir);
+}
+
+#[tokio::test]
+async fn stream_capture_disabled_writes_no_ndjson_files() {
+    // When `stream_capture` is false (the default), no NDJSON
+    // files are written even though debug_capture is on. The
+    // debug_capture itself still runs and writes
+    // `inbound.body` / `upstream.body` / `metadata.json`.
+    let backend = TestBackend::spawn_json_labeled_stream("backend-a").await;
+    let endpoint = test_backend("backend-a", backend.base_url());
+    assert!(!endpoint.route.stream_capture);
+    let capture_dir = temp_capture_root("stream-capture-disabled");
+    let debug_capture = DebugCaptureConfig {
+        enabled: true,
+        mode: DebugCaptureMode::All,
+        directory: capture_dir.clone(),
+    };
+    let state =
+        test_state_with_debug_capture(RoutingStrategy::Priority, vec![endpoint], debug_capture);
+    let app = router(state.clone());
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/responses",
+            json!({
+                "model": PUBLIC_MODEL,
+                "input": "hello",
+                "stream": true
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    drop(state);
+
+    let subdir_entry = std::fs::read_dir(&capture_dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .find(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false));
+    let subdir = subdir_entry
+        .unwrap_or_else(|| panic!("debug_capture subdir missing: {}", capture_dir.display()))
+        .path();
+    assert!(
+        !subdir.join("upstream_response.ndjson").exists(),
+        "upstream_response.ndjson must not be written when stream_capture is disabled"
+    );
+    assert!(
+        !subdir.join("client_response.ndjson").exists(),
+        "client_response.ndjson must not be written when stream_capture is disabled"
+    );
+    let metadata_text = std::fs::read_to_string(subdir.join("metadata.json")).unwrap();
+    let metadata: Value = serde_json::from_str(&metadata_text).unwrap();
+    assert!(
+        metadata.get("timings").is_none() || metadata["timings"].is_null(),
+        "metadata.timings must be absent when stream_capture is disabled: {metadata_text}"
+    );
+
+    backend.abort();
+    let _ = std::fs::remove_dir_all(&capture_dir);
+}
+
+fn temp_capture_root(label: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "onair-app-stream-capture-{label}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
 }
