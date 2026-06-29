@@ -548,6 +548,10 @@ pub struct RouteConfig {
     /// always takes final precedence.
     #[serde(default)]
     pub request_headers: BTreeMap<String, String>,
+    /// Default `max_tokens` value injected when the client omits
+    /// `max_tokens` in an Anthropic Messages API request.
+    #[serde(default)]
+    pub anthropic_max_tokens: Option<u32>,
 }
 
 impl RouteConfig {
@@ -665,6 +669,11 @@ pub struct ResolvedRoute {
     /// Per-route extra headers injected into the upstream request
     /// with override semantics. See `docs/configuration.md`.
     pub request_headers: BTreeMap<String, String>,
+    /// Default `max_tokens` value injected when the client omits
+    /// `max_tokens` in an Anthropic Messages API request. If neither
+    /// the client nor the route provides a value, the request is
+    /// rejected with a missing-parameter error.
+    pub anthropic_max_tokens: Option<u32>,
 }
 
 impl Config {
@@ -789,6 +798,7 @@ fn resolve_routes(
         let stream_capture =
             resolve_stream_capture(route_config.stream_capture, &bindings, backends);
         let request_headers = route_config.request_headers.clone();
+        let anthropic_max_tokens = route_config.anthropic_max_tokens;
         resolved_routes.push(ResolvedRoute {
             key: key.clone(),
             expose,
@@ -802,6 +812,7 @@ fn resolve_routes(
             expose_backend_errors,
             stream_capture,
             request_headers,
+            anthropic_max_tokens,
         });
     }
     Ok(resolved_routes)
@@ -3614,5 +3625,40 @@ mod tests {
             route.request_headers.get("content-type").unwrap(),
             "application/json"
         );
+    }
+
+    #[test]
+    fn anthropic_max_tokens_parses_and_resolves() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model", "public-no-tokens"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["messages"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["messages"]
+            backends = ["private-model@backend-a"]
+            anthropic_max_tokens = 4096
+
+            [[route]]
+            public = "public-no-tokens"
+            expose = ["messages"]
+            backends = ["private-no-tokens@backend-a"]
+            "#,
+        );
+
+        let route_with = route_by_public(&config, "public-model");
+        assert_eq!(route_with.anthropic_max_tokens, Some(4096));
+        let route_without = route_by_public(&config, "public-no-tokens");
+        assert_eq!(route_without.anthropic_max_tokens, None);
     }
 }

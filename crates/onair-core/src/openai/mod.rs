@@ -1,3 +1,4 @@
+pub mod anthropic;
 pub mod models;
 pub mod paths;
 pub mod request;
@@ -11,15 +12,15 @@ pub use models::{
 
 pub use request::{
     RequestMode, RequestRewriteError, RequestRewritePolicies, RequestShape, RewriteParam,
-    inspect_request, rewrite_query_model, rewrite_request_body_for_mode_with_policies,
-    upstream_path_for_mode,
+    inspect_request, rewrite_anthropic_messages_request_body, rewrite_query_model,
+    rewrite_request_body_for_mode_with_policies, upstream_path_for_mode,
 };
 
 pub(crate) use response::is_json_content_type;
 pub use response::{
-    ChatCompletionsSseNormalizer, ResponsesSseNormalizer, SseNormalizer, SseStrategy,
-    UsageDiagnostics, UsageTotals, is_event_stream_content_type, rewrite_response_body,
-    rewrite_response_models,
+    AnthropicSseNormalizer, ChatCompletionsSseNormalizer, ResponsesSseNormalizer, SseNormalizer,
+    SseStrategy, UsageDiagnostics, UsageTotals, is_event_stream_content_type,
+    rewrite_anthropic_messages_response_body, rewrite_response_body, rewrite_response_models,
 };
 
 #[cfg(test)]

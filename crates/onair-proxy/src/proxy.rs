@@ -82,6 +82,14 @@ pub async fn proxy_v1(
     let request_timer = RequestTimer::start();
     let mut timeline = RequestTimeline::start();
     let path = uri.path().to_owned();
+    // Short-circuit unsupported sub-paths under /v1/messages.
+    // /v1/messages/count_tokens is not supported; return 404 early
+    // so app.rs can render it in Anthropic error format.
+    if path.trim_end_matches('/') == "/v1/messages/count_tokens" {
+        return Err(ApiError::not_found(
+            "The requested endpoint does not exist.",
+        ));
+    }
     let route_name = routing::path_metric_name(&path);
     let config = state.config.snapshot();
     let client_info =
@@ -820,6 +828,7 @@ fn prepare_outbound(
             responses_store: context.route.responses_store,
             responses_max_output_tokens: context.route.responses_max_output_tokens,
             chat_stream_usage: context.route.chat_stream_usage,
+            anthropic_max_tokens: context.route.anthropic_max_tokens,
         },
         &context.route.extra_body,
         &context.route.route_key_label,
@@ -914,6 +923,26 @@ fn prepare_outbound(
     {
         upstream_headers.insert(AUTHORIZATION, value);
     }
+
+    // For Anthropic native requests, forward the client's
+    // `anthropic-version` header if present, and inject the default
+    // when neither the client nor the route provided one.
+    if context.route.request_mode == openai::RequestMode::AnthropicMessagesNative {
+        if let Some(value) = context
+            .client_headers
+            .get("anthropic-version")
+            .and_then(valid_header_value)
+            .cloned()
+        {
+            upstream_headers.entry("anthropic-version").or_insert(value);
+        }
+        upstream_headers
+            .entry("anthropic-version")
+            .or_insert_with(|| {
+                HeaderValue::from_static(onair_core::openai::anthropic::ANTHROPIC_VERSION_DEFAULT)
+            });
+    }
+
     upstream_request = upstream_request.headers(upstream_headers);
 
     attempt_record

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::body::{Body, to_bytes};
+use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::{ConnectInfo, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, FORWARDED, LOCATION};
 use axum::http::{Request, StatusCode};
@@ -150,6 +150,7 @@ fn extra_body_test_endpoint(id: &str, base_url: String) -> TestEndpoint {
         request_headers: BTreeMap::new(),
         expose_backend_errors: false,
         stream_capture: false,
+        anthropic_max_tokens: None,
     };
     TestEndpoint { backend, route }
 }
@@ -199,6 +200,7 @@ fn extra_body_backend_endpoint(id: &str, base_url: String) -> TestEndpoint {
         request_headers: BTreeMap::new(),
         expose_backend_errors: false,
         stream_capture: false,
+        anthropic_max_tokens: None,
     };
     TestEndpoint { backend, route }
 }
@@ -2312,6 +2314,7 @@ async fn models_respect_context_length_output_policy() {
                 request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
                 stream_capture: false,
+                anthropic_max_tokens: None,
             },
             ResolvedRoute {
                 key: RouteKey::Public("gpt-no-context".to_owned()),
@@ -2329,6 +2332,7 @@ async fn models_respect_context_length_output_policy() {
                 request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
                 stream_capture: false,
+                anthropic_max_tokens: None,
             },
         ],
         btree_set([PUBLIC_MODEL, "gpt-no-context"]),
@@ -2430,6 +2434,7 @@ async fn upstream_context_size_is_forwarded_to_v1_models() {
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
             stream_capture: false,
+            anthropic_max_tokens: None,
         }],
         btree_set([PUBLIC_MODEL]),
     );
@@ -2503,6 +2508,7 @@ async fn upstream_context_size_is_forwarded_to_props() {
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
             stream_capture: false,
+            anthropic_max_tokens: None,
         }],
         btree_set([PUBLIC_MODEL]),
     );
@@ -2571,6 +2577,7 @@ async fn upstream_unreachable_hides_value() {
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
             stream_capture: false,
+            anthropic_max_tokens: None,
         }],
         btree_set([PUBLIC_MODEL]),
     );
@@ -2640,6 +2647,7 @@ async fn operator_models_reports_upstream_source() {
                 request_headers: BTreeMap::new(),
                 expose_backend_errors: false,
                 stream_capture: false,
+                anthropic_max_tokens: None,
             },
         }],
         InspectorConfig {
@@ -2892,6 +2900,7 @@ fn test_backend(id: &str, base_url: String) -> TestEndpoint {
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
             stream_capture: false,
+            anthropic_max_tokens: None,
         },
     }
 }
@@ -2929,6 +2938,83 @@ fn test_chat_backend(id: &str, base_url: String) -> TestEndpoint {
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
             stream_capture: false,
+            anthropic_max_tokens: None,
+        },
+    }
+}
+
+fn test_anthropic_backend(id: &str, base_url: String) -> TestEndpoint {
+    TestEndpoint {
+        backend: ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            supports: btree_set(["messages", "streaming"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            extra_body: BTreeMap::new(),
+            expose_backend_errors: false,
+            stream_capture: false,
+        },
+        route: ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["messages"]),
+            context_length: ContextLengthSpec::None,
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: id.to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            }],
+            extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
+            expose_backend_errors: false,
+            stream_capture: false,
+            anthropic_max_tokens: None,
+        },
+    }
+}
+
+fn anthropic_messages_endpoint(id: &str, base_url: String) -> TestEndpoint {
+    TestEndpoint {
+        backend: ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            supports: btree_set(["messages", "streaming"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            extra_body: BTreeMap::new(),
+            expose_backend_errors: false,
+            stream_capture: false,
+        },
+        route: ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["messages"]),
+            context_length: ContextLengthSpec::None,
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: id.to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            }],
+            extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
+            expose_backend_errors: false,
+            stream_capture: false,
+            anthropic_max_tokens: Some(8192),
         },
     }
 }
@@ -2972,6 +3058,7 @@ fn expose_backend_errors_endpoint(
             request_headers: BTreeMap::new(),
             expose_backend_errors: resolved_route_value,
             stream_capture: false,
+            anthropic_max_tokens: None,
         },
     }
 }
@@ -3138,6 +3225,52 @@ impl TestBackend {
         }
     }
 
+    async fn spawn_anthropic_messages(name: &str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let state = BackendState {
+            name: name.to_owned(),
+            requests: Arc::new(Mutex::new(Vec::new())),
+            hits: Arc::new(AtomicUsize::new(0)),
+        };
+        let app = Router::new()
+            .route("/v1/models", get(backend_models))
+            .route("/v1/messages", post(anthropic_messages_handler))
+            .with_state(state.clone());
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        Self {
+            address,
+            state,
+            handle,
+        }
+    }
+
+    async fn spawn_anthropic_messages_streaming(name: &str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let state = BackendState {
+            name: name.to_owned(),
+            requests: Arc::new(Mutex::new(Vec::new())),
+            hits: Arc::new(AtomicUsize::new(0)),
+        };
+        let app = Router::new()
+            .route("/v1/models", get(backend_models))
+            .route("/v1/messages", post(anthropic_messages_streaming_handler))
+            .with_state(state.clone());
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        Self {
+            address,
+            state,
+            handle,
+        }
+    }
+
     async fn spawn_error(name: &str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -3272,6 +3405,7 @@ impl HeaderCaptureBackend {
                 "/v1/chat/completions",
                 post(header_capture_chat_completions),
             )
+            .route("/v1/messages", post(header_capture_chat_completions))
             .with_state((name.to_owned(), state_clone));
         let handle = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
@@ -3403,6 +3537,7 @@ fn request_headers_endpoint(id: &str, base_url: String) -> TestEndpoint {
             },
             expose_backend_errors: false,
             stream_capture: false,
+            anthropic_max_tokens: None,
         },
     }
 }
@@ -3445,6 +3580,7 @@ fn request_headers_override_endpoint(id: &str, base_url: String) -> TestEndpoint
             },
             expose_backend_errors: false,
             stream_capture: false,
+            anthropic_max_tokens: None,
         },
     }
 }
@@ -3486,6 +3622,7 @@ fn request_headers_api_key_endpoint(id: &str, base_url: String, api_key: &str) -
             },
             expose_backend_errors: false,
             stream_capture: false,
+            anthropic_max_tokens: None,
         },
     }
 }
@@ -4073,6 +4210,102 @@ async fn backend_models() -> Json<Value> {
         "object": "list",
         "data": []
     }))
+}
+
+async fn anthropic_messages_handler(
+    State(state): State<BackendState>,
+    Json(payload): Json<Value>,
+) -> Response<Body> {
+    state.hits.fetch_add(1, Ordering::SeqCst);
+    state.requests.lock().unwrap().push(payload.clone());
+    let response = json!({
+        "id": "msg_test_001",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hello from anthropic"}],
+        "model": payload["model"],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {"input_tokens": 10, "output_tokens": 5}
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(response.to_string()))
+        .unwrap()
+}
+
+async fn anthropic_messages_streaming_handler(
+    State(state): State<BackendState>,
+    body_bytes: Bytes,
+) -> Response<Body> {
+    state.hits.fetch_add(1, Ordering::SeqCst);
+    let payload: Value = serde_json::from_slice(&body_bytes).unwrap_or_default();
+    state.requests.lock().unwrap().push(payload.clone());
+
+    let model = payload
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+
+    let mut body = String::new();
+    // message_start event
+    body.push_str(&format!(
+        "event: message_start\ndata: {}\n\n",
+        json!({
+            "type": "message_start",
+            "message": {
+                "id": "msg_test_001",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": model,
+                "stop_reason": null,
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        })
+    ));
+    // content_block_start event
+    body.push_str(&format!(
+        "event: content_block_start\ndata: {}\n\n",
+        json!({
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""}
+        })
+    ));
+    // content_block_delta event
+    body.push_str(&format!(
+        "event: content_block_delta\ndata: {}\n\n",
+        json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "hello from anthropic"}
+        })
+    ));
+    // content_block_stop event
+    body.push_str(
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+    );
+    // message_delta event
+    body.push_str(&format!(
+        "event: message_delta\ndata: {}\n\n",
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+            "usage": {"output_tokens": 5}
+        })
+    ));
+    // message_stop event
+    body.push_str("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n");
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/event-stream")
+        .header("cache-control", "no-cache")
+        .body(Body::from(body))
+        .unwrap()
 }
 
 async fn test_props_handler(State(n_ctx): State<u64>) -> Json<Value> {
@@ -4778,6 +5011,416 @@ async fn models_request_unauthorized_for_models_outside_effective_whitelist() {
     let _ = CLIENT_ONLY_MODEL;
     backend.abort();
 }
+
+#[tokio::test]
+async fn count_tokens_returns_404_with_anthropic_error_format() {
+    let backend = TestBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![test_anthropic_backend("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/messages/count_tokens",
+            json!({
+                "model": "public-model",
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = json_body(response).await;
+    // Must be in Anthropic error format, not OpenAI format.
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "not_found_error");
+    assert!(body["error"]["message"].as_str().unwrap().len() > 0);
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn anthropic_version_default_injected_when_client_omits() {
+    let backend = HeaderCaptureBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![test_anthropic_backend("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/messages",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 100
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let captured = backend.captured_requests();
+    assert_eq!(captured.len(), 1);
+    // The default anthropic-version must have been injected.
+    let headers = &captured[0].1;
+    assert_eq!(
+        headers.get("anthropic-version").map(|v| v.as_str()),
+        Some("2023-06-01"),
+        "expected default anthropic-version header to be injected"
+    );
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn anthropic_messages_non_streaming_success() {
+    let backend = TestBackend::spawn_anthropic_messages("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![anthropic_messages_endpoint("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/messages",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 100
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = json_body(response).await;
+    // Response model must be the public model, not the backend model.
+    assert_eq!(response_body["model"], PUBLIC_MODEL);
+    assert_eq!(response_body["type"], "message");
+    assert_eq!(response_body["role"], "assistant");
+    assert_eq!(response_body["stop_reason"], "end_turn");
+    assert!(response_body["usage"]["input_tokens"].is_number());
+    assert!(response_body["usage"]["output_tokens"].is_number());
+
+    // Verify the upstream request had the backend model and max_tokens filled.
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+    assert_eq!(captured[0]["max_tokens"], 100);
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn anthropic_messages_non_streaming_fills_max_tokens_from_policy() {
+    // When the client omits max_tokens, the route's anthropic_max_tokens
+    // policy should insert it into the request body.
+    let backend = TestBackend::spawn_anthropic_messages("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![anthropic_messages_endpoint("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/messages",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = json_body(response).await;
+    assert_eq!(response_body["model"], PUBLIC_MODEL);
+
+    // The upstream request should have had max_tokens inserted from the policy.
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+    assert_eq!(
+        captured[0]["max_tokens"], 8192,
+        "anthropic_max_tokens policy should fill missing max_tokens"
+    );
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn anthropic_messages_streaming_success() {
+    let backend = TestBackend::spawn_anthropic_messages_streaming("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![anthropic_messages_endpoint("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "/v1/messages",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 100,
+                "stream": true
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("text/event-stream")),
+        "expected text/event-stream content type"
+    );
+
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    assert!(
+        !bytes.is_empty(),
+        "streaming response body must not be empty"
+    );
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+
+    // The backend model should be rewritten to the public model
+    // in the message_start event's message.model field.
+    assert!(
+        body.contains(&format!("\"model\":\"{PUBLIC_MODEL}\"")),
+        "message_start model should be rewritten to public model; body={body}"
+    );
+    assert!(
+        !body.contains(&format!("\"model\":\"{BACKEND_MODEL}\"")),
+        "backend model must not leak into stream; body={body}"
+    );
+    assert!(body.contains("\"type\":\"message_start\""), "body={body}");
+    assert!(
+        body.contains("\"type\":\"content_block_delta\""),
+        "body={body}"
+    );
+    assert!(body.contains("\"type\":\"message_stop\""), "body={body}");
+    assert!(body.contains("\"text_delta\""), "body={body}");
+    assert!(body.contains("hello from anthropic"), "body={body}");
+
+    // Verify the upstream request was correctly rewritten.
+    assert_eq!(backend.hits(), 1);
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+    assert_eq!(captured[0]["stream"], true);
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn anthropic_messages_streaming_anthropic_version_forwarded() {
+    let backend = HeaderCaptureBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![anthropic_messages_endpoint("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages")
+                .header(AUTHORIZATION, format!("Bearer {CLIENT_KEY}"))
+                .header(CONTENT_TYPE, "application/json")
+                .header("anthropic-version", "2024-01-01")
+                .extension(ConnectInfo(
+                    "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(
+                    json!({
+                        "model": PUBLIC_MODEL,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 100
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let captured = backend.captured_requests();
+    assert_eq!(captured.len(), 1);
+    let headers = &captured[0].1;
+    // The client-provided anthropic-version should be forwarded.
+    assert_eq!(
+        headers.get("anthropic-version").map(|v| v.as_str()),
+        Some("2024-01-01"),
+        "client-provided anthropic-version should be forwarded, not overridden"
+    );
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn anthropic_messages_missing_max_tokens_returns_400() {
+    // When the client omits max_tokens and the route has no
+    // anthropic_max_tokens policy, the request must fail with 400
+    // in Anthropic error format.
+    let backend = TestBackend::spawn_anthropic_messages("backend-a").await;
+    // Use a route without anthropic_max_tokens.
+    let endpoint = TestEndpoint {
+        backend: ResolvedBackend {
+            id: "backend-a".to_owned(),
+            base_url: backend.base_url(),
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            supports: btree_set(["messages", "streaming"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            extra_body: BTreeMap::new(),
+            expose_backend_errors: false,
+            stream_capture: false,
+        },
+        route: ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["messages"]),
+            context_length: ContextLengthSpec::None,
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: "backend-a".to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            }],
+            extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
+            expose_backend_errors: false,
+            stream_capture: false,
+            anthropic_max_tokens: None,
+        },
+    };
+    let state = test_state(RoutingStrategy::Priority, vec![endpoint]);
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/messages",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    // Must be in Anthropic error format, not OpenAI format.
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("max_tokens"),
+        "error message should mention max_tokens; got: {:?}",
+        body["error"]["message"]
+    );
+    // Must not have hit the backend.
+    assert_eq!(backend.hits(), 0);
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn anthropic_messages_non_json_body_returns_400() {
+    let backend = TestBackend::spawn_anthropic_messages("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![anthropic_messages_endpoint("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    // Use a model query parameter so the proxy's model preflight check
+    // passes, but send a non-JSON body so the Anthropic-specific
+    // rewrite rejects it with "requires a JSON request body".
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/messages?model={PUBLIC_MODEL}"))
+                .header(AUTHORIZATION, format!("Bearer {CLIENT_KEY}"))
+                .header(CONTENT_TYPE, "text/plain")
+                .extension(ConnectInfo(
+                    "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .body(Body::from("this is not json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    // Must be in Anthropic error format.
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert!(
+        body["error"]["message"].as_str().unwrap().contains("JSON"),
+        "error message should mention JSON; got: {:?}",
+        body["error"]["message"]
+    );
+    assert_eq!(backend.hits(), 0);
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn anthropic_messages_count_tokens_404_exists() {
+    // Sanity check: count_tokens is still 404.
+    let backend = TestBackend::spawn_anthropic_messages("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![anthropic_messages_endpoint("backend-a", backend.base_url())],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/messages/count_tokens",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = json_body(response).await;
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "not_found_error");
+    assert_eq!(backend.hits(), 0);
+
+    backend.abort();
+}
+
 #[tokio::test]
 async fn stream_capture_records_upstream_and_client_ndjson_with_monotonic_timestamps() {
     // Enable streaming capture, run a streaming `/v1/responses`

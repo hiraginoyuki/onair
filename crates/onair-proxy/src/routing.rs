@@ -51,6 +51,9 @@ pub struct SelectedRoute {
     /// and `client_response.ndjson` in the debug capture directory.
     /// See `.local/decisions/2026-06-27-streaming-debug-capture.md`.
     pub stream_capture: bool,
+    /// Default `max_tokens` for Anthropic Messages API requests
+    /// when the client omits it.
+    pub anthropic_max_tokens: Option<u32>,
 }
 
 pub struct NonEmptyVec<T> {
@@ -355,6 +358,7 @@ impl<'a> BackendSelector<'a> {
         let request_headers = route.map(|r| r.request_headers.clone()).unwrap_or_default();
         let expose_backend_errors = route.map(|r| r.expose_backend_errors).unwrap_or(false);
         let stream_capture = route.map(|r| r.stream_capture).unwrap_or(false);
+        let anthropic_max_tokens = route.and_then(|r| r.anthropic_max_tokens);
         SelectedRoute {
             backend_id: backend.id.clone(),
             base_url: backend.base_url.clone(),
@@ -373,6 +377,7 @@ impl<'a> BackendSelector<'a> {
             request_headers,
             expose_backend_errors,
             stream_capture,
+            anthropic_max_tokens,
         }
     }
 }
@@ -431,6 +436,7 @@ fn request_mode_for_path(
         "/v1/chat/completions" | "/v1/chat/completion" => {
             request_mode_for_chat_completions(backend_supports, route_expose)
         }
+        "/v1/messages" => request_mode_for_messages(backend_supports, route_expose),
         _ => {
             if !supports_candidates(backend_supports, path_candidates) {
                 return None;
@@ -482,6 +488,24 @@ fn request_mode_for_chat_completions(
         return Some(RequestMode::ChatCompletionsViaResponses);
     }
     None
+}
+
+fn request_mode_for_messages(
+    backend_supports: &BTreeSet<String>,
+    route_expose: Option<&BTreeSet<String>>,
+) -> Option<RequestMode> {
+    if supports_messages(backend_supports) && route_supports_messages(route_expose) {
+        return Some(RequestMode::AnthropicMessagesNative);
+    }
+    None
+}
+
+fn supports_messages(supports: &BTreeSet<String>) -> bool {
+    has_capability(supports, "messages")
+}
+
+fn route_supports_messages(route_expose: Option<&BTreeSet<String>>) -> bool {
+    route_expose.is_none_or(|expose| expose.is_empty() || has_capability(expose, "messages"))
 }
 
 fn route_supports_responses(route_expose: Option<&BTreeSet<String>>) -> bool {
@@ -584,14 +608,18 @@ pub fn sticky_routing_key(
 }
 
 pub fn path_metric_name(path: &str) -> String {
-    if path.ends_with("/chat/completions") {
+    let normalized = path.trim_end_matches('/');
+    if normalized.ends_with("/chat/completions") {
         return "chat_completions".to_owned();
     }
-    if path.ends_with("/chat/completion") {
+    if normalized.ends_with("/chat/completion") {
         return "chat_completions".to_owned();
     }
-    if path.ends_with("/responses") {
+    if normalized.ends_with("/responses") {
         return "responses".to_owned();
+    }
+    if normalized.ends_with("/messages") {
+        return "messages".to_owned();
     }
     path_capability_candidates(path)
         .iter()
@@ -607,6 +635,7 @@ pub fn path_requires_model(path: &str) -> bool {
         "/v1/chat/completions"
             | "/v1/chat/completion"
             | "/v1/responses"
+            | "/v1/messages"
             | "/v1/embeddings"
             | "/v1/audio/transcriptions"
             | "/v1/audio/translations"
@@ -655,6 +684,9 @@ pub fn path_capability_candidates(path: &str) -> BTreeSet<String> {
         }
         "responses" => {
             candidates.insert(RESPONSES_VIA_CHAT_COMPLETIONS.to_owned());
+        }
+        "messages" => {
+            candidates.insert("messages".to_owned());
         }
         "images" => {
             candidates.insert("image".to_owned());
@@ -1496,6 +1528,7 @@ mod tests {
             request_headers: BTreeMap::new(),
             expose_backend_errors: false,
             stream_capture: false,
+            anthropic_max_tokens: None,
         }
     }
 
@@ -1521,6 +1554,7 @@ mod tests {
             "chat",
             "chat_completions",
             "completions",
+            "messages",
             "responses",
             "response",
             "tools",
@@ -1570,6 +1604,76 @@ mod tests {
                 "is_known_marker must reject the typo '{value}'"
             );
         }
+    }
+
+    #[test]
+    fn messages_path_requires_model() {
+        assert!(path_requires_model("/v1/messages"));
+        assert!(path_requires_model("/v1/messages/"));
+    }
+
+    #[test]
+    fn messages_path_metric_name() {
+        assert_eq!(path_metric_name("/v1/messages"), "messages");
+        assert_eq!(path_metric_name("/v1/messages/"), "messages");
+    }
+
+    #[test]
+    fn native_messages_route_selects_anthropic_messages_native() {
+        let backends = vec![backend_with_supports("anthropic-backend", &["messages"])];
+        let routes = vec![route_for_public(
+            "public-model",
+            &["messages"],
+            &[("backend-private", "anthropic-backend")],
+        )];
+
+        let selected = select_backend_candidates(
+            &backends,
+            &routes,
+            RoutingStrategy::Priority,
+            "/v1/messages",
+            Some("public-model"),
+            false,
+            false,
+            None,
+            &RoundRobinCounters::new(),
+        )
+        .unwrap();
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected.head().backend_id, "anthropic-backend");
+        assert_eq!(
+            selected.head().request_mode,
+            RequestMode::AnthropicMessagesNative
+        );
+    }
+
+    #[test]
+    fn missing_messages_capability_returns_none() {
+        let backends = vec![backend_with_supports("chat-backend", &["chat"])];
+        let routes = vec![route_for_public(
+            "public-model",
+            &["chat"],
+            &[("backend-private", "chat-backend")],
+        )];
+
+        let error = match select_backend_candidates(
+            &backends,
+            &routes,
+            RoutingStrategy::Priority,
+            "/v1/messages",
+            Some("public-model"),
+            false,
+            false,
+            None,
+            &RoundRobinCounters::new(),
+        ) {
+            Ok(_) => panic!("expected messages routing to fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(error.code.as_deref(), Some("endpoint_unavailable"));
     }
 
     fn backend_with_weight(id: &str, weight: u32) -> ResolvedBackend {

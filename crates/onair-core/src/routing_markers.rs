@@ -9,6 +9,7 @@ pub const KNOWN_MARKERS: &[&str] = &[
     "chat",
     "chat_completions",
     "completions",
+    "messages",
     "responses",
     "response",
     "tools",

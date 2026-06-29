@@ -27,6 +27,7 @@ fn rewrite_request_body_for_mode_with_tool_schema_mode(
             responses_store,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -161,6 +162,7 @@ fn chat_completions_request_converts_to_responses() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -233,6 +235,7 @@ fn chat_completions_to_responses_applies_responses_policies() {
             responses_store: ResponsesStorePolicy::ForceFalse,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
             chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -265,6 +268,7 @@ fn chat_completions_to_responses_rejects_unsupported_options() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -288,6 +292,7 @@ fn chat_completions_to_responses_rejects_unsupported_options() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -311,6 +316,7 @@ fn chat_completions_to_responses_rejects_unsupported_options() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -332,6 +338,7 @@ fn chat_completions_to_responses_requires_json_and_messages() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -353,6 +360,7 @@ fn chat_completions_to_responses_requires_json_and_messages() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -441,6 +449,7 @@ fn native_responses_can_rewrite_max_output_tokens_for_wrapper_quirks() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -461,6 +470,7 @@ fn native_responses_can_rewrite_max_output_tokens_for_wrapper_quirks() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::RenameToMaxTokens,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -491,6 +501,7 @@ fn native_responses_max_output_tokens_policy_preserves_other_paths_and_existing_
             responses_max_output_tokens:
                 ResponsesMaxOutputTokensPolicy::RenameToMaxCompletionTokens,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -516,6 +527,7 @@ fn native_responses_max_output_tokens_policy_preserves_other_paths_and_existing_
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Drop,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -544,6 +556,7 @@ fn chat_stream_usage_policy_inserts_usage_request_for_chat_streams() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -563,6 +576,7 @@ fn chat_stream_usage_policy_inserts_usage_request_for_chat_streams() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -594,6 +608,7 @@ fn chat_stream_usage_policy_preserves_client_stream_options() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -624,6 +639,7 @@ fn chat_stream_usage_policy_preserves_client_stream_options() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -658,6 +674,7 @@ fn chat_stream_usage_policy_force_true_overrides_client_value() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -689,6 +706,7 @@ fn chat_stream_usage_policy_force_true_replaces_non_object_stream_options() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -719,6 +737,7 @@ fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::ForceTrue,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -738,6 +757,7 @@ fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -763,6 +783,7 @@ fn chat_stream_usage_policy_ignores_non_chat_and_native_responses() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -791,6 +812,7 @@ fn chat_stream_usage_policy_applies_after_responses_to_chat_conversion() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Insert,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -1176,6 +1198,7 @@ fn native_responses_rejects_function_calls_without_matching_outputs() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &BTreeMap::new(),
         "test",
@@ -1978,6 +2001,7 @@ fn extra_body_merges_arbitrary_keys_into_rewritten_native_request() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &extra_body,
         "public=public-model",
@@ -2033,6 +2057,7 @@ fn extra_body_drops_protected_keys_with_warn() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &extra_body,
         "public=public-model",
@@ -2092,6 +2117,7 @@ fn extra_body_merges_into_responses_to_chat_compat_path() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &extra_body,
         "public=public-model",
@@ -2131,6 +2157,7 @@ fn extra_body_merges_into_chat_to_responses_compat_path() {
             responses_store: ResponsesStorePolicy::Preserve,
             responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
             chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
         },
         &extra_body,
         "public=public-model",
@@ -2386,4 +2413,508 @@ fn sse_strategy_clear_usage_and_diagnostics_resets_counters() {
     assert_eq!(strategy.usage().output, 0);
     assert_eq!(strategy.usage().total, 0);
     assert_eq!(strategy.diagnostics().usage_object_count, 0);
+}
+
+// ── Anthropic Messages API rewrite tests ────────────────────────
+
+#[test]
+fn anthropic_messages_rewrites_model_field() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 100
+    });
+
+    let rewritten = rewrite_anthropic_messages_request_body(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        None,
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "backend-model");
+    assert_eq!(rewritten["messages"][0]["role"], "user");
+    assert_eq!(rewritten["max_tokens"], 100);
+}
+
+#[test]
+fn anthropic_messages_preserves_client_max_tokens() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 500
+    });
+
+    let rewritten = rewrite_anthropic_messages_request_body(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        Some(1024),
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    // Client's value wins over route's anthropic_max_tokens.
+    assert_eq!(rewritten["max_tokens"], 500);
+}
+
+#[test]
+fn anthropic_messages_inserts_route_max_tokens_when_client_omits() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+
+    let rewritten = rewrite_anthropic_messages_request_body(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        Some(2048),
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["max_tokens"], 2048);
+}
+
+#[test]
+fn anthropic_messages_missing_max_tokens_returns_error() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+
+    let error = rewrite_anthropic_messages_request_body(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.message(), "Missing required parameter: max_tokens.");
+    assert_eq!(error.param().as_deref(), Some("max_tokens"));
+}
+
+#[test]
+fn anthropic_messages_empty_body_returns_error() {
+    let error = rewrite_anthropic_messages_request_body(
+        b"",
+        Some("application/json"),
+        Some("backend-model"),
+        Some(100),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.message(), "Missing required parameter: messages.");
+    assert_eq!(error.param().as_deref(), Some("messages"));
+}
+
+#[test]
+fn anthropic_messages_non_json_returns_error() {
+    let error = rewrite_anthropic_messages_request_body(
+        b"not json",
+        Some("text/plain"),
+        Some("backend-model"),
+        Some(100),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "Anthropic Messages API requires a JSON request body."
+    );
+}
+
+#[test]
+fn anthropic_messages_via_rewrite_mode_delegates() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 256
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/messages",
+        RequestMode::AnthropicMessagesNative,
+        &RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: Some(512),
+        },
+        &BTreeMap::new(),
+        "test",
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "backend-model");
+    assert_eq!(rewritten["max_tokens"], 256);
+}
+
+#[test]
+fn anthropic_messages_via_rewrite_mode_fills_max_tokens() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/messages",
+        RequestMode::AnthropicMessagesNative,
+        &RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: Some(4096),
+        },
+        &BTreeMap::new(),
+        "test",
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "backend-model");
+    assert_eq!(rewritten["max_tokens"], 4096);
+}
+
+// ---------------------------------------------------------------------------
+// rewrite_anthropic_messages_response_body tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anthropic_response_rewrites_model_from_backend_to_public() {
+    let body = json!({
+        "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "model": "backend-model",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5}
+    });
+
+    let rewritten = rewrite_anthropic_messages_response_body(
+        body.to_string().as_bytes(),
+        "backend-model",
+        "public-model",
+    );
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "public-model");
+    assert_eq!(rewritten["id"], "msg_01XFDUDYJgAACzvnptvVoYEL");
+    assert_eq!(rewritten["content"][0]["text"], "Hello!");
+}
+
+#[test]
+fn anthropic_response_leaves_model_alone_when_no_match() {
+    let body = json!({
+        "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+        "type": "message",
+        "model": "some-other-model",
+        "content": [{"type": "text", "text": "Hello!"}]
+    });
+
+    let rewritten = rewrite_anthropic_messages_response_body(
+        body.to_string().as_bytes(),
+        "backend-model",
+        "public-model",
+    );
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "some-other-model");
+}
+
+#[test]
+fn anthropic_response_non_json_body_passes_through_unchanged() {
+    let body = b"not json at all";
+
+    let rewritten = rewrite_anthropic_messages_response_body(body, "backend-model", "public-model");
+
+    assert_eq!(&rewritten, body);
+}
+
+#[test]
+fn anthropic_response_body_without_model_field_passes_through_unchanged() {
+    let body = json!({
+        "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+        "type": "message",
+        "content": [{"type": "text", "text": "Hello!"}]
+    });
+
+    let original = body.to_string().into_bytes();
+    let rewritten =
+        rewrite_anthropic_messages_response_body(&original, "backend-model", "public-model");
+    let rewritten_value: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert!(rewritten_value.get("model").is_none());
+    assert_eq!(rewritten_value["id"], "msg_01XFDUDYJgAACzvnptvVoYEL");
+}
+
+#[test]
+fn anthropic_response_via_rewrite_response_body_dispatch() {
+    let body = json!({
+        "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "model": "backend-model",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5}
+    });
+
+    let (rewritten, _usage) = rewrite_response_body(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        Some("public-model"),
+        RequestMode::AnthropicMessagesNative,
+    );
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "public-model");
+    assert_eq!(rewritten["content"][0]["text"], "Hello!");
+    assert_eq!(rewritten["usage"]["input_tokens"], 10);
+    assert_eq!(rewritten["usage"]["output_tokens"], 5);
+}
+
+#[test]
+fn anthropic_response_dispatch_does_not_touch_nested_model_fields() {
+    let body = json!({
+        "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+        "type": "message",
+        "model": "backend-model",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+        "metadata": {"model_info": {"model": "should-not-change"}}
+    });
+
+    let (rewritten, _) = rewrite_response_body(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        Some("public-model"),
+        RequestMode::AnthropicMessagesNative,
+    );
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "public-model");
+    assert_eq!(
+        rewritten["metadata"]["model_info"]["model"],
+        "should-not-change"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AnthropicSseNormalizer tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anthropic_sse_message_start_rewrites_message_model() {
+    let mut normalizer = AnthropicSseNormalizer::new(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+    );
+    let chunk = json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "backend-model",
+            "content": [],
+            "stop_reason": null,
+            "usage": {"input_tokens": 10, "output_tokens": 0}
+        }
+    });
+    let input = format!("event: message_start\ndata: {chunk}\n\n");
+    let output = normalizer.push(input.as_bytes());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(
+        output.contains("\"model\":\"public-model\""),
+        "body={output}"
+    );
+    assert!(output.contains("event: message_start"));
+    // Ensure message.model was rewritten
+    assert!(output.contains("\"message\""));
+    assert!(!output.contains("\"backend-model\""), "body={output}");
+}
+
+#[test]
+fn anthropic_sse_top_level_model_rewritten() {
+    let mut normalizer = AnthropicSseNormalizer::new(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+    );
+    let chunk = json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "hello"},
+        "model": "backend-model"
+    });
+    let input = format!("data: {chunk}\n\n");
+    let output = normalizer.push(input.as_bytes());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(
+        output.contains("\"model\":\"public-model\""),
+        "body={output}"
+    );
+    assert!(!output.contains("\"backend-model\""), "body={output}");
+}
+
+#[test]
+fn anthropic_sse_model_left_alone_when_no_match() {
+    let mut normalizer = AnthropicSseNormalizer::new(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+    );
+    let chunk = json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "hello"},
+        "model": "some-other-model"
+    });
+    let input = format!("data: {chunk}\n\n");
+    let output = normalizer.push(input.as_bytes());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(
+        output.contains("\"model\":\"some-other-model\""),
+        "body={output}"
+    );
+}
+
+#[test]
+fn anthropic_sse_non_json_and_comment_lines_pass_through() {
+    let mut normalizer = AnthropicSseNormalizer::new(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+    );
+    let input = "event: ping\ndata: this is not json\n: comment line\n\n";
+    let output = normalizer.push(input.as_bytes());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("event: ping"));
+    assert!(output.contains("data: this is not json"));
+    assert!(output.contains(": comment line"));
+}
+
+#[test]
+fn anthropic_sse_multiple_events_in_one_chunk() {
+    let mut normalizer = AnthropicSseNormalizer::new(
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+    );
+    let event1 = json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_01",
+            "type": "message",
+            "model": "backend-model",
+            "role": "assistant",
+            "content": [],
+            "stop_reason": null,
+            "usage": {"input_tokens": 5, "output_tokens": 0}
+        }
+    });
+    let event2 = json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "hi"},
+        "model": "backend-model"
+    });
+    let input = format!("event: message_start\ndata: {event1}\n\ndata: {event2}\n\n");
+    let output = normalizer.push(input.as_bytes());
+    let output = String::from_utf8(output).unwrap();
+
+    // Both events should have model rewritten
+    assert!(output.contains("event: message_start"));
+    let model_count = output.matches("\"model\":\"public-model\"").count();
+    assert_eq!(
+        model_count, 2,
+        "expected both models rewritten, body={output}"
+    );
+    assert!(!output.contains("\"backend-model\""), "body={output}");
+}
+
+#[test]
+fn anthropic_sse_rewrite_model_no_backend_noop() {
+    let mut normalizer = AnthropicSseNormalizer::new(None, None);
+    let chunk = json!({
+        "type": "message_start",
+        "message": {"model": "some-model"}
+    });
+    let input = format!("data: {chunk}\n\n");
+    let output = normalizer.push(input.as_bytes());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("\"model\":\"some-model\""), "body={output}");
+}
+
+#[test]
+fn anthropic_sse_strategy_variant_matches() {
+    let mut strategy = SseStrategy::new(
+        RequestMode::AnthropicMessagesNative,
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        false,
+    );
+    let chunk = json!({
+        "type": "message_start",
+        "message": {
+            "model": "backend-model",
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "stop_reason": null,
+            "usage": {"input_tokens": 5, "output_tokens": 0}
+        }
+    });
+    let input = format!("event: message_start\ndata: {chunk}\n\n");
+    let output = strategy.push(input.as_bytes());
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(
+        output.contains("\"model\":\"public-model\""),
+        "body={output}"
+    );
+    assert!(output.contains("event: message_start"));
+    // Usage/diagnostics are no-op for Anthropic variant
+    assert_eq!(strategy.usage(), UsageTotals::default());
+    assert_eq!(strategy.diagnostics().usage_object_count, 0);
+}
+
+#[test]
+fn anthropic_sse_finish_is_noop() {
+    let mut strategy = SseStrategy::new(
+        RequestMode::AnthropicMessagesNative,
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        false,
+    );
+    let chunk = json!({
+        "type": "message_start",
+        "message": {"model": "backend-model"}
+    });
+    strategy.push(format!("data: {chunk}\n\n").as_bytes());
+    let tail = strategy.finish();
+    assert!(
+        tail.is_empty(),
+        "Anthropic finish should be a no-op, got: {:?}",
+        String::from_utf8_lossy(&tail)
+    );
 }

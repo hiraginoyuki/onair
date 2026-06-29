@@ -36,24 +36,77 @@ pub fn rewrite_response_body(
     };
 
     let usage = extract_usage(&json);
-    if let (Some(backend_model), Some(public_model)) = (backend_model, public_model) {
-        rewrite_response_models(&mut json, backend_model, public_model);
-    }
-    ensure_usage_total_tokens(&mut json);
-
     match request_mode {
-        RequestMode::Native => {}
+        RequestMode::Native => {
+            if let (Some(backend_model), Some(public_model)) = (backend_model, public_model) {
+                rewrite_response_models(&mut json, backend_model, public_model);
+            }
+        }
+        RequestMode::AnthropicMessagesNative => {
+            if let (Some(backend_model), Some(public_model)) = (backend_model, public_model) {
+                rewrite_anthropic_messages_response_body_value(
+                    &mut json,
+                    backend_model,
+                    public_model,
+                );
+            }
+        }
         RequestMode::ResponsesViaChatCompletions => {
+            if let (Some(backend_model), Some(public_model)) = (backend_model, public_model) {
+                rewrite_response_models(&mut json, backend_model, public_model);
+            }
             json = chat_completion_to_response(json);
         }
         RequestMode::ChatCompletionsViaResponses => {
+            if let (Some(backend_model), Some(public_model)) = (backend_model, public_model) {
+                rewrite_response_models(&mut json, backend_model, public_model);
+            }
             json = response_to_chat_completion(json);
         }
     }
+    ensure_usage_total_tokens(&mut json);
 
     let rewritten = serde_json::to_vec(&json)
         .expect("rewritten body is always serializable; this is a programmer error");
     (rewritten, usage)
+}
+
+/// Rewrite an Anthropic Messages API response body.
+///
+/// Replaces the top-level `model` field if it matches `backend_model`
+/// with `public_model`. Returns the original bytes when the body is
+/// not valid JSON or the model field does not need rewriting.
+pub fn rewrite_anthropic_messages_response_body(
+    body: &[u8],
+    backend_model: &str,
+    public_model: &str,
+) -> Vec<u8> {
+    let Ok(mut value) = serde_json::from_slice::<Value>(body) else {
+        return body.to_vec();
+    };
+    rewrite_anthropic_messages_response_body_value(&mut value, backend_model, public_model);
+    serde_json::to_vec(&value).unwrap_or_else(|_| body.to_vec())
+}
+
+/// Rewrite the top-level `model` field in an already-parsed Anthropic
+/// Messages API response value. The recursive [`rewrite_response_models`]
+/// replaces every `model` key in the tree; this function only touches
+/// the top-level field, which is the correct behavior for Anthropic
+/// responses where nested objects may legitimately contain `model`
+/// fields that should not be rewritten.
+fn rewrite_anthropic_messages_response_body_value(
+    value: &mut Value,
+    backend_model: &str,
+    public_model: &str,
+) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(model) = object.get("model").and_then(Value::as_str)
+        && model == backend_model
+    {
+        object.insert("model".to_owned(), Value::String(public_model.to_owned()));
+    }
 }
 
 pub fn rewrite_response_models(value: &mut Value, backend_model: &str, public_model: &str) {
@@ -1779,6 +1832,109 @@ fn sse_data(data: Value) -> Vec<u8> {
     output
 }
 
+/// Anthropic Messages API SSE normalizer.
+///
+/// Passes through the stream mostly unchanged, only rewriting
+/// the `model` field when it matches `backend_model` to `public_model`.
+/// Checks `event["model"]` and `event["message"]["model"]` at the top
+/// level; all other fields are preserved exactly.
+#[derive(Debug, Default)]
+pub struct AnthropicSseNormalizer {
+    parser: SseLineParser,
+    backend_model: Option<String>,
+    public_model: Option<String>,
+    pending_event_name: Option<String>,
+}
+
+impl AnthropicSseNormalizer {
+    pub fn new(backend_model: Option<String>, public_model: Option<String>) -> Self {
+        Self {
+            backend_model,
+            public_model,
+            ..Self::default()
+        }
+    }
+
+    pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
+        let frames = self.parser.push(chunk);
+        let mut output = Vec::with_capacity(chunk.len());
+        for frame in frames {
+            self.handle_frame(frame, &mut output);
+        }
+        output
+    }
+
+    pub fn finish(&mut self) -> Vec<u8> {
+        let mut output = Vec::new();
+        if let Some(frame) = self.parser.finish() {
+            self.handle_frame(frame, &mut output);
+        }
+        output
+    }
+
+    fn handle_frame(&mut self, frame: SseFrame, output: &mut Vec<u8>) {
+        match frame {
+            SseFrame::Event { name, line } => {
+                self.pending_event_name = Some(name);
+                output.extend_from_slice(&line);
+            }
+            SseFrame::Data {
+                value,
+                leading_space,
+                line,
+            } => {
+                let mut value = value;
+                self.rewrite_model(&mut value);
+                let normalized = serde_json::to_vec(&value).expect(
+                    "rewritten Anthropic SSE data is always serializable; this is a programmer error",
+                );
+                let (cr, line_ending) = line_suffix(&line);
+                let mut rewritten = Vec::with_capacity(line.len() + normalized.len());
+                rewritten.extend_from_slice(b"data:");
+                if leading_space {
+                    rewritten.extend_from_slice(b" ");
+                }
+                rewritten.extend_from_slice(&normalized);
+                rewritten.extend_from_slice(cr);
+                rewritten.extend_from_slice(line_ending);
+                self.pending_event_name = None;
+                output.extend_from_slice(&rewritten);
+            }
+            SseFrame::DataUnparseable { line } => {
+                self.pending_event_name = None;
+                output.extend_from_slice(&line);
+            }
+            SseFrame::Done { line } => {
+                self.pending_event_name = None;
+                output.extend_from_slice(&line);
+            }
+            SseFrame::PassThrough { line } => {
+                output.extend_from_slice(&line);
+            }
+        }
+    }
+
+    /// Rewrite `event["model"]` and `event["message"]["model"]` if they
+    /// match `backend_model`, replacing with `public_model`.
+    fn rewrite_model(&self, value: &mut Value) {
+        let (Some(backend), Some(public)) =
+            (self.backend_model.as_deref(), self.public_model.as_deref())
+        else {
+            return;
+        };
+        if let Some(object) = value.as_object_mut() {
+            if object.get("model").and_then(Value::as_str) == Some(backend) {
+                object.insert("model".to_owned(), Value::String(public.to_owned()));
+            }
+            if let Some(message) = object.get_mut("message").and_then(Value::as_object_mut)
+                && message.get("model").and_then(Value::as_str) == Some(backend)
+            {
+                message.insert("model".to_owned(), Value::String(public.to_owned()));
+            }
+        }
+    }
+}
+
 /// Unified dispatch enum that wraps the three SSE normalizers behind a
 /// uniform `push` / `finish` / `usage` / `diagnostics` API.
 ///
@@ -1794,6 +1950,8 @@ pub enum SseStrategy {
     Responses(ResponsesSseNormalizer),
     /// Chat Completions backend → Responses client.
     ChatCompletions(ChatCompletionsSseNormalizer),
+    /// Anthropic Messages API SSE passthrough with model rewriting.
+    AnthropicMessages(AnthropicSseNormalizer),
 }
 
 impl SseStrategy {
@@ -1821,6 +1979,9 @@ impl SseStrategy {
                 public_model,
                 emit_usage_to_client,
             )),
+            RequestMode::AnthropicMessagesNative => {
+                Self::AnthropicMessages(AnthropicSseNormalizer::new(backend_model, public_model))
+            }
         }
     }
 
@@ -1830,6 +1991,7 @@ impl SseStrategy {
             Self::Native(normalizer) => normalizer.push(chunk),
             Self::Responses(normalizer) => normalizer.push(chunk),
             Self::ChatCompletions(normalizer) => normalizer.push(chunk),
+            Self::AnthropicMessages(normalizer) => normalizer.push(chunk),
         }
     }
 
@@ -1839,6 +2001,7 @@ impl SseStrategy {
             Self::Native(normalizer) => normalizer.finish(),
             Self::Responses(normalizer) => normalizer.finish(),
             Self::ChatCompletions(normalizer) => normalizer.finish(),
+            Self::AnthropicMessages(normalizer) => normalizer.finish(),
         }
     }
 
@@ -1848,6 +2011,7 @@ impl SseStrategy {
             Self::Native(normalizer) => normalizer.usage,
             Self::Responses(normalizer) => normalizer.usage,
             Self::ChatCompletions(normalizer) => normalizer.usage,
+            Self::AnthropicMessages(_) => UsageTotals::default(),
         }
     }
 
@@ -1857,6 +2021,7 @@ impl SseStrategy {
             Self::Native(normalizer) => normalizer.diagnostics.clone(),
             Self::Responses(normalizer) => normalizer.diagnostics.clone(),
             Self::ChatCompletions(normalizer) => normalizer.diagnostics.clone(),
+            Self::AnthropicMessages(_) => UsageDiagnostics::default(),
         }
     }
 
@@ -1866,6 +2031,7 @@ impl SseStrategy {
             Self::Native(normalizer) => normalizer.usage = UsageTotals::default(),
             Self::Responses(normalizer) => normalizer.usage = UsageTotals::default(),
             Self::ChatCompletions(normalizer) => normalizer.usage = UsageTotals::default(),
+            Self::AnthropicMessages(_) => {} // no-op
         }
     }
 
@@ -1877,6 +2043,7 @@ impl SseStrategy {
             Self::ChatCompletions(normalizer) => {
                 normalizer.diagnostics = UsageDiagnostics::default()
             }
+            Self::AnthropicMessages(_) => {} // no-op
         }
     }
 }

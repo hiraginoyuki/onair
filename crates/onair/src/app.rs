@@ -24,6 +24,7 @@ use onair_core::auth::{Identity, authenticate};
 use onair_core::config::{Config, ConfigStore, ContextLengthSpec};
 use onair_core::error::{ApiError, Result};
 use onair_core::openai;
+use onair_core::openai::paths::{EndpointKind, endpoint_kind};
 use onair_obs::metrics::{MetricLabels, Metrics, RequestTimer};
 use onair_obs::observe::{
     BackendHealthStore, ClientInfo, ContextSizeRefreshTask, HealthProbeTask,
@@ -289,12 +290,20 @@ async fn v1_proxy(
     OriginalUri(uri): OriginalUri,
     body: Bytes,
 ) -> Response<Body> {
+    let is_messages_path = matches!(endpoint_kind(uri.path()), EndpointKind::Messages)
+        || uri.path().starts_with("/v1/messages");
+
     let proxy_state = state.proxy_state();
     match proxy::proxy_v1(proxy_state, peer_addr, &headers, method, uri, body).await {
         Ok(response) => response,
         Err(error) => {
             warn!(status = error.status.as_u16(), kind = %error.kind, "request failed before proxy response");
-            error.into_response()
+            if is_messages_path {
+                let (status, body) = error.into_anthropic_parts();
+                (status, Json(body)).into_response()
+            } else {
+                error.into_response()
+            }
         }
     }
 }

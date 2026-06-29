@@ -339,6 +339,7 @@ mod tests {
                     request_headers: BTreeMap::new(),
                     expose_backend_errors: false,
                     stream_capture: false,
+                    anthropic_max_tokens: None,
                 },
                 ResolvedRoute {
                     key: RouteKey::Public("shared".to_owned()),
@@ -360,6 +361,7 @@ mod tests {
                     request_headers: BTreeMap::new(),
                     expose_backend_errors: false,
                     stream_capture: false,
+                    anthropic_max_tokens: None,
                 },
             ],
         };

@@ -245,6 +245,50 @@ impl IntoResponse for ApiError {
     }
 }
 
+// ── Anthropic error format ──────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AnthropicError {
+    pub message: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AnthropicErrorBody {
+    pub error: AnthropicError,
+    #[serde(rename = "type")]
+    pub body_type: String,
+}
+
+impl ApiError {
+    /// Convert this error into an Anthropic-format error response.
+    ///
+    /// Maps `ApiError.kind` to the Anthropic error `type` category.
+    pub fn into_anthropic_parts(self) -> (StatusCode, AnthropicErrorBody) {
+        let kind = match self.status.as_u16() {
+            404 => "not_found_error",
+            _ => match self.kind.as_str() {
+                "invalid_request_error" => "invalid_request_error",
+                "authentication_error" => "authentication_error",
+                "rate_limit_error" => "rate_limit_error",
+                "server_error" => "api_error",
+                _ => "api_error",
+            },
+        };
+        (
+            self.status,
+            AnthropicErrorBody {
+                error: AnthropicError {
+                    message: self.message,
+                    kind: kind.to_owned(),
+                },
+                body_type: "error".to_owned(),
+            },
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

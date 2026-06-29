@@ -19,6 +19,7 @@ pub enum RequestMode {
     Native,
     ResponsesViaChatCompletions,
     ChatCompletionsViaResponses,
+    AnthropicMessagesNative,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -27,6 +28,7 @@ pub struct RequestRewritePolicies {
     pub responses_store: ResponsesStorePolicy,
     pub responses_max_output_tokens: ResponsesMaxOutputTokensPolicy,
     pub chat_stream_usage: ChatStreamUsagePolicy,
+    pub anthropic_max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +138,14 @@ pub fn rewrite_request_body_for_mode_with_policies(
         validate_responses_tool_history(body)?;
     }
 
+    if request_mode == RequestMode::AnthropicMessagesNative {
+        return rewrite_anthropic_messages_request_body(
+            body,
+            content_type,
+            backend_model,
+            policies.anthropic_max_tokens,
+        );
+    }
     if request_mode == RequestMode::ResponsesViaChatCompletions {
         return rewrite_responses_request_as_chat(
             body,
@@ -251,6 +261,65 @@ fn validate_responses_tool_history(body: &[u8]) -> Result<(), RequestRewriteErro
     }
 
     Ok(())
+}
+
+/// Rewrite an Anthropic Messages API request body.
+///
+/// - Rejects empty bodies.
+/// - Requires JSON content type / valid JSON.
+/// - Rewrites the `model` field to `backend_model`.
+/// - Validates/fills `max_tokens`: client-provided values are kept;
+///   otherwise `anthropic_max_tokens` is inserted; if neither is
+///   available, a `RequestRewriteError` is returned.
+pub fn rewrite_anthropic_messages_request_body(
+    body: &[u8],
+    content_type: Option<&str>,
+    backend_model: Option<&str>,
+    anthropic_max_tokens: Option<u32>,
+) -> Result<Vec<u8>, RequestRewriteError> {
+    if body.is_empty() {
+        return Err(RequestRewriteError::new(
+            "Missing required parameter: messages.",
+            Some("messages"),
+        ));
+    }
+
+    if !should_parse_json(content_type, body) {
+        return Err(RequestRewriteError::new(
+            "Anthropic Messages API requires a JSON request body.",
+            None,
+        ));
+    }
+
+    let mut value: Value = serde_json::from_slice(body)
+        .map_err(|_| RequestRewriteError::new("Request body is not valid JSON.", None))?;
+
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| RequestRewriteError::new("Request body is not a JSON object.", None))?;
+
+    // Rewrite model
+    if let Some(model) = backend_model {
+        object.insert("model".to_owned(), Value::String(model.to_owned()));
+    }
+
+    // Validate/fill max_tokens
+    if !object.contains_key("max_tokens") {
+        match anthropic_max_tokens {
+            Some(tokens) => {
+                object.insert("max_tokens".to_owned(), Value::Number(tokens.into()));
+            }
+            None => {
+                return Err(RequestRewriteError::new(
+                    "Missing required parameter: max_tokens.",
+                    Some("max_tokens"),
+                ));
+            }
+        }
+    }
+
+    serde_json::to_vec(&value)
+        .map_err(|_| RequestRewriteError::new("Failed to serialize request body.", None))
 }
 
 pub fn rewrite_query_model(query: Option<&str>, backend_model: Option<&str>) -> Option<String> {
