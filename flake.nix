@@ -29,15 +29,15 @@
       # Release metadata — updated by the release bot on every release.
       # To pin a specific release, point a Nix ref at the commit that
       # contains the values you want (e.g. `?ref=v0.1.0`).
-      version = "0.1.0";
-      tag = "unstable";
+      version = "0.2.0";
+      tag = "v0.2.0";
       hashes = {
-        "x86_64-unknown-linux-gnu" = "sha256-KcinxSHD5mol+21LGGTXmePWsdIsXMwNaRTpjkQnK88=";
-        "x86_64-unknown-linux-musl" = "sha256-TT0qZnW0gMcCnqxEH4b46gznTz/NSFfswV6eNoa6MHE=";
-        "aarch64-unknown-linux-gnu" = "sha256-zsYOg6d8+bflt6uL+BeaFK2nj6pkoDU/nqa5jhukfuk=";
-        "aarch64-unknown-linux-musl" = "sha256-lG3hqqDjFSJZyGJmPDmsfRe0/u9OJEH1njj5+eYzZog=";
-        "x86_64-apple-darwin" = "sha256-WYT9ccMHtXh1IyRUmzPhKofwTNsgiok5Ns9RG3DGWB0=";
-        "aarch64-apple-darwin" = "sha256-hmp9QmG9j8hYAkzWhAr/YmCldRDJg6g4CjAvsO/6l3U=";
+        "x86_64-unknown-linux-gnu" = "sha256-82rQcETLuwat6qkORg+Ky0sIVsqfPENpZHsYWZpQLsY=";
+        "x86_64-unknown-linux-musl" = "sha256-NGjJFk21QGgcLYRdanRAVWFNoPJxN/Kc0Cwz8XNDxSY=";
+        "aarch64-unknown-linux-gnu" = "sha256-8CR5M5SGiIYL6dhGKqgO7/D1VC7AGZ/Xdonz7bnwAjg=";
+        "aarch64-unknown-linux-musl" = "sha256-y4x2qMaUHcrFq2u9fwi9Hu8nWgcOMCsra4eAeWMGsTk=";
+        "x86_64-apple-darwin" = "sha256-SLiavpC7a1XayYYJjlWSLNrRP3kE/Sc1w1sGFhZnrQw=";
+        "aarch64-apple-darwin" = "sha256-ldiSEgz+ghZntSuw94dvTrHSSa4xUFvjHwtT4xptU5o=";
       };
 
       mkPkg = system: pkgs: pkgs.stdenv.mkDerivation {
