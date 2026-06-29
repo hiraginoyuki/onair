@@ -159,3 +159,59 @@ backends = ["local-vllm"]
 # public = "gpt-4o"
 # expose = ["chat_completions_via_responses", "tools"]
 # backends = ["backend-responses-model@responses-wrapper"]
+
+# # ======================================================================
+# Example Anthropic Messages API route; safe to delete if not used.
+# # ======================================================================
+# This block is fully commented out. Uncomment to expose an
+# Anthropic-native backend (such as llama.cpp server with the
+# /v1/messages endpoint enabled, or a remote Anthropic-format
+# service) under an onair public model. onair accepts
+# Anthropic-format POST /v1/messages requests, rewrites the public
+# model name to the backend model, fills missing max_tokens from
+# `anthropic_max_tokens`, injects `anthropic-version: 2023-06-01`
+# when the client omits it, rewrites the model back on responses
+# (sync + streaming SSE), and emits Anthropic-format errors on
+# onair-generated failure paths.
+#
+# Inbound auth accepts both `Authorization: Bearer <token>` and
+# `x-api-key: <key>`; `Authorization: Bearer` wins when both are
+# present. `/v1/messages/count_tokens` returns 404 in Anthropic
+# error format until the full implementation lands.
+#
+# The compat counterpart `messages_via_chat_completions`
+# (Anthropic client -> OpenAI Chat backend) is reserved for an
+# upcoming release; routes carrying that marker currently produce
+# an `endpoint_unavailable` error.
+#
+# Required config: declare a `[[client]]` whose model whitelist
+# contains "claude-local" (or extend `[access].default_models`).
+# See docs/configuration.md#anthropic-messages-api for the full
+# field semantics and resolution order.
+#
+# [[backend]]
+# id = "local-llama"
+# base_url = "http://127.0.0.1:8080"
+# # `messages` admits client /v1/messages to the backend.
+# # Add "streaming" and "tools" if the backend supports them.
+# supports = ["messages", "streaming", "tools"]
+# # Upstream auth: either set api_key_env (sent as Authorization: Bearer)
+# # or inject anthropic-version / x-api-key via [route.request_headers] below.
+# # api_key_env = "LOCAL_LLAMA_API_KEY"
+# timeout_ms = 120000
+#
+# [[route]]
+# public = "claude-local"
+# expose = ["messages"]
+# backends = ["llama-3.1-8b-instruct@local-llama"]
+# # Default max_tokens when the client omits it (Anthropic requires
+# # the field). If both are missing, onair returns 400 invalid_request_error
+# # in Anthropic error format.
+# anthropic_max_tokens = 4096
+# # Optional per-route upstream header overrides. Useful for
+# # `anthropic-version` (overrides the default 2023-06-01 and the
+# # client value) and `x-api-key` (sends a backend-specific key).
+# # Header names and values are validated at config load.
+# [route.request_headers]
+# # anthropic-version = "2023-06-01"
+# # x-api-key = "backend-specific-key"
