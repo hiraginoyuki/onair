@@ -103,6 +103,8 @@ timeout_ms = 120000
 # model name `model` served by backend `backend`) for model-bearing routes, or a
 # bare backend id for model-less routes. The order of `backends` is priority order
 # when several compatible backends match; the same order also seeds the fallback list.
+# The parser splits on the LAST '@' in each binding, so model names may contain '@';
+# `[[backend]].id` must not contain '@' (config load rejects it).
 # `expose` lists the client API surfaces this public model accepts. It can further
 # restrict the route to endpoint keys such as `chat`, `chat_completions`,
 # `responses`, `responses_via_chat_completions`, `chat_completions_via_responses`,

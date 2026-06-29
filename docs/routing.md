@@ -111,6 +111,12 @@ model is the primary noun: the operator asks "where does GPT-5 go?", and
 `gpt-5@openai` reads as "GPT-5 at OpenAI". Model-less routes drop the
 `model@` prefix entirely and use bare backend ids.
 
+The parser splits on the **last** `@` in the entry, so upstream model names
+may themselves contain `@` (variant identifiers, HF-style suffixes, etc.).
+`[[backend]].id` must not contain `@`; the config-load validator rejects any
+backend id that does, so the right-hand side of the split is always
+unambiguous.
+
 ```toml
 # Model-bearing route: public "gpt-4o" maps to upstream "gpt-4o" on backend
 # "openai", with chat/responses/tools allowed.

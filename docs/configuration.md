@@ -215,7 +215,9 @@ Fields:
   backend `<backend>`); for model-less routes each entry is a bare
   backend id. The list order is priority order for primary selection and
   also seeds the fallback list. The referenced backend must exist in
-  `[[backend]]`; otherwise config load fails.
+  `[[backend]]`; otherwise config load fails. The parser splits on the
+  **last** `@` in the entry, so upstream model names may contain `@`;
+  `[[backend]].id` must not contain `@` (config load rejects it).
 - `context_length` (optional, model-bearing routes only): omitted or
   `"none"` hides the value (the default); an integer literal sets a
   fixed `n_ctx`; `"upstream"` forwards the live value from the first

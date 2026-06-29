@@ -1039,7 +1039,12 @@ fn has_marker(set: &BTreeSet<String>, marker: &str) -> bool {
 }
 
 fn parse_route_backend(entry: &str) -> Result<(Option<String>, String)> {
-    if let Some(at_pos) = entry.find('@') {
+    // Split on the LAST '@' so upstream model names may contain '@'
+    // (e.g. variant identifiers, HF-style suffixes). The matching
+    // [[backend]].id must not contain '@'; that constraint is enforced
+    // in `resolve_backends` so the right-hand side of the split is
+    // unambiguous.
+    if let Some(at_pos) = entry.rfind('@') {
         let model = entry[..at_pos].to_owned();
         let backend_id = entry[at_pos + 1..].to_owned();
         if backend_id.is_empty() {
@@ -1119,6 +1124,12 @@ fn resolve_backends(
             return Err(Error::Config(ConfigError::Message(
                 "backend id must not be empty".to_owned(),
             )));
+        }
+        if backend.id.contains('@') {
+            return Err(Error::Config(ConfigError::Message(format!(
+                "backend id '{}' must not contain '@'; '@' is reserved as the route-backends separator",
+                backend.id
+            ))));
         }
         if !backend_ids.insert(backend.id.clone()) {
             return Err(Error::Config(ConfigError::Message(format!(
@@ -2206,6 +2217,184 @@ mod tests {
             "http://127.0.0.1:8000?api_key=secret",
         ));
         assert!(query_error.contains("must not contain a query string or fragment"));
+    }
+
+    #[test]
+    fn route_backend_binding_with_single_at_sign_unchanged() {
+        // Regression: the standard "model@backend" form is unaffected by
+        // the rfind switch. The split is on the only '@' present.
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        let route = route_by_public(&config, "public-model");
+        assert_eq!(route.backends.len(), 1);
+        assert_eq!(route.backends[0].backend_id, "backend-a");
+        assert_eq!(route.backends[0].backend_model, "private-model");
+    }
+
+    #[test]
+    fn route_backend_binding_splits_on_last_at_sign() {
+        // Upstream model names may contain '@' (e.g. variant identifiers,
+        // HF-style suffixes). The parser splits on the LAST '@', so the
+        // backend id is everything after the last '@' and the model name
+        // is everything before it.
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["some-org/repo:tag@1.0@backend-a"]
+            "#,
+        );
+
+        let route = route_by_public(&config, "public-model");
+        assert_eq!(route.backends.len(), 1);
+        assert_eq!(route.backends[0].backend_id, "backend-a");
+        assert_eq!(route.backends[0].backend_model, "some-org/repo:tag@1.0");
+    }
+
+    #[test]
+    fn route_backend_binding_with_leading_at_still_errors() {
+        // Empty model part is still rejected: '@backend' is not a valid
+        // binding; the operator should use a bare backend id instead.
+        let raw = r#"
+        [access]
+        default_models = ["public-model"]
+
+        [[client]]
+        id = "dev"
+        api_key = "sk-test"
+
+        [[backend]]
+        id = "backend-a"
+        base_url = "http://127.0.0.1:8000"
+        supports = ["responses"]
+
+        [[route]]
+        public = "public-model"
+        expose = ["responses"]
+        backends = ["@backend-a"]
+        "#;
+        let error = resolve_error(toml::from_str(raw).unwrap());
+        assert!(error.contains("model part is empty"), "{error}");
+    }
+
+    #[test]
+    fn route_backend_binding_rejects_at_in_backend_id_part() {
+        // Trailing '@' means the right-hand side of the split is empty.
+        // The error message names '@' explicitly.
+        let raw = r#"
+        [access]
+        default_models = ["public-model"]
+
+        [[client]]
+        id = "dev"
+        api_key = "sk-test"
+
+        [[backend]]
+        id = "backend-a"
+        base_url = "http://127.0.0.1:8000"
+        supports = ["responses"]
+
+        [[route]]
+        public = "public-model"
+        expose = ["responses"]
+        backends = ["private-model@"]
+        "#;
+        let error = resolve_error(toml::from_str(raw).unwrap());
+        assert!(
+            error.contains("missing the backend id after '@'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn backend_id_containing_at_sign_is_rejected() {
+        // [[backend]].id is operator-chosen and must not contain '@'.
+        // The new validator rejects this at config load with a message
+        // that names the offending id.
+        let raw = r#"
+        [access]
+        default_models = ["public-model"]
+
+        [[client]]
+        id = "dev"
+        api_key = "sk-test"
+
+        [[backend]]
+        id = "backend@a"
+        base_url = "http://127.0.0.1:8000"
+        supports = ["responses"]
+
+        [[route]]
+        public = "public-model"
+        expose = ["responses"]
+        backends = ["public-model@backend@a"]
+        "#;
+        let error = resolve_error(toml::from_str(raw).unwrap());
+        assert!(
+            error.contains("backend id 'backend@a' must not contain '@'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn backend_id_without_at_sign_still_resolves() {
+        // Regression: a clean backend id continues to parse and bind.
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["public-model@backend-a"]
+            "#,
+        );
+
+        let route = route_by_public(&config, "public-model");
+        assert_eq!(route.backends.len(), 1);
+        assert_eq!(route.backends[0].backend_id, "backend-a");
     }
 
     #[test]
