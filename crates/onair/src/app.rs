@@ -290,8 +290,10 @@ async fn v1_proxy(
     OriginalUri(uri): OriginalUri,
     body: Bytes,
 ) -> Response<Body> {
+    let normalized = uri.path().trim_end_matches('/');
     let is_messages_path = matches!(endpoint_kind(uri.path()), EndpointKind::Messages)
-        || uri.path().starts_with("/v1/messages");
+        || normalized == "/v1/messages"
+        || normalized.starts_with("/v1/messages/");
 
     let proxy_state = state.proxy_state();
     match proxy::proxy_v1(proxy_state, peer_addr, &headers, method, uri, body).await {

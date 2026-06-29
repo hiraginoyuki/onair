@@ -924,22 +924,24 @@ fn prepare_outbound(
         upstream_headers.insert(AUTHORIZATION, value);
     }
 
-    // For Anthropic native requests, forward the client's
-    // `anthropic-version` header if present, and inject the default
-    // when neither the client nor the route provided one.
+    // For Anthropic native requests, prefer the route's
+    // `request_headers` `anthropic-version` (already in
+    // `upstream_headers` above) over the client's value, and fall
+    // back to the default when neither is set.
     if context.route.request_mode == openai::RequestMode::AnthropicMessagesNative {
-        if let Some(value) = context
-            .client_headers
-            .get("anthropic-version")
-            .and_then(valid_header_value)
-            .cloned()
-        {
-            upstream_headers.entry("anthropic-version").or_insert(value);
-        }
         upstream_headers
             .entry("anthropic-version")
             .or_insert_with(|| {
-                HeaderValue::from_static(onair_core::openai::anthropic::ANTHROPIC_VERSION_DEFAULT)
+                context
+                    .client_headers
+                    .get("anthropic-version")
+                    .and_then(valid_header_value)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        HeaderValue::from_static(
+                            onair_core::openai::anthropic::ANTHROPIC_VERSION_DEFAULT,
+                        )
+                    })
             });
     }
 
