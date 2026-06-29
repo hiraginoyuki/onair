@@ -25,6 +25,7 @@ explicit compatibility markers.
 | `/v1/responses` | `/v1/responses` | `responses` | `responses` when `expose` is non-empty |
 | `/v1/responses` | `/v1/chat/completions` | `chat` or `chat_completions` | `responses_via_chat_completions` in backend `supports` or route `expose` |
 | `/v1/chat/completions` | `/v1/responses` | `responses` | `chat_completions_via_responses` in backend `supports` or route `expose` |
+| `/v1/messages` | `/v1/messages` | `messages` | `messages` when `expose` is non-empty |
 
 ## Backend Supports
 
@@ -43,6 +44,11 @@ aliases:
 - `chat_completions_via_responses` for client `/v1/chat/completions` routed
   through upstream `/v1/responses`. The selected backend must still be
   Responses-capable.
+- `messages` for native `/v1/messages` (Anthropic Messages API). Pairs with
+  backend `supports = ["messages"]`. The compat counterpart
+  `messages_via_chat_completions` is reserved for an upcoming release
+  and is not yet implemented; routes carrying that marker currently
+  produce an `endpoint_unavailable` error.
 - `embeddings` for `/v1/embeddings`.
 - `images` or `image` for `/v1/images/*`.
 - `audio` for `/v1/audio/*`.

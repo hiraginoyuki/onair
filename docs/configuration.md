@@ -379,6 +379,123 @@ fails fast with a clear error naming the route and offending value.
 the config file causes the new headers to take effect on the next
 request without restarting onair.
 
+## Anthropic Messages API
+
+onair accepts Anthropic-format `POST /v1/messages` requests alongside
+the existing OpenAI Chat Completions and Responses surfaces. The
+Anthropic native proxy is opt-in per backend and per route; the
+`messages_via_chat_completions` compat layer is reserved for an
+upcoming release and is not yet implemented.
+
+### Route example
+
+```toml
+[[backend]]
+id = "local-llama"
+base_url = "http://127.0.0.1:8080"
+# Anthropic native proxy: the backend speaks /v1/messages directly.
+supports = ["messages", "streaming", "tools"]
+
+[[route]]
+public = "claude-local"
+expose = ["messages"]
+backends = ["llama-3.1-8b-instruct@local-llama"]
+# Default max_tokens when the client omits it (Anthropic requires the field).
+anthropic_max_tokens = 4096
+# Optional: per-route upstream header overrides (e.g. anthropic-version).
+[route.request_headers]
+# anthropic-version = "2023-06-01"
+# x-api-key = "backend-specific-key"
+```
+
+`supports = ["messages"]` and `expose = ["messages"]` together admit
+client `/v1/messages` requests. Public model names are mapped to the
+bound backend model on the request side and rewritten back on the
+response side (sync + streaming SSE).
+
+### `anthropic_max_tokens`
+
+`Option<u32>` on `[[route]]`. Anthropic requires every `/v1/messages`
+request to carry a `max_tokens` field. When the client omits it,
+onair falls back to the route's `anthropic_max_tokens` value before
+forwarding the request. Resolution order:
+
+1. Client-provided `max_tokens` in the request body.
+2. Route `anthropic_max_tokens` (when the client omitted the field).
+3. Reject with `400 invalid_request_error` in Anthropic error format.
+
+`max_tokens` remains in the `extra_body` protected-key list; operators
+who need to set it must use `anthropic_max_tokens` on the route.
+
+### `request_headers`
+
+`BTreeMap<String, String>` on `[[route]]`. Lives on the route block
+and is shared with the OpenAI surface. Used for `anthropic-version`
+overrides, general per-route upstream header injection (`x-api-key`,
+`anthropic-version`, future needs). See
+[Upstream request header overrides](#upstream-request-header-overrides)
+for the full precedence rules. Header names and values are validated
+at config load; invalid entries fail fast with a clear error naming
+the route and offending value.
+
+### `anthropic-version` resolution order
+
+The `anthropic-version` header is resolved on every `/v1/messages`
+request in this order (last writer wins):
+
+1. Default `2023-06-01` (`ANTHROPIC_VERSION_DEFAULT`).
+2. Client-provided `anthropic-version` header.
+3. Route `request_headers.anthropic-version` (overrides both of the
+   above on a per-route basis).
+
+The implementation is in `crates/onair-proxy/src/proxy.rs:926` (the
+`AnthropicMessagesNative` branch uses `HeaderMap::entry().or_insert_with()`
+so the route value, when present, is inserted first and the fallback
+path only fires when the route did not set one). Operators who need a
+specific upstream version set it under
+`[route.request_headers] anthropic-version = "..."`.
+
+### Inbound auth
+
+Anthropic clients may use either `Authorization: Bearer <token>` or
+`x-api-key: <key>`. When both headers are present,
+`Authorization: Bearer` wins, matching Anthropic's own precedence.
+The implementation is in `crates/onair-core/src/auth.rs`. The error
+message identifies the auth path taken (e.g. `Invalid x-api-key.`
+for an x-api-key rejection).
+
+### Error shape
+
+On `/v1/messages` paths, onair-generated errors (auth failures,
+`model_not_found`, `endpoint_unavailable`, validation errors, missing
+`max_tokens`) use the Anthropic error envelope:
+
+```json
+{"type": "error", "error": {"type": "...", "message": "..."}}
+```
+
+The HTTP status is mapped through `map_upstream_status` (4xx and
+`408`/`429` keep their value; other 5xx collapse to `502 Bad
+Gateway`). OpenAI routes continue to use the existing OpenAI-format
+envelope. Backend `expose_backend_errors = true` continues to
+forward the verbatim upstream body (subject to the same `1 MiB` cap
+and strict header allowlist as the OpenAI surface); on a compat
+route that may mean an OpenAI-shaped body reaches an Anthropic
+client, and operators who enable that flag accept that.
+
+### `/v1/messages/count_tokens`
+
+Returns `404 not_found_error` in Anthropic error format. The full
+implementation is deferred to a future release; the endpoint short-
+circuits in `crates/onair-proxy/src/proxy.rs` so app-level rendering
+emits the Anthropic envelope on the `404` path.
+
+### Hot reload
+
+`anthropic_max_tokens` and `request_headers` are picked up on the
+next config reload; no restart is required. See
+[Hot Reload](#hot-reload) above for the full reload boundary.
+
 ## Exposing backend errors
 
 By default, onair converts every non-2xx upstream response into a
