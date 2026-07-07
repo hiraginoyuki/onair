@@ -1230,6 +1230,7 @@ fn chat_completion_response_converts_to_responses_shape() {
             "prompt_tokens": 10,
             "prompt_tokens_details": {"cached_tokens": 4},
             "completion_tokens": 3,
+            "completion_tokens_details": {"reasoning_tokens": 2},
             "total_tokens": 13
         }
     });
@@ -1256,10 +1257,15 @@ fn chat_completion_response_converts_to_responses_shape() {
         4
     );
     assert_eq!(rewritten["usage"]["output_tokens"], 3);
+    assert_eq!(
+        rewritten["usage"]["output_tokens_details"]["reasoning_tokens"],
+        2
+    );
     assert_eq!(rewritten["usage"]["total_tokens"], 13);
     assert_eq!(usage.input, 10);
     assert_eq!(usage.cached_input, 4);
     assert_eq!(usage.output, 3);
+    assert_eq!(usage.reasoning_output, 2);
     assert_eq!(usage.total, 13);
 }
 
@@ -1427,6 +1433,9 @@ fn extract_usage_observation_collects_usage_keys() {
                     "cached_tokens": 1
                 },
                 "completion_tokens": 2,
+                "completion_tokens_details": {
+                    "reasoning_tokens": 1
+                },
                 "total_tokens": 6
             }
         },
@@ -1437,12 +1446,16 @@ fn extract_usage_observation_collects_usage_keys() {
                     "input_tokens_details": {
                         "cached_tokens": 2
                     },
-                    "output_tokens": 5
+                    "output_tokens": 5,
+                    "output_tokens_details": {
+                        "reasoning_tokens": 3
+                    }
                 }
             }
         ]
     }));
 
+    assert_eq!(observation.totals.reasoning_output, 4);
     assert_eq!(observation.diagnostics.usage_object_count, 2);
     assert!(observation.diagnostics.usage_keys.contains("prompt_tokens"));
     assert!(observation.diagnostics.usage_keys.contains("input_tokens"));
@@ -1464,6 +1477,18 @@ fn extract_usage_observation_collects_usage_keys() {
             .diagnostics
             .usage_keys
             .contains("input_tokens_details")
+    );
+    assert!(
+        observation
+            .diagnostics
+            .usage_keys
+            .contains("completion_tokens_details")
+    );
+    assert!(
+        observation
+            .diagnostics
+            .usage_keys
+            .contains("output_tokens_details")
     );
 }
 
@@ -1655,6 +1680,7 @@ fn responses_stream_converts_text_deltas_to_chat_completion_chunks() {
                 "input_tokens": 8,
                 "input_tokens_details": {"cached_tokens": 2},
                 "output_tokens": 5,
+                "output_tokens_details": {"reasoning_tokens": 3},
                 "total_tokens": 13
             }
         }
@@ -1677,10 +1703,12 @@ fn responses_stream_converts_text_deltas_to_chat_completion_chunks() {
     assert!(output.contains("\"prompt_tokens\":8"));
     assert!(output.contains("\"cached_tokens\":2"));
     assert!(output.contains("\"completion_tokens\":5"));
+    assert!(output.contains("\"reasoning_tokens\":3"));
     assert!(output.contains("data: [DONE]"));
     assert_eq!(normalizer.usage.input, 8);
     assert_eq!(normalizer.usage.cached_input, 2);
     assert_eq!(normalizer.usage.output, 5);
+    assert_eq!(normalizer.usage.reasoning_output, 3);
     assert_eq!(normalizer.usage.total, 13);
 }
 

@@ -277,7 +277,9 @@ fn chat_usage_to_responses_usage(usage: Option<&Value>) -> Value {
             "cached_tokens": fields.cached,
         },
         "output_tokens": fields.output,
-        "output_tokens_details": {},
+        "output_tokens_details": {
+            "reasoning_tokens": fields.reasoning,
+        },
         "total_tokens": fields.total,
     })
 }
@@ -423,6 +425,7 @@ struct UsageFields {
     input: u64,
     output: u64,
     cached: u64,
+    reasoning: u64,
     total: u64,
 }
 
@@ -437,11 +440,15 @@ fn usage_fields_from_object(usage: Option<&Map<String, Value>>) -> UsageFields {
     let cached = nested_number_field(usage, "prompt_tokens_details", "cached_tokens")
         .or_else(|| nested_number_field(usage, "input_tokens_details", "cached_tokens"))
         .unwrap_or(0);
+    let reasoning = nested_number_field(usage, "completion_tokens_details", "reasoning_tokens")
+        .or_else(|| nested_number_field(usage, "output_tokens_details", "reasoning_tokens"))
+        .unwrap_or(0);
     let total = number_field(usage, "total_tokens").unwrap_or(input + output);
     UsageFields {
         input,
         output,
         cached,
+        reasoning,
         total,
     }
 }
@@ -471,12 +478,17 @@ pub struct UsageTotals {
     pub input: u64,
     pub cached_input: u64,
     pub output: u64,
+    pub reasoning_output: u64,
     pub total: u64,
 }
 
 impl UsageTotals {
     pub fn is_empty(self) -> bool {
-        self.input == 0 && self.cached_input == 0 && self.output == 0 && self.total == 0
+        self.input == 0
+            && self.cached_input == 0
+            && self.output == 0
+            && self.reasoning_output == 0
+            && self.total == 0
     }
 }
 
@@ -556,6 +568,7 @@ fn add_usage_object(object: &Map<String, Value>, totals: &mut UsageTotals) {
     totals.input += fields.input;
     totals.cached_input += fields.cached;
     totals.output += fields.output;
+    totals.reasoning_output += fields.reasoning;
     totals.total += fields.total;
 }
 
@@ -773,6 +786,7 @@ pub(crate) fn apply_data_prologue(
     usage.input += observation.totals.input;
     usage.cached_input += observation.totals.cached_input;
     usage.output += observation.totals.output;
+    usage.reasoning_output += observation.totals.reasoning_output;
     usage.total += observation.totals.total;
     diagnostics.merge(observation.diagnostics);
     if let (Some(backend_model), Some(public_model)) = (backend_model, public_model) {
@@ -1292,7 +1306,9 @@ impl ResponsesSseNormalizer {
                     "cached_tokens": self.usage.cached_input,
                 },
                 "output_tokens": self.usage.output,
-                "output_tokens_details": {},
+                "output_tokens_details": {
+                    "reasoning_tokens": self.usage.reasoning_output,
+                },
                 "total_tokens": if self.usage.total > 0 {
                     self.usage.total
                 } else {
