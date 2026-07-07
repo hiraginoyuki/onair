@@ -30,14 +30,14 @@
       # To pin a specific release, point a Nix ref at the commit that
       # contains the values you want (e.g. `?ref=v0.1.0`).
       version = "0.2.0";
-      tag = "v0.2.0";
+      tag = "unstable";
       hashes = {
-        "x86_64-unknown-linux-gnu" = "sha256-82rQcETLuwat6qkORg+Ky0sIVsqfPENpZHsYWZpQLsY=";
-        "x86_64-unknown-linux-musl" = "sha256-NGjJFk21QGgcLYRdanRAVWFNoPJxN/Kc0Cwz8XNDxSY=";
-        "aarch64-unknown-linux-gnu" = "sha256-8CR5M5SGiIYL6dhGKqgO7/D1VC7AGZ/Xdonz7bnwAjg=";
-        "aarch64-unknown-linux-musl" = "sha256-y4x2qMaUHcrFq2u9fwi9Hu8nWgcOMCsra4eAeWMGsTk=";
-        "x86_64-apple-darwin" = "sha256-SLiavpC7a1XayYYJjlWSLNrRP3kE/Sc1w1sGFhZnrQw=";
-        "aarch64-apple-darwin" = "sha256-ldiSEgz+ghZntSuw94dvTrHSSa4xUFvjHwtT4xptU5o=";
+        "x86_64-unknown-linux-gnu" = "sha256-LwkRRywJDS1gs1wZyBF8idCfgILjaHSeFZljbvzU1c8=";
+        "x86_64-unknown-linux-musl" = "sha256-kDva5ZoM/HAt3MMvYpDC5DBerKMnJEPdYy4Z8m3FI9o=";
+        "aarch64-unknown-linux-gnu" = "sha256-ts5iR4DFZSp8J0Taws4y0zGp80nS2IjmUcvz/u/pWUk=";
+        "aarch64-unknown-linux-musl" = "sha256-jIF0XQXwSptbh/WV1VAFEuuN+f0SjxO4ZRPesAOHLwE=";
+        "x86_64-apple-darwin" = "sha256-HreNje5rA32a1ZqF+zfN2B91qs8eBRHDK0KPJP6VK6I=";
+        "aarch64-apple-darwin" = "sha256-KgabegSw4fQfjjTSBL+gH7M77lKAff6CX9HtUESsdi4=";
       };
 
       mkPkg = system: pkgs: pkgs.stdenv.mkDerivation {
