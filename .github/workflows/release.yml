@@ -333,7 +333,7 @@ jobs:
             echo "No changes to flake.nix; skipping commit"
           else
             git commit -m "chore(release): record ${TAG} in flake.nix [skip ci]"
-            git push origin main
+            git push origin HEAD:refs/heads/main
           fi
 
       - name: Push release tag
