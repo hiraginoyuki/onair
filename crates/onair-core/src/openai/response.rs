@@ -429,6 +429,9 @@ fn responses_usage_to_chat_usage(usage: Option<&Value>) -> Value {
             "cached_tokens": fields.cached,
         },
         "completion_tokens": fields.output,
+        "completion_tokens_details": {
+            "reasoning_tokens": fields.reasoning,
+        },
         "total_tokens": fields.total,
     })
 }

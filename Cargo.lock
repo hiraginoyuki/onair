@@ -929,7 +929,7 @@ dependencies = [
 
 [[package]]
 name = "onair"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-stream",
  "axum",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "onair-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "notify",
@@ -968,7 +968,7 @@ dependencies = [
 
 [[package]]
 name = "onair-obs"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "bytes",
@@ -989,7 +989,7 @@ dependencies = [
 
 [[package]]
 name = "onair-proxy"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-stream",
  "axum",
