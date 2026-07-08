@@ -2242,7 +2242,7 @@ impl AnthropicMessagesToChatSseNormalizer {
             }
         });
         let mut output = self.chat_chunk(json!({}), Some(finish_reason));
-        if self.emit_usage_to_client {
+        if self.emit_usage_to_client && self.diagnostics.usage_object_count > 0 {
             output.extend(self.chat_usage_chunk());
         }
         output.extend(self.done_event());

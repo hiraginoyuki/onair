@@ -332,6 +332,74 @@ fn chat_completions_to_messages_rejects_unsupported_fields() {
 }
 
 #[test]
+fn chat_completions_to_messages_accepts_stream_options_include_usage() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": true,
+        "stream_options": {"include_usage": true},
+        "max_tokens": 32
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaMessages,
+        &RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
+        },
+        &BTreeMap::new(),
+        "test",
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["stream"], true);
+    assert!(rewritten.get("stream_options").is_none());
+}
+
+#[test]
+fn chat_completions_to_messages_rejects_invalid_stream_options_shape() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": true,
+        "stream_options": {"extra": true},
+        "max_tokens": 32
+    });
+
+    let error = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaMessages,
+        &RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
+        },
+        &BTreeMap::new(),
+        "test",
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "stream_options.extra is not supported by the chat-to-messages compatibility path."
+    );
+    assert_eq!(error.param().as_deref(), Some("stream_options"));
+}
+
+#[test]
 fn messages_response_converts_to_chat_completion() {
     let body = json!({
         "id": "msg_01",
@@ -3217,4 +3285,44 @@ fn anthropic_messages_to_chat_stream_emits_tool_call_deltas() {
         "body={output}"
     );
     assert!(output.contains("data: [DONE]"), "body={output}");
+}
+
+#[test]
+fn anthropic_messages_to_chat_stream_skips_usage_chunk_without_upstream_usage() {
+    let mut strategy = SseStrategy::new(
+        RequestMode::ChatCompletionsViaMessages,
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        true,
+    );
+    let start = json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "backend-model",
+            "content": [],
+            "stop_reason": null
+        }
+    });
+    let delta = json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "hello"}
+    });
+    let stop = json!({"type": "message_stop"});
+
+    let mut output = strategy.push(format!("event: message_start\ndata: {start}\n\n").as_bytes());
+    output.extend(strategy.push(format!("data: {delta}\n\n").as_bytes()));
+    output.extend(strategy.push(format!("data: {stop}\n\n").as_bytes()));
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("\"usage\":null"), "body={output}");
+    assert!(
+        !output.contains("\"choices\":[],\"usage\""),
+        "unexpected synthesized usage chunk: {output}"
+    );
+    assert_eq!(strategy.diagnostics().usage_object_count, 0);
+    assert_eq!(strategy.usage(), UsageTotals::default());
 }

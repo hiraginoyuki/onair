@@ -245,7 +245,6 @@ fn validate_chat_to_anthropic_options(
         "logit_bias",
         "seed",
         "response_format",
-        "stream_options",
         "user",
         "audio",
         "modalities",
@@ -265,6 +264,42 @@ fn validate_chat_to_anthropic_options(
         return Err(RequestRewriteError::new(
             "parallel_tool_calls is not supported by the chat-to-messages compatibility path.",
             Some("parallel_tool_calls"),
+        ));
+    }
+
+    if let Some(stream_options) = object.get("stream_options") {
+        validate_stream_options(stream_options)?;
+    }
+
+    Ok(())
+}
+
+fn validate_stream_options(stream_options: &Value) -> Result<(), RequestRewriteError> {
+    let Some(object) = stream_options.as_object() else {
+        return Err(RequestRewriteError::new(
+            "stream_options must be an object.",
+            Some("stream_options"),
+        ));
+    };
+
+    for key in object.keys() {
+        if key != "include_usage" {
+            return Err(RequestRewriteError::new(
+                format!(
+                    "stream_options.{key} is not supported by the chat-to-messages compatibility path."
+                ),
+                Some("stream_options"),
+            ));
+        }
+    }
+
+    if let Some(include_usage) = object.get("include_usage")
+        && !include_usage.is_boolean()
+        && !include_usage.is_null()
+    {
+        return Err(RequestRewriteError::new(
+            "stream_options.include_usage must be a boolean.",
+            Some("stream_options"),
         ));
     }
 
