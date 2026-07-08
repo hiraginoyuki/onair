@@ -3019,6 +3019,44 @@ fn anthropic_messages_endpoint(id: &str, base_url: String) -> TestEndpoint {
     }
 }
 
+fn chat_completions_via_messages_endpoint(id: &str, base_url: String) -> TestEndpoint {
+    TestEndpoint {
+        backend: ResolvedBackend {
+            id: id.to_owned(),
+            base_url,
+            api_key: None,
+            timeout: std::time::Duration::from_secs(5),
+            supports: btree_set(["messages", "streaming", "tools"]),
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            weight: 1,
+            extra_body: BTreeMap::new(),
+            expose_backend_errors: false,
+            stream_capture: false,
+        },
+        route: ResolvedRoute {
+            key: RouteKey::Public(PUBLIC_MODEL.to_owned()),
+            expose: btree_set(["chat_completions_via_messages", "tools"]),
+            context_length: ContextLengthSpec::None,
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            backends: vec![RouteBackendBinding {
+                backend_id: id.to_owned(),
+                backend_model: BACKEND_MODEL.to_owned(),
+            }],
+            extra_body: BTreeMap::new(),
+            request_headers: BTreeMap::new(),
+            expose_backend_errors: false,
+            stream_capture: false,
+            anthropic_max_tokens: Some(8192),
+        },
+    }
+}
+
 fn expose_backend_errors_endpoint(
     id: &str,
     base_url: String,
@@ -5268,6 +5306,132 @@ async fn anthropic_messages_streaming_anthropic_version_forwarded() {
         headers.get("anthropic-version").map(|v| v.as_str()),
         Some("2024-01-01"),
         "client-provided anthropic-version should be forwarded, not overridden"
+    );
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn chat_completions_via_messages_buffered_success() {
+    let backend = TestBackend::spawn_anthropic_messages("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![chat_completions_via_messages_endpoint(
+            "backend-a",
+            backend.base_url(),
+        )],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 100
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["object"], "chat.completion");
+    assert_eq!(body["model"], PUBLIC_MODEL);
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "hello from anthropic"
+    );
+    assert_eq!(body["usage"]["prompt_tokens"], 10);
+    assert_eq!(body["usage"]["completion_tokens"], 5);
+
+    let captured = backend.requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0]["model"], BACKEND_MODEL);
+    assert_eq!(captured[0]["messages"][0]["role"], "user");
+    assert_eq!(captured[0]["messages"][0]["content"][0]["text"], "hi");
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn chat_completions_via_messages_injects_default_anthropic_version() {
+    let backend = HeaderCaptureBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![chat_completions_via_messages_endpoint(
+            "backend-a",
+            backend.base_url(),
+        )],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(json_request(
+            "/v1/chat/completions",
+            json!({
+                "model": PUBLIC_MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 100
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let captured = backend.captured_requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0].1.get("anthropic-version").map(String::as_str),
+        Some("2023-06-01")
+    );
+
+    backend.abort();
+}
+
+#[tokio::test]
+async fn chat_completions_via_messages_forwards_client_anthropic_version() {
+    let backend = HeaderCaptureBackend::spawn("backend-a").await;
+    let state = test_state(
+        RoutingStrategy::Priority,
+        vec![chat_completions_via_messages_endpoint(
+            "backend-a",
+            backend.base_url(),
+        )],
+    );
+    let app = router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(AUTHORIZATION, format!("Bearer {CLIENT_KEY}"))
+                .header(CONTENT_TYPE, "application/json")
+                .header("anthropic-version", "2024-01-01")
+                .extension(ConnectInfo(
+                    "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(
+                    json!({
+                        "model": PUBLIC_MODEL,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 100
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let captured = backend.captured_requests();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(
+        captured[0].1.get("anthropic-version").map(String::as_str),
+        Some("2024-01-01")
     );
 
     backend.abort();

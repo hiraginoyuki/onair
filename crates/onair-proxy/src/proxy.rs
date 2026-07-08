@@ -928,7 +928,11 @@ fn prepare_outbound(
     // `request_headers` `anthropic-version` (already in
     // `upstream_headers` above) over the client's value, and fall
     // back to the default when neither is set.
-    if context.route.request_mode == openai::RequestMode::AnthropicMessagesNative {
+    if matches!(
+        context.route.request_mode,
+        openai::RequestMode::AnthropicMessagesNative
+            | openai::RequestMode::ChatCompletionsViaMessages
+    ) {
         upstream_headers
             .entry("anthropic-version")
             .or_insert_with(|| {

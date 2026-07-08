@@ -25,6 +25,7 @@ explicit compatibility markers.
 | `/v1/responses` | `/v1/responses` | `responses` | `responses` when `expose` is non-empty |
 | `/v1/responses` | `/v1/chat/completions` | `chat` or `chat_completions` | `responses_via_chat_completions` in backend `supports` or route `expose` |
 | `/v1/chat/completions` | `/v1/responses` | `responses` | `chat_completions_via_responses` in backend `supports` or route `expose` |
+| `/v1/chat/completions` | `/v1/messages` | `messages` | `chat_completions_via_messages` in backend `supports` or route `expose` |
 | `/v1/messages` | `/v1/messages` | `messages` | `messages` when `expose` is non-empty |
 
 ## Backend Supports
@@ -44,6 +45,11 @@ aliases:
 - `chat_completions_via_responses` for client `/v1/chat/completions` routed
   through upstream `/v1/responses`. The selected backend must still be
   Responses-capable.
+- `chat_completions_via_messages` for client `/v1/chat/completions` routed
+  through upstream `/v1/messages`. The selected backend must still be
+  Anthropic Messages-capable. `chat_via_messages` is accepted as a
+  config-load alias and canonicalized immediately; resolved config,
+  operator snapshots, and logs use only `chat_completions_via_messages`.
 - `messages` for native `/v1/messages` (Anthropic Messages API). Pairs with
   backend `supports = ["messages"]`. The compat counterpart
   `messages_via_chat_completions` is reserved for an upcoming release

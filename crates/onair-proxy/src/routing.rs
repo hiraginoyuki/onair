@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use rand::Rng;
 
-use onair_core::compat::{CHAT_COMPLETIONS_VIA_RESPONSES, RESPONSES_VIA_CHAT_COMPLETIONS};
+use onair_core::compat::{
+    CHAT_COMPLETIONS_VIA_MESSAGES, CHAT_COMPLETIONS_VIA_RESPONSES, RESPONSES_VIA_CHAT_COMPLETIONS,
+};
 use onair_core::config::{
     ChatStreamUsagePolicy, ResolvedBackend, ResolvedRoute, ResponsesMaxOutputTokensPolicy,
     ResponsesStorePolicy, RoutingStrategy, ToolSchemaMode,
@@ -486,6 +488,15 @@ fn request_mode_for_chat_completions(
         )
     {
         return Some(RequestMode::ChatCompletionsViaResponses);
+    }
+    if supports_messages(backend_supports)
+        && route_supports_compat_marker(
+            backend_supports,
+            route_expose,
+            CHAT_COMPLETIONS_VIA_MESSAGES,
+        )
+    {
+        return Some(RequestMode::ChatCompletionsViaMessages);
     }
     None
 }
@@ -1074,6 +1085,101 @@ mod tests {
             selected.head().request_mode,
             RequestMode::ChatCompletionsViaResponses
         );
+    }
+
+    #[test]
+    fn chat_completions_can_route_to_explicit_messages_compat_backend() {
+        let backends = vec![backend_with_supports("messages-backend", &["messages"])];
+        let routes = vec![route_for_public(
+            "public-model",
+            &[CHAT_COMPLETIONS_VIA_MESSAGES],
+            &[("backend-private", "messages-backend")],
+        )];
+
+        let selected = select_backend_candidates(
+            &backends,
+            &routes,
+            RoutingStrategy::Priority,
+            "/v1/chat/completions",
+            Some("public-model"),
+            false,
+            false,
+            None,
+            &RoundRobinCounters::new(),
+        )
+        .unwrap();
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected.head().backend_id, "messages-backend");
+        assert_eq!(
+            selected.head().request_mode,
+            RequestMode::ChatCompletionsViaMessages
+        );
+    }
+
+    #[test]
+    fn chat_completions_prefers_responses_compat_before_messages_compat() {
+        let backends = vec![
+            backend_with_supports("responses-backend", &["responses"]),
+            backend_with_supports("messages-backend", &["messages"]),
+        ];
+        let routes = vec![route_for_public(
+            "public-model",
+            &[
+                CHAT_COMPLETIONS_VIA_RESPONSES,
+                CHAT_COMPLETIONS_VIA_MESSAGES,
+            ],
+            &[
+                ("responses-private", "responses-backend"),
+                ("messages-private", "messages-backend"),
+            ],
+        )];
+
+        let selected = select_backend_candidates(
+            &backends,
+            &routes,
+            RoutingStrategy::Priority,
+            "/v1/chat/completions",
+            Some("public-model"),
+            false,
+            false,
+            None,
+            &RoundRobinCounters::new(),
+        )
+        .unwrap();
+
+        assert_eq!(selected.head().backend_id, "responses-backend");
+        assert_eq!(
+            selected.head().request_mode,
+            RequestMode::ChatCompletionsViaResponses
+        );
+    }
+
+    #[test]
+    fn chat_completions_does_not_implicitly_use_messages_backend() {
+        let backends = vec![backend_with_supports("messages-backend", &["messages"])];
+        let routes = vec![route_for_public(
+            "public-model",
+            &["chat"],
+            &[("messages-private", "messages-backend")],
+        )];
+
+        let error = match select_backend_candidates(
+            &backends,
+            &routes,
+            RoutingStrategy::Priority,
+            "/v1/chat/completions",
+            Some("public-model"),
+            false,
+            false,
+            None,
+            &RoundRobinCounters::new(),
+        ) {
+            Ok(_) => panic!("expected chat completions routing to fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code.as_deref(), Some("endpoint_unavailable"));
     }
 
     #[test]

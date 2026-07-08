@@ -162,6 +162,18 @@ backends = ["local-vllm"]
 # expose = ["chat_completions_via_responses", "tools"]
 # backends = ["backend-responses-model@responses-wrapper"]
 
+# Example for an Anthropic Messages-native backend exposed to OpenAI Chat clients:
+# [[backend]]
+# id = "anthropic-wrapper"
+# base_url = "http://127.0.0.1:8002"
+# supports = ["messages", "streaming", "tools"]
+#
+# [[route]]
+# public = "gpt-4o-anthropic"
+# expose = ["chat_completions_via_messages", "tools"]
+# backends = ["claude-sonnet-4@anthropic-wrapper"]
+# anthropic_max_tokens = 4096
+
 # # ======================================================================
 # Example Anthropic Messages API route; safe to delete if not used.
 # # ======================================================================
@@ -181,8 +193,15 @@ backends = ["local-vllm"]
 # present. `/v1/messages/count_tokens` returns 404 in Anthropic
 # error format until the full implementation lands.
 #
-# The compat counterpart `messages_via_chat_completions`
-# (Anthropic client -> OpenAI Chat backend) is reserved for an
+# The reverse compat counterpart `chat_completions_via_messages`
+# (OpenAI Chat client -> Anthropic Messages backend) is available
+# now and is always explicit. `chat_via_messages` is accepted as a
+# config-load alias and canonicalized immediately to
+# `chat_completions_via_messages`; resolved config and operator
+# surfaces only show the canonical marker.
+#
+# The Anthropic client -> OpenAI Chat backend compat marker
+# `messages_via_chat_completions` is still reserved for an
 # upcoming release; routes carrying that marker currently produce
 # an `endpoint_unavailable` error.
 #

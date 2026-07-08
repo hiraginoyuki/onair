@@ -17,6 +17,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use url::Url;
 
+use crate::compat::CHAT_COMPLETIONS_VIA_MESSAGES;
 use crate::error::{ConfigError, Error, Result};
 use crate::{ContextSizeCache, IpCidr};
 
@@ -33,6 +34,7 @@ const DEFAULT_TELEMETRY_EXPORT_INTERVAL_MS: u64 = 30_000;
 const DEFAULT_BACKEND_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_HEALTH_INTERVAL_MS: u64 = 30_000;
 const DEFAULT_HEALTH_TIMEOUT_MS: u64 = 2_000;
+const CHAT_VIA_MESSAGES_ALIAS: &str = "chat_via_messages";
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -767,6 +769,12 @@ impl Config {
     }
 }
 
+fn canonicalize_marker_set(markers: &mut BTreeSet<String>) {
+    if markers.remove(CHAT_VIA_MESSAGES_ALIAS) {
+        markers.insert(CHAT_COMPLETIONS_VIA_MESSAGES.to_owned());
+    }
+}
+
 fn resolve_routes(
     route_configs: &[RouteConfig],
     backends: &[ResolvedBackend],
@@ -789,7 +797,8 @@ fn resolve_routes(
         let chat_stream_usage = route_config
             .chat_stream_usage
             .unwrap_or(ChatStreamUsagePolicy::Preserve);
-        let expose = route_config.expose.clone();
+        let mut expose = route_config.expose.clone();
+        canonicalize_marker_set(&mut expose);
         let context_length =
             resolve_context_lengths(&key, &route_config.context_length, &bindings)?;
         let extra_body = merge_extra_body(&bindings, backends, &route_config.extra_body);
@@ -902,14 +911,18 @@ fn validate_routes(
                 format_route_key(&key)
             ))));
         }
+        let mut expose = route_config.expose.clone();
+        canonicalize_marker_set(&mut expose);
         validate_markers(
-            &route_config.expose,
+            &expose,
             routing_config.unknown_endpoint_policy,
             MarkerKind::Endpoint,
             &format!("route '{}'", format_route_key(&key)),
         )?;
         validate_request_headers(&route_config.request_headers, &key)?;
-        validated.push((key, route_config.clone()));
+        let mut route_config = route_config.clone();
+        route_config.expose = expose;
+        validated.push((key, route_config));
     }
     Ok(validated)
 }
@@ -1031,6 +1044,9 @@ fn is_compat_marker_pair(marker: &str, backend_supports: &BTreeSet<String>) -> b
         return has_marker(backend_supports, "responses")
             || has_marker(backend_supports, "response");
     }
+    if marker == crate::compat::CHAT_COMPLETIONS_VIA_MESSAGES {
+        return has_marker(backend_supports, "messages");
+    }
     false
 }
 
@@ -1119,7 +1135,7 @@ fn resolve_backends(
 ) -> Result<Vec<ResolvedBackend>> {
     let mut backend_ids = BTreeSet::new();
     let mut backends = Vec::with_capacity(raw_backends.len());
-    for backend in raw_backends {
+    for mut backend in raw_backends {
         if backend.id.trim().is_empty() {
             return Err(Error::Config(ConfigError::Message(
                 "backend id must not be empty".to_owned(),
@@ -1145,6 +1161,7 @@ fn resolve_backends(
         }
         let base_url = normalize_backend_base_url(&backend.base_url, &backend.id)?;
         let api_key = resolve_optional_secret(backend.api_key, backend.api_key_env)?;
+        canonicalize_marker_set(&mut backend.supports);
         validate_markers(
             &backend.supports,
             unknown_capability_policy,
@@ -1362,7 +1379,7 @@ fn validate_markers(
     location: &str,
 ) -> Result<()> {
     for value in values {
-        if crate::is_known_marker(value) {
+        if crate::is_known_marker(value) || value == CHAT_VIA_MESSAGES_ALIAS {
             continue;
         }
         match policy {
@@ -2797,6 +2814,7 @@ mod tests {
                 "functions",
                 "responses_via_chat_completions",
                 "chat_completions_via_responses",
+                "chat_completions_via_messages",
                 "embeddings",
                 "images",
                 "audio",
@@ -2816,6 +2834,7 @@ mod tests {
                 "chat",
                 "responses_via_chat_completions",
                 "chat_completions_via_responses",
+                "chat_completions_via_messages",
                 "tools",
                 "embeddings",
             ]
@@ -2837,6 +2856,7 @@ mod tests {
             "functions",
             "responses_via_chat_completions",
             "chat_completions_via_responses",
+            "chat_completions_via_messages",
             "embeddings",
             "images",
             "audio",
@@ -2859,6 +2879,7 @@ mod tests {
             "chat",
             "responses_via_chat_completions",
             "chat_completions_via_responses",
+            "chat_completions_via_messages",
             "tools",
             "embeddings",
         ] {
@@ -2867,6 +2888,113 @@ mod tests {
                 "expected endpoint '{known}' to be accepted"
             );
         }
+    }
+
+    #[test]
+    fn chat_via_messages_alias_canonicalizes_in_backend_and_route() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["messages", "chat_via_messages"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["chat_via_messages"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        assert!(
+            config.backends[0]
+                .supports
+                .contains("chat_completions_via_messages")
+        );
+        assert!(
+            !config.backends[0].supports.contains("chat_via_messages"),
+            "alias should not leak into resolved backend config"
+        );
+
+        let route = route_by_public(&config, "public-model");
+        assert!(route.expose.contains("chat_completions_via_messages"));
+        assert!(
+            !route.expose.contains("chat_via_messages"),
+            "alias should not leak into resolved route config"
+        );
+    }
+
+    #[test]
+    fn chat_via_messages_alias_dedupes_with_canonical_marker() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["messages", "chat_via_messages", "chat_completions_via_messages"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["chat_via_messages", "chat_completions_via_messages"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        let backend_count = config.backends[0]
+            .supports
+            .iter()
+            .filter(|value| value.as_str() == "chat_completions_via_messages")
+            .count();
+        assert_eq!(backend_count, 1);
+
+        let route = route_by_public(&config, "public-model");
+        let route_count = route
+            .expose
+            .iter()
+            .filter(|value| value.as_str() == "chat_completions_via_messages")
+            .count();
+        assert_eq!(route_count, 1);
+    }
+
+    #[test]
+    fn compat_marker_via_messages_is_reachable_with_messages_backend() {
+        let config = parse_config(
+            r#"
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["messages"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["chat_completions_via_messages"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        let route = route_by_public(&config, "public-model");
+        assert!(route.expose.contains("chat_completions_via_messages"));
     }
 
     #[test]

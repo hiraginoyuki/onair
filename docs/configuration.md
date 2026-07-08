@@ -385,7 +385,9 @@ onair accepts Anthropic-format `POST /v1/messages` requests alongside
 the existing OpenAI Chat Completions and Responses surfaces. The
 Anthropic native proxy is opt-in per backend and per route; the
 `messages_via_chat_completions` compat layer is reserved for an
-upcoming release and is not yet implemented.
+upcoming release and is not yet implemented. The reverse OpenAI Chat
+Completions → Anthropic Messages compat path is available via the
+explicit `chat_completions_via_messages` marker.
 
 ### Route example
 
@@ -412,6 +414,14 @@ anthropic_max_tokens = 4096
 client `/v1/messages` requests. Public model names are mapped to the
 bound backend model on the request side and rewritten back on the
 response side (sync + streaming SSE).
+
+To expose an Anthropic Messages backend to OpenAI Chat Completions
+clients instead, use `supports = ["messages"]` on the backend and
+`expose = ["chat_completions_via_messages"]` on the route. The
+compatibility path is explicit; `messages` alone does not imply
+`chat_completions_via_messages`. The alias `chat_via_messages` is
+accepted at config load and immediately canonicalized to
+`chat_completions_via_messages`.
 
 ### `anthropic_max_tokens`
 
@@ -441,7 +451,8 @@ the route and offending value.
 ### `anthropic-version` resolution order
 
 The `anthropic-version` header is resolved on every `/v1/messages`
-request in this order (last writer wins):
+request, including the `chat_completions_via_messages` compatibility
+path, in this order (last writer wins):
 
 1. Default `2023-06-01` (`ANTHROPIC_VERSION_DEFAULT`).
 2. Client-provided `anthropic-version` header.

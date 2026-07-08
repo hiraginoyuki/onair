@@ -25,6 +25,7 @@ These items are ordered roughly by dependency and operator value, not by impleme
 ## In progress / next
 
 - Anthropic → OpenAI Chat compat layer (Phase 2 of `.local/plans/anthropic-mvp-plan.md`; expected in v0.2.x). Anthropic client requests translated to upstream `/v1/chat/completions` and SSE back to Anthropic named events. Tracked under the `messages_via_chat_completions` marker; routes carrying it currently produce an `endpoint_unavailable` error.
+- OpenAI Chat → Anthropic Messages compat layer (post-v0.2.0 follow-up shipped on `main` after the v0.2.0 cut). OpenAI Chat Completions clients can be routed to upstream `/v1/messages` backends via the explicit `chat_completions_via_messages` marker. Alias `chat_via_messages` is accepted only at config load and canonicalized immediately.
 - OpenCode Go smoke test (Phase 4 of `.local/plans/anthropic-mvp-plan.md`; expected in v0.2.x). Anthropic-format models under `https://opencode.ai/zen/go/v1/messages`; ToS caveat for personal proxy use to land alongside the smoke test.
 
 ## Priority 1

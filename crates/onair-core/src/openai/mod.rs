@@ -1,4 +1,5 @@
 pub mod anthropic;
+pub mod anthropic_compat;
 pub mod models;
 pub mod paths;
 pub mod request;

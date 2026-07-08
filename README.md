@@ -35,7 +35,8 @@ current behavior and points to detailed operator/contributor references under
   supports when available.
 - Explicit compatibility markers can bridge client `/v1/responses` through
   upstream `/v1/chat/completions`, or client `/v1/chat/completions` through
-  upstream `/v1/responses`.
+  upstream `/v1/responses`, or client `/v1/chat/completions` through
+  upstream `/v1/messages`.
 - Native routing is preferred when a route declares the requested native
   endpoint. To force a compatibility path for a model route, omit the native
   endpoint marker and include the relevant compatibility marker.
@@ -87,7 +88,9 @@ current behavior and points to detailed operator/contributor references under
 
 The Anthropic → OpenAI Chat compat layer (`messages_via_chat_completions`)
 and the OpenCode Go smoke-test support are forthcoming in a future
-version. See [ROADMAP.md](ROADMAP.md).
+version. The reverse OpenAI Chat → Anthropic Messages compat layer is
+available now under `chat_completions_via_messages`. See
+[ROADMAP.md](ROADMAP.md).
 
 ## Installation
 
@@ -200,6 +203,7 @@ compatibility path.
 | `/v1/responses` | `/v1/responses` | `responses` | `responses` when `expose` is non-empty |
 | `/v1/responses` | `/v1/chat/completions` | `chat` or `chat_completions` | `responses_via_chat_completions` in backend `supports` or route `expose` |
 | `/v1/chat/completions` | `/v1/responses` | `responses` | `chat_completions_via_responses` in backend `supports` or route `expose` |
+| `/v1/chat/completions` | `/v1/messages` | `messages` | `chat_completions_via_messages` in backend `supports` or route `expose` |
 
 A `[[route]]` block is required for every public model referenced in
 `[access].default_models` or any `[[client]].models`. The `model@backend`

@@ -9,6 +9,7 @@ use crate::config::{
 };
 
 use super::{
+    anthropic_compat::rewrite_chat_request_as_anthropic,
     is_json_content_type,
     paths::endpoint_kind,
     responses_compat::{rewrite_chat_request_as_responses, rewrite_responses_request_as_chat},
@@ -19,6 +20,7 @@ pub enum RequestMode {
     Native,
     ResponsesViaChatCompletions,
     ChatCompletionsViaResponses,
+    ChatCompletionsViaMessages,
     AnthropicMessagesNative,
 }
 
@@ -164,6 +166,16 @@ pub fn rewrite_request_body_for_mode_with_policies(
             backend_model,
             policies.responses_store,
             policies.responses_max_output_tokens,
+            extra_body,
+            route_label,
+        );
+    }
+    if request_mode == RequestMode::ChatCompletionsViaMessages {
+        return rewrite_chat_request_as_anthropic(
+            body,
+            content_type,
+            backend_model,
+            policies.anthropic_max_tokens,
             extra_body,
             route_label,
         );
@@ -357,6 +369,9 @@ pub fn upstream_path_for_mode(path: &str, request_mode: RequestMode) -> &str {
         }
         RequestMode::ChatCompletionsViaResponses if kind.is_chat_completions() => {
             super::paths::RESPONSES_PATH
+        }
+        RequestMode::ChatCompletionsViaMessages if kind.is_chat_completions() => {
+            super::paths::MESSAGES_PATH
         }
         _ => path,
     }

@@ -3,6 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
+use super::anthropic_compat::{
+    anthropic_message_to_chat_completion, chat_finish_reason_from_anthropic_stop_reason,
+};
 use super::request::{RequestMode, looks_like_json};
 
 pub fn is_event_stream_content_type(content_type: Option<&str>) -> bool {
@@ -62,6 +65,16 @@ pub fn rewrite_response_body(
                 rewrite_response_models(&mut json, backend_model, public_model);
             }
             json = response_to_chat_completion(json);
+        }
+        RequestMode::ChatCompletionsViaMessages => {
+            if let (Some(backend_model), Some(public_model)) = (backend_model, public_model) {
+                rewrite_anthropic_messages_response_body_value(
+                    &mut json,
+                    backend_model,
+                    public_model,
+                );
+            }
+            json = anthropic_message_to_chat_completion(json);
         }
     }
     ensure_usage_total_tokens(&mut json);
@@ -1951,6 +1964,399 @@ impl AnthropicSseNormalizer {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct AnthropicMessagesToChatSseNormalizer {
+    parser: SseLineParser,
+    pub usage: UsageTotals,
+    pub diagnostics: UsageDiagnostics,
+    pending_event_name: Option<String>,
+    backend_model: Option<String>,
+    public_model: Option<String>,
+    emit_usage_to_client: bool,
+    message_id: Option<String>,
+    model: Option<String>,
+    role_sent: bool,
+    content_started: bool,
+    tool_calls: BTreeMap<usize, ChatCompletionStreamToolCall>,
+    finish_reason: Option<&'static str>,
+    completed: bool,
+    done_sent: bool,
+}
+
+impl AnthropicMessagesToChatSseNormalizer {
+    pub fn new_with_usage_visibility(
+        backend_model: Option<String>,
+        public_model: Option<String>,
+        emit_usage_to_client: bool,
+    ) -> Self {
+        Self {
+            backend_model,
+            public_model,
+            emit_usage_to_client,
+            ..Self::default()
+        }
+    }
+
+    pub fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
+        let frames = self.parser.push(chunk);
+        let mut output = Vec::new();
+        for frame in frames {
+            self.handle_frame(frame, &mut output);
+        }
+        output
+    }
+
+    pub fn finish(&mut self) -> Vec<u8> {
+        let mut output = Vec::new();
+        if let Some(frame) = self.parser.finish() {
+            self.handle_frame(frame, &mut output);
+        }
+        if self.message_id.is_some() && !self.completed {
+            output.extend(self.finish_response());
+        }
+        output.extend(self.done_event());
+        output
+    }
+
+    fn handle_frame(&mut self, frame: SseFrame, output: &mut Vec<u8>) {
+        match frame {
+            SseFrame::Event { name, .. } => {
+                self.diagnostics.observe_event_name(&name);
+                self.pending_event_name = Some(name);
+            }
+            SseFrame::Data { value, .. } => {
+                self.handle_data(value, output);
+            }
+            SseFrame::DataUnparseable { .. } => {
+                self.pending_event_name = None;
+            }
+            SseFrame::Done { .. } => {
+                self.pending_event_name = None;
+                if self.message_id.is_some() && !self.completed {
+                    output.extend(self.finish_response());
+                }
+                output.extend(self.done_event());
+            }
+            SseFrame::PassThrough { .. } => {}
+        }
+    }
+
+    fn handle_data(&mut self, mut event: Value, output: &mut Vec<u8>) {
+        if let (Some(backend_model), Some(public_model)) =
+            (self.backend_model.as_deref(), self.public_model.as_deref())
+        {
+            rewrite_anthropic_messages_response_body_value(&mut event, backend_model, public_model);
+        }
+
+        if let Some(message) = event.get("message") {
+            if self.message_id.is_none() {
+                self.message_id = message
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| chat_id_from_response(id));
+            }
+            if self.model.is_none() {
+                self.model = message
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+        }
+        if self.model.is_none() {
+            self.model = event
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+        if let (Some(backend_model), Some(public_model), Some(model)) = (
+            self.backend_model.as_deref(),
+            self.public_model.as_deref(),
+            self.model.as_deref(),
+        ) && model == backend_model
+        {
+            self.model = Some(public_model.to_owned());
+        }
+
+        self.observe_usage(&event);
+        output.extend(self.process_event(&event));
+    }
+
+    fn process_event(&mut self, event: &Value) -> Vec<u8> {
+        match event.get("type").and_then(Value::as_str) {
+            Some("message_start") => Vec::new(),
+            Some("content_block_start") => self.process_content_block_start(event),
+            Some("content_block_delta") => self.process_content_block_delta(event),
+            Some("message_delta") => {
+                self.process_message_delta(event);
+                Vec::new()
+            }
+            Some("message_stop") => self.finish_response(),
+            Some("error") => self.error_frame(event),
+            _ => Vec::new(),
+        }
+    }
+
+    fn process_content_block_start(&mut self, event: &Value) -> Vec<u8> {
+        let index = event
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(self.tool_calls.len());
+        let Some(content_block) = event.get("content_block").and_then(Value::as_object) else {
+            return Vec::new();
+        };
+
+        match content_block.get("type").and_then(Value::as_str) {
+            Some("tool_use") => {
+                let state = self.tool_calls.entry(index).or_default();
+                state.call_id = content_block
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .or_else(|| Some(format!("call_{index}")));
+                state.name = content_block
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                self.announce_tool_call_if_ready(index)
+            }
+            Some("text") => Vec::new(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn process_content_block_delta(&mut self, event: &Value) -> Vec<u8> {
+        let index = event
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(self.tool_calls.len());
+        let Some(delta) = event.get("delta").and_then(Value::as_object) else {
+            return Vec::new();
+        };
+        match delta.get("type").and_then(Value::as_str) {
+            Some("text_delta") => {
+                let text = delta
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if text.is_empty() {
+                    return Vec::new();
+                }
+                self.content_started = true;
+                let mut delta_object = Map::new();
+                if !self.role_sent {
+                    self.role_sent = true;
+                    delta_object.insert("role".to_owned(), Value::String("assistant".to_owned()));
+                }
+                delta_object.insert("content".to_owned(), Value::String(text.to_owned()));
+                self.chat_chunk(Value::Object(delta_object), None)
+            }
+            Some("input_json_delta") => {
+                let partial_json = delta
+                    .get("partial_json")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if partial_json.is_empty() {
+                    return Vec::new();
+                }
+                let state = self.tool_calls.entry(index).or_default();
+                state.arguments.push_str(partial_json);
+                let mut output = self.announce_tool_call_if_ready(index);
+                output.extend(self.chat_chunk(
+                    json!({
+                        "tool_calls": [{
+                            "index": index,
+                            "function": {
+                                "arguments": partial_json,
+                            },
+                        }],
+                    }),
+                    None,
+                ));
+                output
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn process_message_delta(&mut self, event: &Value) {
+        if let Some(stop_reason) = event
+            .get("delta")
+            .and_then(Value::as_object)
+            .and_then(|delta| delta.get("stop_reason"))
+            .and_then(Value::as_str)
+        {
+            self.finish_reason = Some(chat_finish_reason_from_anthropic_stop_reason(stop_reason));
+        }
+    }
+
+    fn announce_tool_call_if_ready(&mut self, index: usize) -> Vec<u8> {
+        let Some(state) = self.tool_calls.get_mut(&index) else {
+            return Vec::new();
+        };
+        if state.announced {
+            return Vec::new();
+        }
+        let Some(name) = state.name.clone() else {
+            return Vec::new();
+        };
+        state.announced = true;
+        let call_id = state
+            .call_id
+            .clone()
+            .unwrap_or_else(|| format!("call_{index}"));
+        let mut delta = Map::new();
+        if !self.role_sent {
+            self.role_sent = true;
+            delta.insert("role".to_owned(), Value::String("assistant".to_owned()));
+        }
+        delta.insert(
+            "tool_calls".to_owned(),
+            json!([{
+                "index": index,
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": "",
+                },
+            }]),
+        );
+        self.chat_chunk(Value::Object(delta), None)
+    }
+
+    fn finish_response(&mut self) -> Vec<u8> {
+        if self.completed {
+            return Vec::new();
+        }
+        self.completed = true;
+        let finish_reason = self.finish_reason.unwrap_or_else(|| {
+            if self.tool_calls.is_empty() {
+                "stop"
+            } else {
+                "tool_calls"
+            }
+        });
+        let mut output = self.chat_chunk(json!({}), Some(finish_reason));
+        if self.emit_usage_to_client {
+            output.extend(self.chat_usage_chunk());
+        }
+        output.extend(self.done_event());
+        output
+    }
+
+    fn error_frame(&mut self, event: &Value) -> Vec<u8> {
+        self.completed = true;
+        let message = event
+            .get("error")
+            .and_then(Value::as_object)
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("The selected model could not complete the request.");
+        let mut output = sse_data(json!({
+            "error": {
+                "message": message,
+                "type": "server_error",
+                "param": null,
+                "code": "upstream_error",
+            }
+        }));
+        output.extend(self.done_event());
+        output
+    }
+
+    fn observe_usage(&mut self, event: &Value) {
+        let usage = event
+            .get("usage")
+            .or_else(|| {
+                event
+                    .get("message")
+                    .and_then(|message| message.get("usage"))
+            })
+            .or_else(|| {
+                event
+                    .get("delta")
+                    .and_then(Value::as_object)
+                    .and_then(|delta| delta.get("usage"))
+            });
+        let Some(usage) = usage.and_then(Value::as_object) else {
+            return;
+        };
+        self.diagnostics.observe_object(usage);
+        let input = usage
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(self.usage.input);
+        let output = usage
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(self.usage.output);
+        self.usage = UsageTotals {
+            input,
+            output,
+            total: input + output,
+            ..self.usage
+        };
+    }
+
+    fn chat_chunk(&self, delta: Value, finish_reason: Option<&str>) -> Vec<u8> {
+        let mut chunk = Map::new();
+        chunk.insert(
+            "id".to_owned(),
+            Value::String(
+                self.message_id
+                    .clone()
+                    .unwrap_or_else(|| "chatcmpl_unknown".to_owned()),
+            ),
+        );
+        chunk.insert(
+            "object".to_owned(),
+            Value::String("chat.completion.chunk".to_owned()),
+        );
+        chunk.insert("created".to_owned(), Value::Number(0u64.into()));
+        chunk.insert(
+            "model".to_owned(),
+            Value::String(self.model.clone().unwrap_or_else(|| "unknown".to_owned())),
+        );
+        chunk.insert(
+            "choices".to_owned(),
+            json!([{
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish_reason,
+            }]),
+        );
+        if self.emit_usage_to_client {
+            chunk.insert("usage".to_owned(), Value::Null);
+        }
+        sse_data(Value::Object(chunk))
+    }
+
+    fn chat_usage_chunk(&self) -> Vec<u8> {
+        sse_data(json!({
+            "id": self.message_id.clone().unwrap_or_else(|| "chatcmpl_unknown".to_owned()),
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": self.model.clone().unwrap_or_else(|| "unknown".to_owned()),
+            "choices": [],
+            "usage": {
+                "prompt_tokens": self.usage.input,
+                "completion_tokens": self.usage.output,
+                "total_tokens": self.usage.total,
+            },
+        }))
+    }
+
+    fn done_event(&mut self) -> Vec<u8> {
+        if self.done_sent {
+            return Vec::new();
+        }
+        self.done_sent = true;
+        b"data: [DONE]\n\n".to_vec()
+    }
+}
+
 /// Unified dispatch enum that wraps the three SSE normalizers behind a
 /// uniform `push` / `finish` / `usage` / `diagnostics` API.
 ///
@@ -1968,6 +2374,8 @@ pub enum SseStrategy {
     ChatCompletions(ChatCompletionsSseNormalizer),
     /// Anthropic Messages API SSE passthrough with model rewriting.
     AnthropicMessages(AnthropicSseNormalizer),
+    /// Anthropic Messages backend → Chat Completions client.
+    AnthropicMessagesToChat(AnthropicMessagesToChatSseNormalizer),
 }
 
 impl SseStrategy {
@@ -1990,6 +2398,13 @@ impl SseStrategy {
                     emit_usage_to_client,
                 ))
             }
+            RequestMode::ChatCompletionsViaMessages => Self::AnthropicMessagesToChat(
+                AnthropicMessagesToChatSseNormalizer::new_with_usage_visibility(
+                    backend_model,
+                    public_model,
+                    emit_usage_to_client,
+                ),
+            ),
             RequestMode::Native => Self::Native(SseNormalizer::new_with_usage_visibility(
                 backend_model,
                 public_model,
@@ -2008,6 +2423,7 @@ impl SseStrategy {
             Self::Responses(normalizer) => normalizer.push(chunk),
             Self::ChatCompletions(normalizer) => normalizer.push(chunk),
             Self::AnthropicMessages(normalizer) => normalizer.push(chunk),
+            Self::AnthropicMessagesToChat(normalizer) => normalizer.push(chunk),
         }
     }
 
@@ -2018,6 +2434,7 @@ impl SseStrategy {
             Self::Responses(normalizer) => normalizer.finish(),
             Self::ChatCompletions(normalizer) => normalizer.finish(),
             Self::AnthropicMessages(normalizer) => normalizer.finish(),
+            Self::AnthropicMessagesToChat(normalizer) => normalizer.finish(),
         }
     }
 
@@ -2028,6 +2445,7 @@ impl SseStrategy {
             Self::Responses(normalizer) => normalizer.usage,
             Self::ChatCompletions(normalizer) => normalizer.usage,
             Self::AnthropicMessages(_) => UsageTotals::default(),
+            Self::AnthropicMessagesToChat(normalizer) => normalizer.usage,
         }
     }
 
@@ -2038,6 +2456,7 @@ impl SseStrategy {
             Self::Responses(normalizer) => normalizer.diagnostics.clone(),
             Self::ChatCompletions(normalizer) => normalizer.diagnostics.clone(),
             Self::AnthropicMessages(_) => UsageDiagnostics::default(),
+            Self::AnthropicMessagesToChat(normalizer) => normalizer.diagnostics.clone(),
         }
     }
 
@@ -2048,6 +2467,7 @@ impl SseStrategy {
             Self::Responses(normalizer) => normalizer.usage = UsageTotals::default(),
             Self::ChatCompletions(normalizer) => normalizer.usage = UsageTotals::default(),
             Self::AnthropicMessages(_) => {} // no-op
+            Self::AnthropicMessagesToChat(normalizer) => normalizer.usage = UsageTotals::default(),
         }
     }
 
@@ -2060,6 +2480,9 @@ impl SseStrategy {
                 normalizer.diagnostics = UsageDiagnostics::default()
             }
             Self::AnthropicMessages(_) => {} // no-op
+            Self::AnthropicMessagesToChat(normalizer) => {
+                normalizer.diagnostics = UsageDiagnostics::default()
+            }
         }
     }
 }

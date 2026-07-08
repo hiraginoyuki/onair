@@ -217,6 +217,163 @@ fn chat_completions_request_converts_to_responses() {
 }
 
 #[test]
+fn chat_completions_request_converts_to_messages() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [
+            {"role": "system", "content": "system rules"},
+            {"role": "developer", "content": [{"type": "text", "text": "developer rules"}]},
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": "checking",
+                "tool_calls": [{
+                    "id": "call_lookup",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": "{\"q\":\"hello\"}"
+                    }
+                }]
+            },
+            {"role": "tool", "tool_call_id": "call_lookup", "content": "world"}
+        ],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "look something up",
+                "parameters": {"type": "object"}
+            }
+        }],
+        "tool_choice": "required",
+        "max_completion_tokens": 42,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "stop": ["END"],
+        "stream": true
+    });
+
+    let rewritten = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaMessages,
+        &RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: Some(8192),
+        },
+        &BTreeMap::new(),
+        "test",
+    )
+    .unwrap();
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["model"], "backend-model");
+    assert_eq!(rewritten["system"], "system rules\n\ndeveloper rules");
+    assert_eq!(rewritten["max_tokens"], 42);
+    assert_eq!(rewritten["temperature"], 0.2);
+    assert_eq!(rewritten["top_p"], 0.9);
+    assert_eq!(rewritten["stop_sequences"], json!(["END"]));
+    assert_eq!(rewritten["stream"], true);
+    assert_eq!(rewritten["tool_choice"], json!({"type":"any"}));
+    assert_eq!(rewritten["tools"][0]["name"], "lookup");
+    assert_eq!(rewritten["tools"][0]["input_schema"]["type"], "object");
+
+    let messages = rewritten["messages"].as_array().unwrap();
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"][0]["text"], "hello");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"][0]["text"], "checking");
+    assert_eq!(messages[1]["content"][1]["type"], "tool_use");
+    assert_eq!(messages[1]["content"][1]["id"], "call_lookup");
+    assert_eq!(messages[1]["content"][1]["name"], "lookup");
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["type"], "tool_result");
+    assert_eq!(messages[2]["content"][0]["tool_use_id"], "call_lookup");
+}
+
+#[test]
+fn chat_completions_to_messages_rejects_unsupported_fields() {
+    let body = json!({
+        "model": "public-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "response_format": {"type": "json_object"},
+        "max_tokens": 32
+    });
+
+    let error = rewrite_request_body_for_mode_with_policies(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        "/v1/chat/completions",
+        RequestMode::ChatCompletionsViaMessages,
+        &RequestRewritePolicies {
+            tool_schema_mode: ToolSchemaMode::Preserve,
+            responses_store: ResponsesStorePolicy::Preserve,
+            responses_max_output_tokens: ResponsesMaxOutputTokensPolicy::Preserve,
+            chat_stream_usage: ChatStreamUsagePolicy::Preserve,
+            anthropic_max_tokens: None,
+        },
+        &BTreeMap::new(),
+        "test",
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "response_format is not supported by the chat-to-messages compatibility path."
+    );
+    assert_eq!(error.param().as_deref(), Some("response_format"));
+}
+
+#[test]
+fn messages_response_converts_to_chat_completion() {
+    let body = json!({
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "backend-model",
+        "content": [
+            {"type": "text", "text": "hello"},
+            {"type": "tool_use", "id": "call_1", "name": "lookup", "input": {"q": "hello"}}
+        ],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 7, "output_tokens": 4}
+    });
+
+    let (rewritten, usage) = rewrite_response_body(
+        body.to_string().as_bytes(),
+        Some("application/json"),
+        Some("backend-model"),
+        Some("public-model"),
+        RequestMode::ChatCompletionsViaMessages,
+    );
+    let rewritten: Value = serde_json::from_slice(&rewritten).unwrap();
+
+    assert_eq!(rewritten["object"], "chat.completion");
+    assert_eq!(rewritten["model"], "public-model");
+    assert_eq!(rewritten["choices"][0]["message"]["content"], "hello");
+    assert_eq!(
+        rewritten["choices"][0]["message"]["tool_calls"][0]["id"],
+        "call_1"
+    );
+    assert_eq!(
+        rewritten["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
+        "{\"q\":\"hello\"}"
+    );
+    assert_eq!(rewritten["choices"][0]["finish_reason"], "tool_calls");
+    assert_eq!(rewritten["usage"]["prompt_tokens"], 7);
+    assert_eq!(rewritten["usage"]["completion_tokens"], 4);
+    assert_eq!(usage.input, 7);
+    assert_eq!(usage.output, 4);
+}
+
+#[test]
 fn chat_completions_to_responses_applies_responses_policies() {
     let body = json!({
         "model": "public-model",
@@ -2945,4 +3102,119 @@ fn anthropic_sse_finish_is_noop() {
         "Anthropic finish should be a no-op, got: {:?}",
         String::from_utf8_lossy(&tail)
     );
+}
+
+#[test]
+fn anthropic_messages_to_chat_stream_emits_text_and_done() {
+    let mut strategy = SseStrategy::new(
+        RequestMode::ChatCompletionsViaMessages,
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        false,
+    );
+    let start = json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "backend-model",
+            "content": [],
+            "stop_reason": null,
+            "usage": {"input_tokens": 5, "output_tokens": 0}
+        }
+    });
+    let delta = json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "hello"}
+    });
+    let message_delta = json!({
+        "type": "message_delta",
+        "delta": {
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 5, "output_tokens": 2}
+        }
+    });
+    let stop = json!({"type": "message_stop"});
+
+    let mut output = strategy.push(format!("event: message_start\ndata: {start}\n\n").as_bytes());
+    output.extend(strategy.push(format!("data: {delta}\n\n").as_bytes()));
+    output.extend(strategy.push(format!("data: {message_delta}\n\n").as_bytes()));
+    output.extend(strategy.push(format!("data: {stop}\n\n").as_bytes()));
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(
+        output.contains("\"object\":\"chat.completion.chunk\""),
+        "body={output}"
+    );
+    assert!(
+        output.contains("\"model\":\"public-model\""),
+        "body={output}"
+    );
+    assert!(output.contains("\"role\":\"assistant\""), "body={output}");
+    assert!(output.contains("\"content\":\"hello\""), "body={output}");
+    assert!(
+        output.contains("\"finish_reason\":\"stop\""),
+        "body={output}"
+    );
+    assert!(output.contains("data: [DONE]"), "body={output}");
+    assert_eq!(strategy.usage().input, 5);
+    assert_eq!(strategy.usage().output, 2);
+}
+
+#[test]
+fn anthropic_messages_to_chat_stream_emits_tool_call_deltas() {
+    let mut strategy = SseStrategy::new(
+        RequestMode::ChatCompletionsViaMessages,
+        Some("backend-model".to_owned()),
+        Some("public-model".to_owned()),
+        false,
+    );
+    let start = json!({
+        "type": "message_start",
+        "message": {
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "backend-model",
+            "content": [],
+            "stop_reason": null,
+            "usage": {"input_tokens": 5, "output_tokens": 0}
+        }
+    });
+    let tool_start = json!({
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+            "type": "tool_use",
+            "id": "call_1",
+            "name": "lookup",
+            "input": {}
+        }
+    });
+    let args = json!({
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+            "type": "input_json_delta",
+            "partial_json": "{\"q\":\"hello\"}"
+        }
+    });
+    let stop = json!({"type": "message_stop"});
+
+    let mut output = strategy.push(format!("event: message_start\ndata: {start}\n\n").as_bytes());
+    output.extend(strategy.push(format!("data: {tool_start}\n\n").as_bytes()));
+    output.extend(strategy.push(format!("data: {args}\n\n").as_bytes()));
+    output.extend(strategy.push(format!("data: {stop}\n\n").as_bytes()));
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("\"tool_calls\""), "body={output}");
+    assert!(output.contains("\"id\":\"call_1\""), "body={output}");
+    assert!(output.contains("\"name\":\"lookup\""), "body={output}");
+    assert!(
+        output.contains("\"arguments\":\"{\\\"q\\\":\\\"hello\\\"}\""),
+        "body={output}"
+    );
+    assert!(output.contains("data: [DONE]"), "body={output}");
 }

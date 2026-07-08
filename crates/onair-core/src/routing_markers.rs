@@ -18,6 +18,7 @@ pub const KNOWN_MARKERS: &[&str] = &[
     "functions",
     "responses_via_chat_completions",
     "chat_completions_via_responses",
+    "chat_completions_via_messages",
     "embeddings",
     "embedding",
     "images",
