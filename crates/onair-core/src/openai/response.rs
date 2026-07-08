@@ -2056,7 +2056,7 @@ impl AnthropicMessagesToChatSseNormalizer {
                 self.message_id = message
                     .get("id")
                     .and_then(Value::as_str)
-                    .map(|id| chat_id_from_response(id));
+                    .map(chat_id_from_response);
             }
             if self.model.is_none() {
                 self.model = message
@@ -2234,13 +2234,12 @@ impl AnthropicMessagesToChatSseNormalizer {
             return Vec::new();
         }
         self.completed = true;
-        let finish_reason = self.finish_reason.unwrap_or_else(|| {
-            if self.tool_calls.is_empty() {
-                "stop"
-            } else {
-                "tool_calls"
-            }
-        });
+        let default_finish_reason = if self.tool_calls.is_empty() {
+            "stop"
+        } else {
+            "tool_calls"
+        };
+        let finish_reason = self.finish_reason.unwrap_or(default_finish_reason);
         let mut output = self.chat_chunk(json!({}), Some(finish_reason));
         if self.emit_usage_to_client && self.diagnostics.usage_object_count > 0 {
             output.extend(self.chat_usage_chunk());
