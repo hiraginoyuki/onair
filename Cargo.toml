@@ -8,6 +8,7 @@ members = [
     "crates/llm-protocol-core",
     "crates/llm-protocol-openai",
     "crates/llm-protocol-anthropic",
+    "crates/llm-protocol-onair-parity",
 ]
 
 [workspace.package]

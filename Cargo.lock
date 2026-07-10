@@ -1059,6 +1059,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "llm-protocol-onair-parity"
+version = "0.2.1"
+dependencies = [
+ "clap",
+ "llm-protocol-anthropic",
+ "llm-protocol-core",
+ "llm-protocol-openai",
+ "onair-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "llm-protocol-openai"
 version = "0.2.1"
 dependencies = [

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Protocol Alpha 0.1.0</title>
+  <link rel="stylesheet" href="preview.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Working name. Unpublished. Non-production.</p>
+      <h1>LLM Protocol Alpha</h1>
+      <p class="lede">
+        Version 0.1.0 is a language-neutral protocol contract with a
+        provisional Rust reference implementation. It translates selected
+        vendor protocol semantics through a shared IR; it is not an OnAir
+        routing path.
+      </p>
+    </header>
+
+    <section aria-labelledby="contract">
+      <h2 id="contract">Contract</h2>
+      <ul class="links">
+        <li><a href="SPEC.md">Specification</a></li>
+        <li><a href="profiles/registry.json">Frozen profile registry</a></li>
+        <li><a href="schemas/">Draft 2020-12 schemas</a></li>
+        <li><a href="vectors/manifest.json">Synthetic vector manifest</a></li>
+        <li><a href="benchmarks/scenarios.json">Synthetic benchmark scenarios</a></li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="profiles">
+      <h2 id="profiles">Frozen Profiles</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>API family</th>
+            <th>Frozen alpha profile</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>OpenAI</td>
+            <td>Chat Completions</td>
+            <td><code>openai.chat-completions.alpha-0.1.0</code></td>
+          </tr>
+          <tr>
+            <td>OpenAI</td>
+            <td>Responses</td>
+            <td><code>openai.responses.alpha-0.1.0</code></td>
+          </tr>
+          <tr>
+            <td>Anthropic</td>
+            <td>Messages, version 2023-06-01</td>
+            <td><code>anthropic.messages.2023-06-01.alpha-0.1.0</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section aria-labelledby="matrix">
+      <h2 id="matrix">Conversion Matrix</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Chat Completions</th>
+            <th>Responses</th>
+            <th>Messages</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>Chat Completions</th>
+            <td>Exact replay</td>
+            <td>Typed alpha subset</td>
+            <td>Typed alpha subset</td>
+          </tr>
+          <tr>
+            <th>Responses</th>
+            <td>Typed alpha subset</td>
+            <td>Exact replay</td>
+            <td>Typed alpha subset</td>
+          </tr>
+          <tr>
+            <th>Messages</th>
+            <td>Typed alpha subset</td>
+            <td>Typed alpha subset</td>
+            <td>Exact replay</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Every non-replay conversion emits <code>exact</code>,
+        <code>adapted</code>, <code>lossy</code>, or <code>unsupported</code>
+        fidelity and diagnostics. Opaque vendor material and continuation
+        handles replay only under their exact issuing profile.
+      </p>
+    </section>
+
+    <section aria-labelledby="boundaries">
+      <h2 id="boundaries">Alpha Boundaries</h2>
+      <div class="columns">
+        <div>
+          <h3>Included</h3>
+          <p>Typed request, response, error, stream lifecycle, protocol headers, exact same-profile envelope replay, fidelity diagnostics, and cache-intent analysis.</p>
+        </div>
+        <div>
+          <h3>Excluded</h3>
+          <p>Routing, auth, retries, failover, generic HTTP forwarding, storage, prompt logging, tool execution, uploads, retrieval, and cache-hit prediction.</p>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="assurance">
+      <h2 id="assurance">Checks</h2>
+      <p>
+        The alpha gate validates schemas and synthetic vectors, codec paths,
+        replay and mutation behavior, opaque containment, cache reports,
+        arbitrary SSE chunk partitions, all six directed typed conversions,
+        and selected buffered OnAir parity. Live provider benchmarks are
+        manual, dry-run by default, local-only, cap-controlled, and never CI
+        or release gates.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

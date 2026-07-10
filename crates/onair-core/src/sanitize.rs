@@ -100,7 +100,7 @@ mod tests {
         //   "{timestamp}-{pid}-{seq}-{sanitized_request_id}"
         let request_id = "r".repeat(400);
         let sanitized = sanitize_for_storage(&request_id, STORAGE_SEGMENT_MAX_CHARS).unwrap();
-        let prefix = format!("1234567890123-12345-1-");
+        let prefix = "1234567890123-12345-1-";
         let capture_id = format!("{prefix}{sanitized}");
         // NAME_MAX is 255 on POSIX; the full dir name must stay under that.
         assert!(

@@ -3418,9 +3418,12 @@ impl TestBackend {
 
 // --- Header-capturing backend for request_headers integration tests ---
 
+type CapturedHeaders = BTreeMap<String, Vec<String>>;
+type CapturedRequest = (Value, CapturedHeaders);
+
 #[derive(Clone)]
 struct HeaderCaptureState {
-    requests: Arc<Mutex<Vec<(Value, BTreeMap<String, Vec<String>>)>>>,
+    requests: Arc<Mutex<Vec<CapturedRequest>>>,
 }
 
 struct HeaderCaptureBackend {
@@ -5075,7 +5078,7 @@ async fn count_tokens_returns_404_with_anthropic_error_format() {
     // Must be in Anthropic error format, not OpenAI format.
     assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "not_found_error");
-    assert!(body["error"]["message"].as_str().unwrap().len() > 0);
+    assert!(!body["error"]["message"].as_str().unwrap().is_empty());
 
     backend.abort();
 }

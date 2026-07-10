@@ -33,8 +33,14 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
+      - name: protocol JSON syntax
+        run: find protocol -name '*.json' -print0 | xargs -0 jq empty
+
+      - name: protocol alpha conformance and selected OnAir parity
+        run: cargo test -p llm-protocol-core -p llm-protocol-openai -p llm-protocol-anthropic -p llm-protocol-onair-parity --locked
+
       - name: cargo clippy
-        run: cargo clippy --workspace --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: cargo build (release)
         run: cargo build --release -p onair --locked

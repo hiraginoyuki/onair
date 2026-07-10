@@ -1,0 +1,19 @@
+[package]
+name = "llm-protocol-onair-parity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Test-only OnAir parity and local benchmark harness for LLM Protocol Alpha"
+
+[dependencies]
+clap = { workspace = true }
+llm-protocol-anthropic = { path = "../llm-protocol-anthropic" }
+llm-protocol-core = { path = "../llm-protocol-core" }
+llm-protocol-openai = { path = "../llm-protocol-openai" }
+onair-core = { path = "../onair-core" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
