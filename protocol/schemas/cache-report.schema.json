@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onair.dev/llm-protocol-alpha/0.1.0/cache-report.schema.json",
+  "title": "LLM Protocol Alpha Cache Preservation Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "entries"
+  ],
+  "properties": {
+    "protocol_version": {
+      "const": "0.1.0"
+    },
+    "experimental": {
+      "type": "boolean"
+    },
+    "common_stable_prefix_len": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "location"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "instruction",
+            "message",
+            "content_part",
+            "tool_definition",
+            "output_schema",
+            "asset",
+            "cache_directive"
+          ]
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "instructions",
+            "message",
+            "message_part",
+            "tool_definition",
+            "output_schema",
+            "asset",
+            "instruction_asset",
+            "cache_directive"
+          ]
+        },
+        "part_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "message_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "directive_index": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "target",
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "source": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/descriptor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/descriptor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "preserved",
+            "moved",
+            "changed",
+            "dropped",
+            "introduced",
+            "non_portable"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "unchanged",
+            "semantic_value_changed",
+            "order_changed",
+            "no_target_representation",
+            "no_source_representation",
+            "target_directive_must_be_explicit",
+            "provider_semantics_differ"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "openai.chat.request.cache-to-messages-lossy",
+  "title": "Synthetic OpenAI cache intent remains non-portable to Messages",
+  "synthetic": true,
+  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "kind": "cross_profile_conversion",
+  "input": {
+    "envelope": {
+      "profile_id": "openai.chat-completions.alpha-0.1.0",
+      "status": 200,
+      "body_kind": "json",
+      "protocol_headers": [
+        {
+          "raw_line": "content-type: application/json"
+        }
+      ],
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVxdWVzdCJ9XSwibWF4X2NvbXBsZXRpb25fdG9rZW5zIjoyNCwicHJvbXB0X2NhY2hlX2tleSI6InN5bnRoZXRpYy1jYWNoZSIsInByb21wdF9jYWNoZV9yZXRlbnRpb24iOiIyNGgifQ=="
+    }
+  },
+  "expect": {
+    "fidelity": "lossy",
+    "diagnostic_codes": [
+      "non_portable_cache_intent"
+    ]
+  }
+}

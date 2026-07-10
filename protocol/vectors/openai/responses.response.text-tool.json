@@ -1,0 +1,26 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "openai.responses.response.text-tool",
+  "title": "Responses buffered response with text, tool call, and usage converts to Chat",
+  "synthetic": true,
+  "source_profile": "openai.responses.alpha-0.1.0",
+  "target_profile": "openai.chat-completions.alpha-0.1.0",
+  "kind": "cross_profile_conversion",
+  "input": {
+    "envelope": {
+      "profile_id": "openai.responses.alpha-0.1.0",
+      "status": 200,
+      "body_kind": "json",
+      "protocol_headers": [
+        {
+          "raw_line": "content-type: application/json"
+        }
+      ],
+      "body_base64": "eyJpZCI6InJlc3Bfc3ludGhldGljIiwib2JqZWN0IjoicmVzcG9uc2UiLCJzdGF0dXMiOiJjb21wbGV0ZWQiLCJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm91dHB1dCI6W3siaWQiOiJtc2dfc3ludGhldGljIiwidHlwZSI6Im1lc3NhZ2UiLCJzdGF0dXMiOiJjb21wbGV0ZWQiLCJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6Im91dHB1dF90ZXh0IiwidGV4dCI6InN5bnRoZXRpYyByZXBseSIsImFubm90YXRpb25zIjpbXX1dfSx7ImlkIjoiY2FsbF9zeW50aGV0aWMiLCJ0eXBlIjoiZnVuY3Rpb25fY2FsbCIsInN0YXR1cyI6ImNvbXBsZXRlZCIsImNhbGxfaWQiOiJjYWxsX3N5bnRoZXRpYyIsIm5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwiYXJndW1lbnRzIjoie1wic3ViamVjdFwiOlwiYWxwaGFcIn0ifV0sInVzYWdlIjp7ImlucHV0X3Rva2VucyI6MTEsImlucHV0X3Rva2Vuc19kZXRhaWxzIjp7ImNhY2hlZF90b2tlbnMiOjN9LCJvdXRwdXRfdG9rZW5zIjo3LCJvdXRwdXRfdG9rZW5zX2RldGFpbHMiOnsicmVhc29uaW5nX3Rva2VucyI6Mn0sInRvdGFsX3Rva2VucyI6MTh9fQ=="
+    }
+  },
+  "expect": {
+    "fidelity": "exact",
+    "diagnostic_codes": []
+  }
+}

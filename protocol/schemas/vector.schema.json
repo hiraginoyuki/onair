@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onair.dev/llm-protocol-alpha/0.1.0/vector.schema.json",
+  "title": "LLM Protocol Alpha Conformance Vector",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "id",
+    "title",
+    "synthetic",
+    "source_profile",
+    "target_profile",
+    "kind",
+    "input",
+    "expect"
+  ],
+  "properties": {
+    "protocol_version": {
+      "const": "0.1.0"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "synthetic": {
+      "const": true
+    },
+    "source_profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "exact_replay",
+        "cross_profile_conversion",
+        "unsupported",
+        "cache_analysis"
+      ]
+    },
+    "input": {
+      "type": "object"
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fidelity",
+        "diagnostic_codes"
+      ],
+      "properties": {
+        "fidelity": {
+          "enum": [
+            "exact",
+            "adapted",
+            "lossy",
+            "unsupported"
+          ]
+        },
+        "diagnostic_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "exact_replay": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "protocol_headers",
+            "body_base64"
+          ],
+          "properties": {
+            "protocol_headers": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[^\\r\\n]+$"
+              }
+            },
+            "body_base64": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          }
+        },
+        "cache_report": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "common_stable_prefix_len",
+            "entries"
+          ],
+          "properties": {
+            "common_stable_prefix_len": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "cache-report.schema.json#/$defs/entry"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

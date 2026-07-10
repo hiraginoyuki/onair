@@ -1,0 +1,52 @@
+{
+  "$schema": "../schemas/profile-registry.schema.json",
+  "protocol_version": "0.1.0",
+  "profiles": [
+    {
+      "id": "openai.chat-completions.alpha-0.1.0",
+      "provider": "openai",
+      "api_family": "chat_completions",
+      "endpoint": "/v1/chat/completions",
+      "vendor_version_selector": null,
+      "enabled_features": [
+        "buffered_response",
+        "sse",
+        "tool_calls",
+        "structured_output_intent",
+        "openai_cache_intent"
+      ],
+      "contract_revision": "alpha-0.1.0.openai-chat.snapshot-2026-07-10"
+    },
+    {
+      "id": "openai.responses.alpha-0.1.0",
+      "provider": "openai",
+      "api_family": "responses",
+      "endpoint": "/v1/responses",
+      "vendor_version_selector": null,
+      "enabled_features": [
+        "buffered_response",
+        "sse",
+        "tool_calls",
+        "structured_output_intent",
+        "openai_cache_intent",
+        "continuation_handles"
+      ],
+      "contract_revision": "alpha-0.1.0.openai-responses.snapshot-2026-07-10"
+    },
+    {
+      "id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+      "provider": "anthropic",
+      "api_family": "messages",
+      "endpoint": "/v1/messages",
+      "vendor_version_selector": "2023-06-01",
+      "enabled_features": [
+        "buffered_response",
+        "sse",
+        "tool_calls",
+        "structured_output_intent",
+        "anthropic_cache_breakpoints"
+      ],
+      "contract_revision": "alpha-0.1.0.anthropic-messages.snapshot-2026-07-10"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "anthropic.messages.error.cross-profile",
+  "title": "Synthetic Messages rate limit error",
+  "synthetic": true,
+  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "target_profile": "openai.responses.alpha-0.1.0",
+  "kind": "cross_profile_conversion",
+  "input": {
+    "envelope": {
+      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+      "status": 429,
+      "body_kind": "json",
+      "protocol_headers": [
+        {
+          "raw_line": "content-type: application/json"
+        },
+        {
+          "raw_line": "anthropic-version: 2023-06-01"
+        },
+        {
+          "raw_line": "retry-after: 2"
+        }
+      ],
+      "body_base64": "eyJ0eXBlIjoiZXJyb3IiLCJlcnJvciI6eyJ0eXBlIjoicmF0ZV9saW1pdF9lcnJvciIsIm1lc3NhZ2UiOiJzeW50aGV0aWMgcmF0ZSBsaW1pdCJ9fQ=="
+    }
+  },
+  "expect": {
+    "fidelity": "exact",
+    "diagnostic_codes": []
+  }
+}

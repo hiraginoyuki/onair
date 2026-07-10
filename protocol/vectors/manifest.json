@@ -1,0 +1,162 @@
+{
+  "$schema": "../schemas/vector-manifest.schema.json",
+  "protocol_version": "0.1.0",
+  "vectors": [
+    {
+      "id": "core.exact-replay.chat-json",
+      "path": "core/exact-replay.chat-json.json",
+      "kind": "exact_replay",
+      "status": "active"
+    },
+    {
+      "id": "core.opaque-extension.cross-profile",
+      "path": "core/opaque-extension.cross-profile.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "core.cache-report.content-free",
+      "path": "core/cache-report.content-free.json",
+      "kind": "cache_analysis",
+      "status": "active"
+    },
+    {
+      "id": "openai.chat.request.text-tool",
+      "path": "openai/chat.request.text-tool.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.responses.request.text-tool",
+      "path": "openai/responses.request.text-tool.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.chat.response.text-tool",
+      "path": "openai/chat.response.text-tool.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.responses.response.text-tool",
+      "path": "openai/responses.response.text-tool.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.chat.error.cross-profile",
+      "path": "openai/chat.error.cross-profile.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.chat.stream.text-tool",
+      "path": "openai/chat.stream.text-tool.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.responses.stream.text-tool",
+      "path": "openai/responses.stream.text-tool.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.chat.replay.unmodified",
+      "path": "openai/chat.replay.unmodified.json",
+      "kind": "exact_replay",
+      "status": "active"
+    },
+    {
+      "id": "openai.responses.request.continuation-unsupported",
+      "path": "openai/responses.request.continuation-unsupported.json",
+      "kind": "unsupported",
+      "status": "active"
+    },
+    {
+      "id": "openai.chat.request.unknown-lossy",
+      "path": "openai/chat.request.unknown-lossy.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "anthropic.messages.request.cache-breakpoint",
+      "path": "anthropic/messages.request.cache-breakpoint.json",
+      "kind": "exact_replay",
+      "status": "active"
+    },
+    {
+      "id": "anthropic.messages.response.text-tool",
+      "path": "anthropic/messages.response.text-tool.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "anthropic.messages.error.cross-profile",
+      "path": "anthropic/messages.error.cross-profile.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "anthropic.messages.stream.text-tool",
+      "path": "anthropic/messages.stream.text-tool.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "anthropic.messages.replay.unmodified",
+      "path": "anthropic/messages.replay.unmodified.json",
+      "kind": "exact_replay",
+      "status": "active"
+    },
+    {
+      "id": "anthropic.messages.stream.replay.unmodified",
+      "path": "anthropic/messages.stream.replay.unmodified.json",
+      "kind": "exact_replay",
+      "status": "active"
+    },
+    {
+      "id": "anthropic.messages.unknown-lossy",
+      "path": "anthropic/messages.unknown-lossy.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.chat.request.to-messages",
+      "path": "openai/chat.request.to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.responses.request.to-messages",
+      "path": "openai/responses.request.to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.chat.stream.to-messages",
+      "path": "openai/chat.stream.to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.responses.stream.to-messages",
+      "path": "openai/responses.stream.to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.chat.request.cache-to-messages-lossy",
+      "path": "openai/chat.request.cache-to-messages-lossy.json",
+      "kind": "cross_profile_conversion",
+      "status": "active"
+    },
+    {
+      "id": "openai.responses.request.continuation-to-messages-unsupported",
+      "path": "openai/responses.request.continuation-to-messages-unsupported.json",
+      "kind": "unsupported",
+      "status": "active"
+    }
+  ]
+}

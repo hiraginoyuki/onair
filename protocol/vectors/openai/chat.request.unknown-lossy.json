@@ -1,0 +1,28 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "openai.chat.request.unknown-lossy",
+  "title": "Unknown Chat request material is retained for replay and diagnosed for Responses encoding",
+  "synthetic": true,
+  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "target_profile": "openai.responses.alpha-0.1.0",
+  "kind": "cross_profile_conversion",
+  "input": {
+    "envelope": {
+      "profile_id": "openai.chat-completions.alpha-0.1.0",
+      "status": 200,
+      "body_kind": "json",
+      "protocol_headers": [
+        {
+          "raw_line": "content-type: application/json"
+        }
+      ],
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVxdWVzdCJ9XSwiZnV0dXJlX3N5bnRoZXRpY19vcHRpb24iOnsiZW5hYmxlZCI6dHJ1ZX19"
+    }
+  },
+  "expect": {
+    "fidelity": "lossy",
+    "diagnostic_codes": [
+      "forward_compatible_unknown"
+    ]
+  }
+}

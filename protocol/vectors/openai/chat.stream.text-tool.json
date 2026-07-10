@@ -1,0 +1,26 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "openai.chat.stream.text-tool",
+  "title": "Chat SSE text and tool-call lifecycle normalizes and encodes for Responses",
+  "synthetic": true,
+  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "target_profile": "openai.responses.alpha-0.1.0",
+  "kind": "cross_profile_conversion",
+  "input": {
+    "envelope": {
+      "profile_id": "openai.chat-completions.alpha-0.1.0",
+      "status": 200,
+      "body_kind": "sse",
+      "protocol_headers": [
+        {
+          "raw_line": "content-type: text/event-stream"
+        }
+      ],
+      "body_base64": "ZGF0YTogeyJpZCI6ImNoYXRjbXBsX3N5bnRoZXRpYyIsIm9iamVjdCI6ImNoYXQuY29tcGxldGlvbi5jaHVuayIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwiY2hvaWNlcyI6W3siaW5kZXgiOjAsImRlbHRhIjp7InJvbGUiOiJhc3Npc3RhbnQifSwiZmluaXNoX3JlYXNvbiI6bnVsbH1dfQoKZGF0YTogeyJpZCI6ImNoYXRjbXBsX3N5bnRoZXRpYyIsIm9iamVjdCI6ImNoYXQuY29tcGxldGlvbi5jaHVuayIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwiY2hvaWNlcyI6W3siaW5kZXgiOjAsImRlbHRhIjp7ImNvbnRlbnQiOiJzeW50aGV0aWMgIn0sImZpbmlzaF9yZWFzb24iOm51bGx9XX0KCmRhdGE6IHsiaWQiOiJjaGF0Y21wbF9zeW50aGV0aWMiLCJvYmplY3QiOiJjaGF0LmNvbXBsZXRpb24uY2h1bmsiLCJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsImNob2ljZXMiOlt7ImluZGV4IjowLCJkZWx0YSI6eyJ0b29sX2NhbGxzIjpbeyJpbmRleCI6MCwiaWQiOiJjYWxsX3N5bnRoZXRpYyIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwiYXJndW1lbnRzIjoie1wic3ViamVjdFwiOiJ9fV19LCJmaW5pc2hfcmVhc29uIjpudWxsfV19CgpkYXRhOiB7ImlkIjoiY2hhdGNtcGxfc3ludGhldGljIiwib2JqZWN0IjoiY2hhdC5jb21wbGV0aW9uLmNodW5rIiwibW9kZWwiOiJzeW50aGV0aWMtbW9kZWwiLCJjaG9pY2VzIjpbeyJpbmRleCI6MCwiZGVsdGEiOnsidG9vbF9jYWxscyI6W3siaW5kZXgiOjAsImZ1bmN0aW9uIjp7ImFyZ3VtZW50cyI6IlwiYWxwaGFcIn0ifX1dfSwiZmluaXNoX3JlYXNvbiI6InRvb2xfY2FsbHMifV19CgpkYXRhOiB7ImlkIjoiY2hhdGNtcGxfc3ludGhldGljIiwib2JqZWN0IjoiY2hhdC5jb21wbGV0aW9uLmNodW5rIiwiY2hvaWNlcyI6W10sInVzYWdlIjp7InByb21wdF90b2tlbnMiOjExLCJjb21wbGV0aW9uX3Rva2VucyI6NywidG90YWxfdG9rZW5zIjoxOH19CgpkYXRhOiBbRE9ORV0KCg=="
+    }
+  },
+  "expect": {
+    "fidelity": "exact",
+    "diagnostic_codes": []
+  }
+}

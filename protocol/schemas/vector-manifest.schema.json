@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onair.dev/llm-protocol-alpha/0.1.0/vector-manifest.schema.json",
+  "title": "LLM Protocol Alpha Conformance Vector Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "vectors"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "protocol_version": {
+      "const": "0.1.0"
+    },
+    "vectors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/vector"
+      }
+    }
+  },
+  "$defs": {
+    "vector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path",
+        "kind",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]*\\.json$"
+        },
+        "kind": {
+          "enum": [
+            "exact_replay",
+            "cross_profile_conversion",
+            "unsupported",
+            "cache_analysis"
+          ]
+        },
+        "status": {
+          "enum": [
+            "active",
+            "reserved_for_phase_3",
+            "reserved_for_phase_4",
+            "reserved_for_phase_5"
+          ]
+        }
+      }
+    }
+  }
+}

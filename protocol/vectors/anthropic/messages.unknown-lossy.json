@@ -1,0 +1,31 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "anthropic.messages.unknown-lossy",
+  "title": "Synthetic unknown Messages content block is contained",
+  "synthetic": true,
+  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "target_profile": "openai.chat-completions.alpha-0.1.0",
+  "kind": "cross_profile_conversion",
+  "input": {
+    "envelope": {
+      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+      "status": 200,
+      "body_kind": "json",
+      "protocol_headers": [
+        {
+          "raw_line": "content-type: application/json"
+        },
+        {
+          "raw_line": "anthropic-version: 2023-06-01"
+        }
+      ],
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1heF90b2tlbnMiOjI0LCJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoiZnV0dXJlX2Jsb2NrIiwic3ludGhldGljIjp0cnVlfV19XX0="
+    }
+  },
+  "expect": {
+    "fidelity": "lossy",
+    "diagnostic_codes": [
+      "forward_compatible_unknown"
+    ]
+  }
+}

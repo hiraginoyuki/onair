@@ -1,0 +1,26 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "openai.chat.request.text-tool",
+  "title": "Chat request with text, tool history, cache intent, and JSON Schema output converts to Responses",
+  "synthetic": true,
+  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "target_profile": "openai.responses.alpha-0.1.0",
+  "kind": "cross_profile_conversion",
+  "input": {
+    "envelope": {
+      "profile_id": "openai.chat-completions.alpha-0.1.0",
+      "status": 200,
+      "body_kind": "json",
+      "protocol_headers": [
+        {
+          "raw_line": "Content-Type: application/json"
+        }
+      ],
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVxdWVzdCJ9LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiIiLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfc3ludGhldGljIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJhcmd1bWVudHMiOiJ7XCJzdWJqZWN0XCI6XCJhbHBoYVwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJ0b29sX2NhbGxfaWQiOiJjYWxsX3N5bnRoZXRpYyIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVzdWx0In1dLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJkZXNjcmlwdGlvbiI6InN5bnRoZXRpYyB0b29sIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0In0sInN0cmljdCI6dHJ1ZX19XSwidGVtcGVyYXR1cmUiOjAuMiwidG9wX3AiOjAuOSwibWF4X2NvbXBsZXRpb25fdG9rZW5zIjoyNCwicHJvbXB0X2NhY2hlX2tleSI6InN5bnRoZXRpYy1jYWNoZSIsInByb21wdF9jYWNoZV9yZXRlbnRpb24iOiIyNGgiLCJyZXNwb25zZV9mb3JtYXQiOnsidHlwZSI6Impzb25fc2NoZW1hIiwianNvbl9zY2hlbWEiOnsibmFtZSI6InN5bnRoZXRpY19vdXRwdXQiLCJzY2hlbWEiOnsidHlwZSI6Im9iamVjdCJ9LCJzdHJpY3QiOnRydWV9fX0="
+    }
+  },
+  "expect": {
+    "fidelity": "exact",
+    "diagnostic_codes": []
+  }
+}

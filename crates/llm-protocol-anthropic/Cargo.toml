@@ -1,0 +1,17 @@
+[package]
+name = "llm-protocol-anthropic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Unpublished Anthropic Messages reference codec for LLM Protocol Alpha"
+
+[dependencies]
+base64 = { workspace = true }
+llm-protocol-core = { path = "../llm-protocol-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+llm-protocol-openai = { path = "../llm-protocol-openai" }

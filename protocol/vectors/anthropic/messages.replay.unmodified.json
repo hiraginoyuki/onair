@@ -1,0 +1,40 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "anthropic.messages.replay.unmodified",
+  "title": "Synthetic Messages JSON exact replay with pinned and beta headers",
+  "synthetic": true,
+  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "kind": "exact_replay",
+  "input": {
+    "envelope": {
+      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+      "status": 200,
+      "body_kind": "json",
+      "protocol_headers": [
+        {
+          "raw_line": "Content-Type: application/json"
+        },
+        {
+          "raw_line": "Anthropic-Version: 2023-06-01"
+        },
+        {
+          "raw_line": "Anthropic-Beta: synthetic-beta"
+        }
+      ],
+      "body_base64": "eyJpZCI6InN5bnRoZXRpYy0xIiwidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W119"
+    }
+  },
+  "expect": {
+    "fidelity": "exact",
+    "diagnostic_codes": [],
+    "exact_replay": {
+      "protocol_headers": [
+        "Content-Type: application/json",
+        "Anthropic-Version: 2023-06-01",
+        "Anthropic-Beta: synthetic-beta"
+      ],
+      "body_base64": "eyJpZCI6InN5bnRoZXRpYy0xIiwidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W119"
+    }
+  }
+}

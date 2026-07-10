@@ -5,6 +5,9 @@ members = [
     "crates/onair-core",
     "crates/onair-obs",
     "crates/onair-proxy",
+    "crates/llm-protocol-core",
+    "crates/llm-protocol-openai",
+    "crates/llm-protocol-anthropic",
 ]
 
 [workspace.package]
@@ -16,9 +19,11 @@ publish = false
 [workspace.dependencies]
 async-stream = "0.3"
 axum = { version = "0.8", features = ["macros"] }
+base64 = "0.22"
 bytes = "1"
 clap = { version = "4.5", features = ["derive", "env"] }
 futures-util = "0.3"
+hmac = "0.12"
 http-body-util = "0.1"
 notify = "8"
 opentelemetry = "0.30"
@@ -30,6 +35,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 subtle = "2.6"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

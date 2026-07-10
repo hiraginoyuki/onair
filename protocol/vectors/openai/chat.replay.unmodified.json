@@ -1,0 +1,36 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "openai.chat.replay.unmodified",
+  "title": "Unmodified OpenAI Chat envelope replays exact header lines and JSON bytes",
+  "synthetic": true,
+  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "target_profile": "openai.chat-completions.alpha-0.1.0",
+  "kind": "exact_replay",
+  "input": {
+    "envelope": {
+      "profile_id": "openai.chat-completions.alpha-0.1.0",
+      "status": 200,
+      "body_kind": "json",
+      "protocol_headers": [
+        {
+          "raw_line": "Content-Type: application/json"
+        },
+        {
+          "raw_line": "Retry-After: 1"
+        }
+      ],
+      "body_base64": "eyJpZCI6InN5bnRoZXRpYy0xIiwiY2hvaWNlcyI6W119"
+    }
+  },
+  "expect": {
+    "fidelity": "exact",
+    "diagnostic_codes": [],
+    "exact_replay": {
+      "protocol_headers": [
+        "Content-Type: application/json",
+        "Retry-After: 1"
+      ],
+      "body_base64": "eyJpZCI6InN5bnRoZXRpYy0xIiwiY2hvaWNlcyI6W119"
+    }
+  }
+}

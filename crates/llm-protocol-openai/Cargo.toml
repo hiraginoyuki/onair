@@ -1,0 +1,14 @@
+[package]
+name = "llm-protocol-openai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Unpublished OpenAI reference codecs for LLM Protocol Alpha"
+
+[dependencies]
+base64 = { workspace = true }
+llm-protocol-core = { path = "../llm-protocol-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

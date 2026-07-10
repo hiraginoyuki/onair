@@ -1,0 +1,29 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "anthropic.messages.response.text-tool",
+  "title": "Synthetic Messages response with text and tool use",
+  "synthetic": true,
+  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "target_profile": "openai.chat-completions.alpha-0.1.0",
+  "kind": "cross_profile_conversion",
+  "input": {
+    "envelope": {
+      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+      "status": 200,
+      "body_kind": "json",
+      "protocol_headers": [
+        {
+          "raw_line": "content-type: application/json"
+        },
+        {
+          "raw_line": "anthropic-version: 2023-06-01"
+        }
+      ],
+      "body_base64": "eyJpZCI6Im1zZ19zeW50aGV0aWMiLCJ0eXBlIjoibWVzc2FnZSIsInJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJzeW50aGV0aWMgcmVwbHkifSx7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoiY2FsbF9zeW50aGV0aWMiLCJuYW1lIjoic3ludGhldGljX2xvb2t1cCIsImlucHV0Ijp7InN1YmplY3QiOiJhbHBoYSJ9fV0sIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwic3RvcF9yZWFzb24iOiJ0b29sX3VzZSIsInVzYWdlIjp7ImlucHV0X3Rva2VucyI6MTEsIm91dHB1dF90b2tlbnMiOjcsImNhY2hlX3JlYWRfaW5wdXRfdG9rZW5zIjozfX0="
+    }
+  },
+  "expect": {
+    "fidelity": "exact",
+    "diagnostic_codes": []
+  }
+}

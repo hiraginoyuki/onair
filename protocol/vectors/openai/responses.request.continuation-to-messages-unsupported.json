@@ -1,0 +1,28 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "openai.responses.request.continuation-to-messages-unsupported",
+  "title": "Synthetic Responses continuation is unsupported for Messages",
+  "synthetic": true,
+  "source_profile": "openai.responses.alpha-0.1.0",
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "kind": "unsupported",
+  "input": {
+    "envelope": {
+      "profile_id": "openai.responses.alpha-0.1.0",
+      "status": 200,
+      "body_kind": "json",
+      "protocol_headers": [
+        {
+          "raw_line": "content-type: application/json"
+        }
+      ],
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsInByZXZpb3VzX3Jlc3BvbnNlX2lkIjoicmVzcF9wcmlvciIsImlucHV0Ijoic3ludGhldGljIHJlcXVlc3QifQ=="
+    }
+  },
+  "expect": {
+    "fidelity": "unsupported",
+    "diagnostic_codes": [
+      "non_portable_continuation_handle"
+    ]
+  }
+}

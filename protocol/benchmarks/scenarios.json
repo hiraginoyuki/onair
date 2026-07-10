@@ -1,0 +1,21 @@
+{
+  "protocol_version": "0.1.0",
+  "synthetic": true,
+  "mode": "dry_run_default",
+  "scenarios": [
+    {
+      "id": "short-text-tool-roundtrip",
+      "description": "Synthetic short text request with one JSON Schema tool.",
+      "max_calls": 1,
+      "max_input_tokens": 256,
+      "max_output_tokens": 128
+    }
+  ],
+  "live_mode_requirements": [
+    "explicit_confirmation",
+    "configured_hard_call_cap",
+    "configured_hard_input_token_cap",
+    "configured_hard_output_token_cap",
+    "local_redacted_observations_only"
+  ]
+}

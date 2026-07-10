@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onair.dev/llm-protocol-alpha/0.1.0/profile-registry.schema.json",
+  "title": "LLM Protocol Alpha Profile Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "profiles"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "protocol_version": {
+      "const": "0.1.0"
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/profile"
+      }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "provider",
+        "api_family",
+        "endpoint",
+        "vendor_version_selector",
+        "enabled_features",
+        "contract_revision"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "provider": {
+          "enum": [
+            "openai",
+            "anthropic"
+          ]
+        },
+        "api_family": {
+          "enum": [
+            "chat_completions",
+            "responses",
+            "messages"
+          ]
+        },
+        "endpoint": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "vendor_version_selector": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "enabled_features": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          }
+        },
+        "contract_revision": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

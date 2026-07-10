@@ -1,0 +1,25 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "core.opaque-extension.cross-profile",
+  "title": "Unknown provider field is reported rather than dropped across profiles",
+  "synthetic": true,
+  "source_profile": "openai.responses.alpha-0.1.0",
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "kind": "cross_profile_conversion",
+  "input": {
+    "opaque_extension": {
+      "issuing_profile": "openai.responses.alpha-0.1.0",
+      "namespace": "openai.responses.future_event",
+      "source_location": "/output/0/future_field",
+      "payload": {
+        "synthetic": true
+      }
+    }
+  },
+  "expect": {
+    "fidelity": "lossy",
+    "diagnostic_codes": [
+      "forward_compatible_unknown"
+    ]
+  }
+}

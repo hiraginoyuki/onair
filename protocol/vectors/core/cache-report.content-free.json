@@ -1,0 +1,46 @@
+{
+  "protocol_version": "0.1.0",
+  "id": "core.cache-report.content-free",
+  "title": "Cache reports expose structural changes without prompt content or fingerprints",
+  "synthetic": true,
+  "source_profile": "openai.responses.alpha-0.1.0",
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "kind": "cache_analysis",
+  "input": {
+    "source_cache_intent": {
+      "kind": "openai"
+    },
+    "target_cache_intent": {
+      "kind": "anthropic"
+    }
+  },
+  "expect": {
+    "fidelity": "adapted",
+    "diagnostic_codes": [
+      "cache_plan_applied"
+    ],
+    "cache_report": {
+      "common_stable_prefix_len": 0,
+      "entries": [
+        {
+          "source": {
+            "kind": "cache_directive",
+            "location": {
+              "kind": "cache_directive",
+              "directive_index": 0
+            }
+          },
+          "target": {
+            "kind": "cache_directive",
+            "location": {
+              "kind": "cache_directive",
+              "directive_index": 0
+            }
+          },
+          "status": "non_portable",
+          "reason": "provider_semantics_differ"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onair.dev/llm-protocol-alpha/0.1.0/envelope.schema.json",
+  "title": "LLM Protocol Alpha Wire Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "profile_id",
+    "status",
+    "body_kind",
+    "protocol_headers",
+    "body_base64"
+  ],
+  "properties": {
+    "protocol_version": {
+      "const": "0.1.0"
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599
+    },
+    "body_kind": {
+      "enum": [
+        "json",
+        "sse"
+      ]
+    },
+    "protocol_headers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/protocol_header"
+      }
+    },
+    "adapter_headers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "body_base64": {
+      "type": "string",
+      "contentEncoding": "base64"
+    }
+  },
+  "$defs": {
+    "protocol_header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw_line"
+      ],
+      "properties": {
+        "raw_line": {
+          "type": "string",
+          "pattern": "^[^\\r\\n]+$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "llm-protocol-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Unpublished reference types for LLM Protocol Alpha"
+
+[dependencies]
+hmac = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+jsonschema = "=0.37.4"
