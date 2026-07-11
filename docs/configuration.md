@@ -35,6 +35,8 @@ directory = "onair-debug-captures"
 enabled = false
 retention_requests = 10000
 allow_remote = false
+# Optional additional effective-client CIDRs, for example a narrow Tailscale range.
+allowed_client_cidrs = []
 
 [inspector.persistence]
 # Disabled by default. Restores the latest retained inspector records after restart.

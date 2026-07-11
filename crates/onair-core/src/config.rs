@@ -290,6 +290,7 @@ pub struct InspectorConfig {
     pub enabled: bool,
     pub retention_requests: usize,
     pub allow_remote: bool,
+    pub allowed_client_cidrs: Vec<IpCidr>,
     pub persistence: InspectorPersistenceConfig,
 }
 
@@ -337,6 +338,7 @@ impl Default for InspectorConfig {
             enabled: false,
             retention_requests: DEFAULT_INSPECTOR_RETENTION_REQUESTS,
             allow_remote: false,
+            allowed_client_cidrs: Vec::new(),
             persistence: InspectorPersistenceConfig::default(),
         }
     }
@@ -3173,6 +3175,7 @@ mod tests {
 
         assert!(config.inspector.enabled);
         assert!(config.inspector.allow_remote);
+        assert!(config.inspector.allowed_client_cidrs.is_empty());
         assert_eq!(config.inspector.retention_requests, 128);
         assert!(!config.inspector.persistence.enabled);
         assert!(config.inspector.persistence.path.is_none());
@@ -3463,6 +3466,41 @@ mod tests {
         assert_eq!(config.server.trusted_proxy_cidrs.len(), 2);
         assert!(config.server.trusted_proxy_cidrs[0].contains("127.0.0.1".parse().unwrap()));
         assert!(config.server.trusted_proxy_cidrs[1].contains("::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn inspector_allowed_client_cidrs_resolve_from_config() {
+        let config = parse_config(
+            r#"
+            [inspector]
+            enabled = true
+            allowed_client_cidrs = ["100.64.12.0/24", "fd7a:115c:a1e0::/48"]
+
+            [access]
+            default_models = ["public-model"]
+
+            [[client]]
+            id = "dev"
+            api_key = "sk-test"
+
+            [[backend]]
+            id = "backend-a"
+            base_url = "http://127.0.0.1:8000"
+            supports = ["responses"]
+
+            [[route]]
+            public = "public-model"
+            expose = ["responses"]
+            backends = ["private-model@backend-a"]
+            "#,
+        );
+
+        assert_eq!(config.inspector.allowed_client_cidrs.len(), 2);
+        assert!(config.inspector.allowed_client_cidrs[0].contains("100.64.12.42".parse().unwrap()));
+        assert!(
+            config.inspector.allowed_client_cidrs[1]
+                .contains("fd7a:115c:a1e0::42".parse().unwrap())
+        );
     }
 
     #[test]

@@ -62,6 +62,11 @@ impl ClientInfo {
         client_ip(&self.effective_client_addr).is_some_and(|address| address.is_loopback())
     }
 
+    pub fn effective_client_matches(&self, allowed_cidrs: &[IpCidr]) -> bool {
+        client_ip(&self.effective_client_addr)
+            .is_some_and(|address| allowed_cidrs.iter().any(|cidr| cidr.contains(address)))
+    }
+
     pub fn trusted_proxy_addr(&self) -> &str {
         self.trusted_proxy_addr.as_deref().unwrap_or(NONE)
     }

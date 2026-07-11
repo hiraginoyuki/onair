@@ -407,6 +407,7 @@ fn persistence_drain_only_walks_current_deque_state() {
         enabled: true,
         retention_requests: 3,
         allow_remote: false,
+        allowed_client_cidrs: vec![],
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(path.clone()),
@@ -442,6 +443,7 @@ fn evicted_in_flight_record_is_not_marked_interrupted_on_drop() {
         enabled: true,
         retention_requests: 3,
         allow_remote: false,
+        allowed_client_cidrs: vec![],
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(path.clone()),
@@ -533,6 +535,7 @@ fn persistent_store_restores_latest_records() {
         enabled: true,
         retention_requests: 2,
         allow_remote: false,
+        allowed_client_cidrs: vec![],
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(path.clone()),
@@ -562,6 +565,7 @@ fn persistent_store_drop_drains_pending_records() {
         enabled: true,
         retention_requests: 32,
         allow_remote: false,
+        allowed_client_cidrs: vec![],
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(path.clone()),
@@ -602,6 +606,7 @@ fn store_drop_marks_inflight_records_as_interrupted() {
         enabled: true,
         retention_requests: 8,
         allow_remote: false,
+        allowed_client_cidrs: vec![],
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(path.clone()),

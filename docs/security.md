@@ -72,6 +72,14 @@ processing. This is the default and is appropriate for
 `bind = "127.0.0.1:8080"` plus a browser on the same host, while still
 rejecting forwarded remote clients that arrive through a trusted proxy.
 
+To permit restricted remote operator access, keep `allow_remote = false` and
+set `[inspector].allowed_client_cidrs` to the smallest effective-client CIDRs
+that should be allowed. Direct Tailscale peers can be matched this way. When a
+reverse proxy is involved, forwarded addresses count only if the immediate
+peer is also covered by `[server].trusted_proxy_cidrs`; otherwise forwarded
+headers are ignored. Do not use the broad `100.64.0.0/10` range unless every
+address in that shared CGNAT range is trusted by the deployment.
+
 Set `allow_remote = true` only if the onair bind address is protected by
 another access-control layer, such as SSH tunneling, a private VPN, or a
 trusted reverse proxy with its own authentication.

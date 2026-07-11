@@ -1462,6 +1462,7 @@ async fn inspector_persistence_restores_retained_records_after_restart() {
         enabled: true,
         retention_requests: 16,
         allow_remote: false,
+        allowed_client_cidrs: vec![],
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(database_path.clone()),
@@ -1832,6 +1833,7 @@ async fn inspector_in_flight_record_persisted_as_interrupted_on_app_state_drop()
         enabled: true,
         retention_requests: 16,
         allow_remote: false,
+        allowed_client_cidrs: vec![],
         persistence: InspectorPersistenceConfig {
             enabled: true,
             path: Some(database_path.clone()),
@@ -1898,6 +1900,7 @@ async fn inspector_in_flight_record_persisted_as_interrupted_on_app_state_drop()
             enabled: true,
             retention_requests: 16,
             allow_remote: false,
+            allowed_client_cidrs: vec![],
             persistence: InspectorPersistenceConfig {
                 enabled: true,
                 path: Some(database_path.clone()),
@@ -2357,6 +2360,101 @@ async fn inspector_rejects_remote_forwarded_clients_by_default() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn inspector_allows_matching_remote_client_cidr() {
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            allowed_client_cidrs: vec!["100.64.12.0/24".parse().unwrap()],
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state);
+
+    let allowed = app
+        .clone()
+        .oneshot(inspector_get_with_peer(
+            "/_onair/inspector/requests",
+            "100.64.12.42:55432",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), StatusCode::OK);
+
+    let denied = app
+        .oneshot(inspector_get_with_peer(
+            "/_onair/inspector/requests",
+            "100.64.13.42:55432",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn inspector_cidr_uses_forwarded_client_only_from_trusted_proxy() {
+    let server = ServerConfig {
+        trusted_proxy_cidrs: vec!["127.0.0.1/32".parse().unwrap()],
+        ..ServerConfig::default()
+    };
+    let state = test_state_with_server_config_and_inspector(
+        RoutingStrategy::Priority,
+        vec![],
+        vec![],
+        server,
+        btree_set([PUBLIC_MODEL]),
+        DebugCaptureConfig::default(),
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            allowed_client_cidrs: vec!["100.64.12.0/24".parse().unwrap()],
+            ..InspectorConfig::default()
+        },
+        HealthConfig::default(),
+    );
+    let app = router(state);
+
+    let forwarded_allowed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/_onair/inspector/requests")
+                .header(FORWARDED, "for=100.64.12.42")
+                .extension(ConnectInfo(
+                    "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forwarded_allowed.status(), StatusCode::OK);
+
+    let spoofed = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/_onair/inspector/requests")
+                .header(FORWARDED, "for=100.64.12.42")
+                .extension(ConnectInfo(
+                    "198.51.100.20:55432"
+                        .parse::<std::net::SocketAddr>()
+                        .unwrap(),
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(spoofed.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

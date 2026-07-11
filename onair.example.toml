@@ -27,6 +27,10 @@ retention_requests = 10000
 # Keep false unless the onair bind address is protected by another access-control layer.
 # When false, trusted forwarded headers must still resolve to a loopback effective client.
 allow_remote = false
+# Optional additional effective-client CIDRs, for example a narrow Tailscale range.
+# Direct peers are matched by socket address; forwarded addresses are only used when
+# the immediate peer is listed in [server].trusted_proxy_cidrs.
+allowed_client_cidrs = []
 
 [inspector.persistence]
 # Disabled by default. When enabled, restores the latest retained inspector records after restart.

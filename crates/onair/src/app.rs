@@ -639,7 +639,9 @@ fn local_operator_gate(state: &AppState, request: &Request<Body>) -> Option<Resp
             peer_addr,
             &config.server.trusted_proxy_cidrs,
         );
-        if !client_info.effective_client_is_loopback() {
+        if !client_info.effective_client_is_loopback()
+            && !client_info.effective_client_matches(&config.inspector.allowed_client_cidrs)
+        {
             return Some(inspector_not_found());
         }
     }

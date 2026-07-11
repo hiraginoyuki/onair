@@ -216,6 +216,8 @@ can restore the latest retained records after a process restart.
 enabled = true
 retention_requests = 10000
 allow_remote = false
+# Optional additional effective-client CIDRs, for example a narrow Tailscale range.
+allowed_client_cidrs = []
 
 [inspector.persistence]
 enabled = false
@@ -252,7 +254,7 @@ Endpoints:
   every term must match the retained request metadata it searches.
 
 Read-only operator endpoints use the same `[inspector]` enablement and
-effective-client loopback/`allow_remote` gate:
+effective-client loopback/CIDR/`allow_remote` gate:
 
 - `GET /_onair/operator/runtime`: process uptime, current time, retained
   inspector record count, route object counts, and telemetry exporter status.
