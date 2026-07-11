@@ -69,8 +69,9 @@
   let widths: Widths = loadWidths();
   let viewportTop = 0;
   let viewportHeight = 480;
+  let tableWrap: HTMLElement | undefined;
   let source: EventSource | undefined;
-  let resizeStart: { key: ColumnKey; x: number; width: number } | undefined;
+  let resizeStart: { key: ColumnKey; x: number; width: number; pointerId: number; element: HTMLElement } | undefined;
   let operatorTimer: number | undefined;
   let noticeTimer: number | undefined;
   let expandedAttempts = new Set<string>();
@@ -103,7 +104,7 @@
   onMount(() => {
     widths = loadWidths();
     const resize = () => {
-      viewportHeight = Math.max(260, window.innerHeight - 246);
+      viewportHeight = Math.max(260, tableWrap?.clientHeight ?? window.innerHeight - 168);
     };
     resize();
     window.addEventListener("resize", resize);
@@ -462,7 +463,12 @@
   }
 
   function columnTemplate(currentWidths: Widths): string {
-    return columns.map((column) => `${columnWidth(column.key, currentWidths)}px`).join(" ");
+    return columns
+      .map((column) => {
+        const width = `${columnWidth(column.key, currentWidths)}px`;
+        return column.key === "outcome" ? `minmax(${width}, 1fr)` : width;
+      })
+      .join(" ");
   }
 
   function tableMinimumWidth(currentWidths: Widths): number {
@@ -546,13 +552,18 @@
   function startResize(event: PointerEvent, key: ColumnKey) {
     event.preventDefault();
     const element = event.currentTarget as HTMLElement;
+    element.setPointerCapture(event.pointerId);
     resizeStart = {
       key,
       x: event.clientX,
-      width: element.parentElement?.getBoundingClientRect().width ?? columnWidth(key, widths)
+      width: element.parentElement?.getBoundingClientRect().width ?? columnWidth(key, widths),
+      pointerId: event.pointerId,
+      element
     };
+    document.body.classList.add("resizing-columns");
     window.addEventListener("pointermove", moveResize);
-    window.addEventListener("pointerup", stopResize, { once: true });
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
   }
 
   function moveResize(event: PointerEvent) {
@@ -568,9 +579,20 @@
   }
 
   function stopResize() {
+    if (resizeStart) {
+      try {
+        if (resizeStart.element.hasPointerCapture(resizeStart.pointerId)) {
+          resizeStart.element.releasePointerCapture(resizeStart.pointerId);
+        }
+      } catch {
+        // Pointer capture may already be released by the browser.
+      }
+    }
     resizeStart = undefined;
     window.removeEventListener("pointermove", moveResize);
     window.removeEventListener("pointerup", stopResize);
+    window.removeEventListener("pointercancel", stopResize);
+    document.body.classList.remove("resizing-columns");
   }
 
   function showNotice(message: string, persistent = false) {
@@ -727,6 +749,7 @@
   <section class="workspace">
     <div
       class="table-wrap"
+      bind:this={tableWrap}
       on:scroll={(event) => {
         const target = event.currentTarget as HTMLElement;
         viewportTop = target.scrollTop;
