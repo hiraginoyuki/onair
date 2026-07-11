@@ -18,7 +18,9 @@ function inlineArtifacts(): Plugin {
       // avoiding trailing whitespace in the tracked one-file artifact.
       const js = readFileSync(jsPath, "utf8").replace(/\t\n/g, "\\t\\n");
       html = html.replace(/<link rel="stylesheet"[^>]+>/, `<style>${css}</style>`);
-      html = html.replace(/<script type="module"[^>]+><\/script>/, `<script>${js}</script>`);
+      html = html.replace(/<script type="module"[^>]+><\/script>/, "");
+      html = html.replace(/<title>onair inspector<\/title>\s*/, "<title>onair inspector</title>\n");
+      html = html.replace("</body>", `<script>${js}</script></body>`);
       writeFileSync(htmlPath, html);
       unlinkSync(cssPath);
       unlinkSync(jsPath);
