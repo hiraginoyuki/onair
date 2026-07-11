@@ -180,7 +180,7 @@
       source.addEventListener(name, (message) => {
         const data = (message as MessageEvent).data;
         try {
-          const event: unknown = JSON.parse(data);
+          const event: unknown = normalizeStreamEvent(JSON.parse(data));
           if (!isStreamEvent(event)) throw new Error("invalid event envelope");
           handleEvent(event);
         } catch {
@@ -189,6 +189,35 @@
         }
       });
     }
+  }
+
+  function normalizeStreamEvent(event: unknown): unknown {
+    if (!event || typeof event !== "object") return event;
+    const candidate = event as Record<string, unknown>;
+    if (candidate.kind === "snapshot" && Array.isArray(candidate.records)) {
+      return {
+        ...candidate,
+        records: candidate.records.map((entry) => {
+          if (!entry || typeof entry !== "object") return entry;
+          const snapshot = entry as Record<string, unknown>;
+          return { ...snapshot, record: normalizeInspectorRecord(snapshot.record) };
+        })
+      };
+    }
+    if (candidate.kind === "record_upsert") {
+      return { ...candidate, record: normalizeInspectorRecord(candidate.record) };
+    }
+    return event;
+  }
+
+  function normalizeInspectorRecord(record: unknown): unknown {
+    if (!record || typeof record !== "object") return record;
+    const candidate = record as Record<string, unknown>;
+    return {
+      ...candidate,
+      backend_attempts: Array.isArray(candidate.backend_attempts) ? candidate.backend_attempts : [],
+      retried_attempts: Array.isArray(candidate.retried_attempts) ? candidate.retried_attempts : []
+    };
   }
 
   function isStreamEvent(event: unknown): event is StreamEvent {
