@@ -216,7 +216,9 @@
     return {
       ...candidate,
       backend_attempts: Array.isArray(candidate.backend_attempts) ? candidate.backend_attempts : [],
-      retried_attempts: Array.isArray(candidate.retried_attempts) ? candidate.retried_attempts : []
+      retried_attempts: Array.isArray(candidate.retried_attempts) ? candidate.retried_attempts : [],
+      exposed_backend_error:
+        candidate.exposed_backend_error === undefined ? false : candidate.exposed_backend_error
     };
   }
 
