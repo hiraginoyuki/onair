@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::JoinHandle;
@@ -13,10 +13,14 @@ use onair_core::error::Result;
 use onair_core::sanitize::{DISPLAY_SEGMENT_MAX_CHARS, sanitize_for_storage};
 
 use super::records::{InspectorOutcome, InspectorRequestRecord};
+use super::{
+    InspectorRecordPhase, InspectorResetReason, InspectorSnapshotEntry, InspectorStreamEvent,
+};
 use crate::observe::inspector_persistence::{InspectorPersistenceWriter, restore_records};
 
 pub(super) const MAX_RETENTION_REQUESTS: usize = 100_000;
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
+const V2_REPLAY_CAPACITY: usize = 4096;
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
@@ -25,9 +29,26 @@ pub struct InspectorStore {
 }
 
 pub(super) struct InspectorStoreInner {
-    pub(super) records: Mutex<VecDeque<InspectorRequestRecord>>,
+    pub(super) records: Mutex<RetainedRecords>,
     pub(super) events: broadcast::Sender<InspectorRequestRecord>,
+    pub(super) v2_events: broadcast::Sender<InspectorStreamEvent>,
+    pub(super) v2_state: Mutex<V2State>,
     pub(super) persistence: Option<PersistenceComponents>,
+}
+
+pub(super) struct RetainedRecords {
+    records_by_id: HashMap<String, RetainedRecord>,
+    retention_order: VecDeque<String>,
+}
+
+struct RetainedRecord {
+    record: InspectorRequestRecord,
+    revision: u64,
+}
+
+pub(super) struct V2State {
+    next_sequence: u64,
+    replay: VecDeque<InspectorStreamEvent>,
 }
 
 pub(super) struct PersistenceComponents {
@@ -42,15 +63,17 @@ impl Drop for InspectorStoreInner {
         };
         let interrupted: Vec<InspectorRequestRecord> = {
             let mut records = self.records.lock();
-            for record in records.iter_mut() {
-                if matches!(record.outcome, InspectorOutcome::InFlight) {
-                    mark_record_interrupted(record);
+            for retained in records.records_by_id.values_mut() {
+                if matches!(retained.record.outcome, InspectorOutcome::InFlight) {
+                    mark_record_interrupted(&mut retained.record);
                 }
             }
             records
+                .retention_order
                 .iter()
-                .filter(|record| matches!(record.outcome, InspectorOutcome::Interrupted))
-                .cloned()
+                .filter_map(|record_id| records.records_by_id.get(record_id))
+                .filter(|retained| matches!(retained.record.outcome, InspectorOutcome::Interrupted))
+                .map(|retained| retained.record.clone())
                 .collect()
         };
         for record in &interrupted {
@@ -101,32 +124,33 @@ fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-// Add `record` to the deque, enforcing the retention cap with FIFO eviction.
-//
-// If a record with the same `record_id` already exists, replace it in
-// place to preserve its deque position (stable table ordering in the UI
-// and reverse-scan `get()` semantics). Otherwise the record is treated
-// as a new push: when the deque is already at the retention limit, the
-// oldest record is popped from the front *before* the new record is
-// pushed to the back. Eviction intentionally drops the record from the
-// deque only; the persistence layer is notified separately by the
-// caller and never sees the evicted record.
+// Add or replace a record while preserving insertion order and FIFO eviction.
+// Replacing a record is O(1); only insertion and eviction touch the order
+// deque.
 fn upsert_with_fifo_eviction(
-    records: &mut VecDeque<InspectorRequestRecord>,
+    records: &mut RetainedRecords,
     record: InspectorRequestRecord,
     retention_requests: usize,
 ) {
-    if let Some(slot) = records
-        .iter_mut()
-        .find(|slot| slot.base.record_id == record.base.record_id)
-    {
-        *slot = record;
+    let record_id = record.base.record_id.clone();
+    if let Some(existing) = records.records_by_id.get_mut(&record_id) {
+        existing.record = record;
+        existing.revision = existing.revision.saturating_add(1);
         return;
     }
-    if records.len() >= retention_requests {
-        records.pop_front();
+    if records.retention_order.len() >= retention_requests
+        && let Some(evicted_id) = records.retention_order.pop_front()
+    {
+        records.records_by_id.remove(&evicted_id);
     }
-    records.push_back(record);
+    records.retention_order.push_back(record_id.clone());
+    records.records_by_id.insert(
+        record_id,
+        RetainedRecord {
+            record,
+            revision: 1,
+        },
+    );
 }
 
 impl Default for InspectorStore {
@@ -167,10 +191,23 @@ impl InspectorStore {
         persistence: Option<PersistenceComponents>,
     ) -> Self {
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (v2_events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let mut retained = RetainedRecords {
+            records_by_id: HashMap::with_capacity(records.len()),
+            retention_order: VecDeque::with_capacity(records.len()),
+        };
+        for record in records {
+            upsert_with_fifo_eviction(&mut retained, record, MAX_RETENTION_REQUESTS);
+        }
         Self {
             inner: Arc::new(InspectorStoreInner {
-                records: Mutex::new(records.into()),
+                records: Mutex::new(retained),
                 events,
+                v2_events,
+                v2_state: Mutex::new(V2State {
+                    next_sequence: 0,
+                    replay: VecDeque::with_capacity(V2_REPLAY_CAPACITY),
+                }),
                 persistence,
             }),
         }
@@ -186,6 +223,7 @@ impl InspectorStore {
             let mut records = self.inner.records.lock();
             upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
         }
+        self.publish_v2(record.clone(), InspectorRecordPhase::Terminal);
 
         if let Some(persistence) = &self.inner.persistence {
             persistence
@@ -206,7 +244,27 @@ impl InspectorStore {
             let mut records = self.inner.records.lock();
             upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
         }
+        self.publish_v2(record.clone(), InspectorRecordPhase::Live);
 
+        let _ = self.inner.events.send(record);
+    }
+
+    pub fn upsert_initial(
+        &self,
+        enabled: bool,
+        retention_requests: usize,
+        record: InspectorRequestRecord,
+    ) {
+        if !enabled {
+            return;
+        }
+
+        let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
+        {
+            let mut records = self.inner.records.lock();
+            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
+        }
+        self.publish_v2(record.clone(), InspectorRecordPhase::Initial);
         let _ = self.inner.events.send(record);
     }
 
@@ -225,6 +283,7 @@ impl InspectorStore {
             let mut records = self.inner.records.lock();
             upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
         }
+        self.publish_v2(record.clone(), InspectorRecordPhase::Terminal);
 
         if let Some(persistence) = &self.inner.persistence {
             persistence
@@ -237,26 +296,136 @@ impl InspectorStore {
 
     pub fn records_limited(&self, limit: usize) -> Vec<InspectorRequestRecord> {
         let records = self.inner.records.lock();
-        let skip = records.len().saturating_sub(limit.max(1));
-        records.iter().skip(skip).cloned().collect()
+        let skip = records.retention_order.len().saturating_sub(limit.max(1));
+        records
+            .retention_order
+            .iter()
+            .skip(skip)
+            .filter_map(|record_id| records.records_by_id.get(record_id))
+            .map(|retained| retained.record.clone())
+            .collect()
     }
 
     pub fn retained_len(&self) -> usize {
-        self.inner.records.lock().len()
+        self.inner.records.lock().retention_order.len()
     }
 
     pub fn get(&self, record_id: &str) -> Option<InspectorRequestRecord> {
         self.inner
             .records
             .lock()
-            .iter()
-            .rev()
-            .find(|record| record.base.record_id == record_id)
-            .cloned()
+            .records_by_id
+            .get(record_id)
+            .map(|retained| retained.record.clone())
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<InspectorRequestRecord> {
         self.inner.events.subscribe()
+    }
+
+    pub fn subscribe_v2(
+        &self,
+        last_sequence: Option<u64>,
+        snapshot_limit: usize,
+    ) -> (
+        broadcast::Receiver<InspectorStreamEvent>,
+        Vec<InspectorStreamEvent>,
+    ) {
+        let receiver = self.inner.v2_events.subscribe();
+        let initial = match last_sequence {
+            Some(last_sequence) => self.replay_since(last_sequence).unwrap_or_else(|| {
+                vec![
+                    self.next_control_event(InspectorResetReason::ResumeUnavailable),
+                    self.snapshot_event(snapshot_limit),
+                ]
+            }),
+            None => vec![self.snapshot_event(snapshot_limit)],
+        };
+        (receiver, initial)
+    }
+
+    pub fn reset_event(&self) -> InspectorStreamEvent {
+        self.next_control_event(InspectorResetReason::Lagged)
+    }
+
+    pub fn snapshot_event(&self, limit: usize) -> InspectorStreamEvent {
+        self.snapshot_event_inner(limit)
+    }
+
+    fn replay_since(&self, last_sequence: u64) -> Option<Vec<InspectorStreamEvent>> {
+        let state = self.inner.v2_state.lock();
+        let current = state.next_sequence;
+        if last_sequence >= current {
+            return Some(Vec::new());
+        }
+        let oldest = state.replay.front().and_then(event_sequence);
+        if oldest.is_none_or(|oldest| last_sequence.saturating_add(1) < oldest) {
+            return None;
+        }
+        Some(
+            state
+                .replay
+                .iter()
+                .filter(|event| {
+                    event_sequence(event).is_some_and(|sequence| sequence > last_sequence)
+                })
+                .cloned()
+                .collect(),
+        )
+    }
+
+    fn snapshot_event_inner(&self, limit: usize) -> InspectorStreamEvent {
+        let records = self.inner.records.lock();
+        let skip = records.retention_order.len().saturating_sub(limit.max(1));
+        let records = records
+            .retention_order
+            .iter()
+            .skip(skip)
+            .filter_map(|record_id| records.records_by_id.get(record_id))
+            .map(|retained| InspectorSnapshotEntry {
+                record_id: retained.record.base.record_id.clone(),
+                revision: retained.revision,
+                record: retained.record.clone(),
+            })
+            .collect();
+        let stream_seq = self.inner.v2_state.lock().next_sequence;
+        InspectorStreamEvent::Snapshot {
+            stream_seq,
+            records,
+        }
+    }
+
+    fn next_control_event(&self, reason: InspectorResetReason) -> InspectorStreamEvent {
+        let mut state = self.inner.v2_state.lock();
+        state.next_sequence = state.next_sequence.saturating_add(1);
+        InspectorStreamEvent::Reset {
+            stream_seq: state.next_sequence,
+            reason,
+        }
+    }
+
+    fn publish_v2(&self, record: InspectorRequestRecord, phase: InspectorRecordPhase) {
+        let revision = {
+            let records = self.inner.records.lock();
+            records
+                .records_by_id
+                .get(&record.base.record_id)
+                .map_or(1, |retained| retained.revision)
+        };
+        let mut state = self.inner.v2_state.lock();
+        state.next_sequence = state.next_sequence.saturating_add(1);
+        let event = InspectorStreamEvent::RecordUpsert {
+            stream_seq: state.next_sequence,
+            record_id: record.base.record_id.clone(),
+            revision,
+            phase,
+            record,
+        };
+        if state.replay.len() >= V2_REPLAY_CAPACITY {
+            state.replay.pop_front();
+        }
+        state.replay.push_back(event.clone());
+        let _ = self.inner.v2_events.send(event);
     }
 
     pub fn next_record_id(started_at_unix_ms: u64, client_request_id: Option<&str>) -> String {
@@ -270,4 +439,14 @@ impl InspectorStore {
         }
         record_id
     }
+}
+
+fn event_sequence(event: &InspectorStreamEvent) -> Option<u64> {
+    Some(match event {
+        InspectorStreamEvent::Snapshot { stream_seq, .. }
+        | InspectorStreamEvent::RecordUpsert { stream_seq, .. }
+        | InspectorStreamEvent::RecordRemoved { stream_seq, .. }
+        | InspectorStreamEvent::Reset { stream_seq, .. }
+        | InspectorStreamEvent::Keepalive { stream_seq } => *stream_seq,
+    })
 }

@@ -1,6 +1,7 @@
 /target
 onair.toml
 /onair-debug-captures
+ui/inspector/node_modules/
 
 # Local environment files
 .env

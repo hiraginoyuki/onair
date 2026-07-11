@@ -28,7 +28,7 @@ use onair_core::openai::paths::{EndpointKind, endpoint_kind};
 use onair_obs::metrics::{MetricLabels, Metrics, RequestTimer};
 use onair_obs::observe::{
     BackendHealthStore, ClientInfo, ContextSizeRefreshTask, HealthProbeTask,
-    InspectorRequestRecord, InspectorStore, inspector,
+    InspectorRequestRecord, InspectorStore, InspectorStreamEvent, inspector,
 };
 use onair_proxy::operator;
 use onair_proxy::proxy::{self, PropagateRequestIdLayer};
@@ -113,6 +113,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/props", get(props))
         .route("/v1/props", get(props))
         .route("/_onair/inspector", get(inspector_ui))
+        .route("/_onair/inspector-next", get(inspector_next_ui))
+        .route("/_onair/inspector-next/events", get(inspector_next_events))
         .route("/_onair/inspector/events", get(inspector_events))
         .route("/_onair/inspector/requests", get(inspector_requests))
         .route(
@@ -333,6 +335,29 @@ async fn inspector_ui(
     response
 }
 
+async fn inspector_next_ui(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = local_operator_gate(&state, &request) {
+        return response;
+    }
+
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(Body::from(inspector::next_ui_html()))
+        .expect("inspector UI response builder is valid");
+    add_inspector_headers(&mut response);
+    response.headers_mut().insert(
+        CONTENT_SECURITY_POLICY,
+        "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            .parse()
+            .expect("static content security policy is valid"),
+    );
+    response
+}
+
 async fn inspector_requests(
     State(state): State<Arc<AppState>>,
     request: Request<Body>,
@@ -423,10 +448,97 @@ async fn inspector_events(
     response
 }
 
+async fn inspector_next_events(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = local_operator_gate(&state, &request) {
+        return response;
+    }
+
+    let snapshot_limit = inspector_limit(&request, &["snapshot_limit", "limit"]);
+    let last_sequence = request
+        .headers()
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let (mut receiver, initial) = state.inspector.subscribe_v2(last_sequence, snapshot_limit);
+    let mut shutdown = state.shutdown_receiver();
+    let stream = async_stream::stream! {
+        for event in initial {
+            yield Ok::<_, Infallible>(inspector_v2_sse_event(event));
+        }
+
+        loop {
+            tokio::select! {
+                biased;
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+                message = receiver.recv() => {
+                    match message {
+                        Ok(event) => yield Ok::<_, Infallible>(inspector_v2_sse_event(event)),
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            yield Ok::<_, Infallible>(inspector_v2_sse_event(
+                                state.inspector.reset_event(),
+                            ));
+                            yield Ok::<_, Infallible>(inspector_v2_sse_event(
+                                state.inspector.snapshot_event(snapshot_limit),
+                            ));
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+    };
+
+    let mut response = Sse::new(stream)
+        .keep_alive(
+            KeepAlive::default()
+                .interval(Duration::from_secs(15))
+                .text("keepalive"),
+        )
+        .into_response();
+    add_inspector_headers(&mut response);
+    response
+}
+
 fn inspector_sse_event(event_name: &'static str, record: InspectorRequestRecord) -> Event {
     let data =
         serde_json::to_string(&record).expect("InspectorRequestRecord is always serializable");
     Event::default().event(event_name).data(data)
+}
+
+fn inspector_v2_sse_event(event: InspectorStreamEvent) -> Event {
+    let stream_seq = inspector_v2_event_sequence(&event);
+    let data = serde_json::to_string(&event).expect("InspectorStreamEvent is serializable");
+    Event::default()
+        .id(stream_seq.to_string())
+        .event(inspector_v2_event_name(&event))
+        .data(data)
+}
+
+fn inspector_v2_event_name(event: &InspectorStreamEvent) -> &'static str {
+    match event {
+        InspectorStreamEvent::Snapshot { .. } => "snapshot",
+        InspectorStreamEvent::RecordUpsert { .. } => "record_upsert",
+        InspectorStreamEvent::RecordRemoved { .. } => "record_removed",
+        InspectorStreamEvent::Reset { .. } => "reset",
+        InspectorStreamEvent::Keepalive { .. } => "keepalive",
+    }
+}
+
+fn inspector_v2_event_sequence(event: &InspectorStreamEvent) -> u64 {
+    match event {
+        InspectorStreamEvent::Snapshot { stream_seq, .. }
+        | InspectorStreamEvent::RecordUpsert { stream_seq, .. }
+        | InspectorStreamEvent::RecordRemoved { stream_seq, .. }
+        | InspectorStreamEvent::Reset { stream_seq, .. }
+        | InspectorStreamEvent::Keepalive { stream_seq } => *stream_seq,
+    }
 }
 
 fn inspector_limit(request: &Request<Body>, names: &[&str]) -> usize {

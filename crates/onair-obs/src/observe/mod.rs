@@ -15,8 +15,9 @@ pub use debug_capture::{CaptureOutcome, CaptureRequest, RequestCapture};
 pub use health::{BackendHealthSnapshot, BackendHealthStore};
 pub use health_probe::HealthProbeTask;
 pub use inspector::{
-    InspectorAttemptRecord, InspectorOutcome, InspectorRequestBase, InspectorRequestRecord,
-    InspectorRequestRecordInit, InspectorStore, InspectorTokenCounts, LiveRecord,
+    InspectorAttemptRecord, InspectorOutcome, InspectorRecordPhase, InspectorRemovalReason,
+    InspectorRequestBase, InspectorRequestRecord, InspectorRequestRecordInit, InspectorResetReason,
+    InspectorSnapshotEntry, InspectorStore, InspectorStreamEvent, InspectorTokenCounts, LiveRecord,
 };
 pub use inspector_persistence::stored_count as inspector_persisted_count;
 pub use stream_capture::{StreamCapture, StreamCaptureHandle, StreamEvent, StreamTimings};

@@ -26,6 +26,23 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/inspector/pnpm-lock.yaml
+
+      - name: build inspector frontend
+        working-directory: ui/inspector
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run check
+          pnpm run build
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates/onair -> target

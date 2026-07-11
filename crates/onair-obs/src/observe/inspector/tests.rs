@@ -10,6 +10,7 @@ use super::records::{
 use super::store::InspectorStore;
 use super::ui::ui_html;
 use crate::observe::TimelineSnapshot;
+use crate::observe::inspector::{InspectorRecordPhase, InspectorResetReason, InspectorStreamEvent};
 use crate::observe::inspector_persistence::stored_count;
 
 fn temp_database_path(label: &str) -> std::path::PathBuf {
@@ -33,7 +34,7 @@ fn wait_for_stored_count(path: &std::path::Path, minimum: usize) {
     panic!("inspector persistence did not reach {minimum} records");
 }
 
-fn test_record(record_id: &str) -> InspectorRequestRecord {
+pub(crate) fn test_record(record_id: &str) -> InspectorRequestRecord {
     let started_at_unix_ms = match record_id {
         "one" => 1,
         "two" => 2,
@@ -132,6 +133,93 @@ fn retention_boundary_evicts_oldest_record() {
     assert_eq!(records[2].base.record_id, "rec-3");
     assert!(store.get("rec-0").is_none());
     assert!(store.get("rec-1").is_some());
+}
+
+#[test]
+fn v2_stream_tracks_phases_revisions_and_replay() {
+    let store = InspectorStore::new();
+    let (mut receiver, initial) = store.subscribe_v2(None, 10);
+    assert!(matches!(
+        initial.as_slice(),
+        [InspectorStreamEvent::Snapshot { stream_seq: 0, .. }]
+    ));
+
+    store.upsert_initial(true, 10, in_flight_record("stream-1"));
+    let initial_update = receiver.blocking_recv().expect("initial v2 update");
+    assert!(matches!(
+        initial_update,
+        InspectorStreamEvent::RecordUpsert {
+            stream_seq: 1,
+            revision: 1,
+            phase: InspectorRecordPhase::Initial,
+            ..
+        }
+    ));
+
+    let mut live = in_flight_record("stream-1");
+    live.timeline.auth_done_us = Some(123);
+    store.upsert(true, 10, live);
+    let live_update = receiver.blocking_recv().expect("live v2 update");
+    assert!(matches!(
+        live_update,
+        InspectorStreamEvent::RecordUpsert {
+            stream_seq: 2,
+            revision: 2,
+            phase: InspectorRecordPhase::Live,
+            ..
+        }
+    ));
+
+    store.record(true, 10, test_record("stream-1"));
+    let terminal_update = receiver.blocking_recv().expect("terminal v2 update");
+    assert!(matches!(
+        terminal_update,
+        InspectorStreamEvent::RecordUpsert {
+            stream_seq: 3,
+            revision: 3,
+            phase: InspectorRecordPhase::Terminal,
+            ..
+        }
+    ));
+
+    let (_, replay) = store.subscribe_v2(Some(1), 10);
+    assert_eq!(replay.len(), 2);
+    assert!(matches!(
+        replay[0],
+        InspectorStreamEvent::RecordUpsert {
+            stream_seq: 2,
+            revision: 2,
+            ..
+        }
+    ));
+    assert!(matches!(
+        replay[1],
+        InspectorStreamEvent::RecordUpsert {
+            stream_seq: 3,
+            revision: 3,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn v2_unavailable_resume_returns_reset_and_snapshot() {
+    let store = InspectorStore::new();
+    for index in 0..=4096 {
+        store.record(true, 10, test_record(&format!("replay-{index}")));
+    }
+
+    let (_, initial) = store.subscribe_v2(Some(0), 3);
+    assert!(matches!(
+        initial.as_slice(),
+        [
+            InspectorStreamEvent::Reset {
+                reason: InspectorResetReason::ResumeUnavailable,
+                ..
+            },
+            InspectorStreamEvent::Snapshot { records, .. }
+        ] if records.len() == 3
+    ));
 }
 
 #[test]

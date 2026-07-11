@@ -1330,6 +1330,72 @@ async fn inspector_records_completed_requests_and_serves_details() {
 }
 
 #[tokio::test]
+async fn inspector_routes_serve_their_intended_ui_artifacts() {
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state);
+
+    let legacy = app
+        .clone()
+        .oneshot(inspector_get("/_onair/inspector"))
+        .await
+        .unwrap();
+    assert_eq!(legacy.status(), StatusCode::OK);
+    let legacy_body = to_bytes(legacy.into_body(), 1024 * 1024).await.unwrap();
+    let legacy_body = String::from_utf8(legacy_body.to_vec()).unwrap();
+    assert!(legacy_body.contains("<h1>onair inspector</h1>"));
+    assert!(!legacy_body.contains("<div id=\"app\"></div>"));
+
+    let next = app
+        .oneshot(inspector_get("/_onair/inspector-next"))
+        .await
+        .unwrap();
+    assert_eq!(next.status(), StatusCode::OK);
+    let csp = next
+        .headers()
+        .get("content-security-policy")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert!(csp.contains("script-src 'unsafe-inline'"));
+    let next_body = to_bytes(next.into_body(), 1024 * 1024).await.unwrap();
+    let next_body = String::from_utf8(next_body.to_vec()).unwrap();
+    assert!(next_body.contains("<div id=\"app\"></div>"));
+    assert!(next_body.contains("/_onair/inspector-next/events"));
+}
+
+#[tokio::test]
+async fn inspector_next_route_keeps_the_local_only_gate() {
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            ..InspectorConfig::default()
+        },
+    );
+    let app = router(state);
+
+    for uri in ["/_onair/inspector-next", "/_onair/inspector-next/events"] {
+        let response = app
+            .clone()
+            .oneshot(inspector_get_with_peer(uri, "198.51.100.20:55432"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+}
+
+#[tokio::test]
 async fn inspector_request_list_limits_to_latest_records() {
     let backend = TestBackend::spawn("backend-a").await;
     let state = test_state_with_inspector(

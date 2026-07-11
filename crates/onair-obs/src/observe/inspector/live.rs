@@ -31,7 +31,7 @@ impl LiveRecord {
         }
         let record = self.record.lock().clone();
         self.store
-            .upsert(self.enabled, self.retention_requests, record);
+            .upsert_initial(self.enabled, self.retention_requests, record);
     }
 
     pub fn update<F>(&self, mutate: F)
