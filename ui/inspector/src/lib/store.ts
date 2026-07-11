@@ -2,7 +2,7 @@ import type { Column, ColumnKey, InspectorRecord, StreamEvent } from "./types";
 
 export const CLIENT_LIMIT = 1000;
 export const PENDING_LIMIT = 256;
-export const ROW_HEIGHT = 36;
+export const ROW_HEIGHT = 40;
 
 export const columns: Column[] = [
   { key: "time", label: "time", defaultWidth: 164, minWidth: 148, maxWidth: 240, align: "left" },
@@ -25,7 +25,7 @@ export function applyEvent(
   paused: boolean,
   pending: StreamEvent[]
 ): { reset: boolean; droppedPending: boolean } {
-  if (paused && event.kind === "record_upsert") {
+  if (paused && (event.kind === "record_upsert" || event.kind === "record_removed")) {
     const droppedPending = pending.length >= PENDING_LIMIT;
     if (droppedPending) pending.shift();
     pending.push(event);

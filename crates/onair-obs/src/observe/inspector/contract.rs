@@ -19,7 +19,7 @@ pub enum InspectorStreamEvent {
         record_id: String,
         revision: u64,
         phase: InspectorRecordPhase,
-        record: InspectorRequestRecord,
+        record: Box<InspectorRequestRecord>,
     },
     RecordRemoved {
         stream_seq: u64,
@@ -80,7 +80,7 @@ mod tests {
             record_id: "synthetic-1".to_owned(),
             revision: 3,
             phase: InspectorRecordPhase::Terminal,
-            record: test_record("synthetic-1"),
+            record: Box::new(test_record("synthetic-1")),
         };
 
         let value = serde_json::to_value(event).expect("event serializes");

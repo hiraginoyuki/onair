@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onMount } from "svelte";
   import {
     applyEvent,
     CLIENT_LIMIT,
@@ -24,6 +24,12 @@
 
   const widthKey = "onair.inspector.v4.widths";
   const sequenceKey = "onair.inspector.v2.seq";
+  const timeFormatter = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3
+  });
   const timelineFields: TimelineField[] = [
     { key: "proxy_entry_us", label: "proxy entry" },
     { key: "auth_done_us", label: "auth done" },
@@ -52,6 +58,9 @@
   let records = new Map<string, StoredRecord>();
   let pending: StreamEvent[] = [];
   let selectedId = readHashRecordId();
+  let selectedRecord: InspectorRecord | undefined;
+  let selectionRequest = 0;
+  let streamReady = false;
   let detachedSelected: StoredRecord | undefined;
   let filter = "";
   let sortKey: ColumnKey = "time";
@@ -60,6 +69,7 @@
   let connected = false;
   let malformedStream = false;
   let droppedPending = false;
+  let pausedNeedsResync = false;
   let recoveryNotice = "";
   let actionNotice = "";
   let detailLoading = false;
@@ -72,6 +82,9 @@
   let tableWrap: HTMLElement | undefined;
   let source: EventSource | undefined;
   let resizeStart: { key: ColumnKey; x: number; width: number; pointerId: number; element: HTMLElement } | undefined;
+  let queuedLiveEvents = new Map<string, Extract<StreamEvent, { kind: "record_upsert" }>>();
+  let liveFlushFrame: number | undefined;
+  let liveFlushTimer: number | undefined;
   let operatorTimer: number | undefined;
   let noticeTimer: number | undefined;
   let expandedAttempts = new Set<string>();
@@ -79,7 +92,7 @@
 
   $: filtered = Array.from(records.values())
     .map((entry) => entry.record)
-    .filter(matchesFilter)
+    .filter((record) => matchesFilter(record, filterNeedle))
     .sort((a, b) => {
       const left = valueFor(a, sortKey);
       const right = valueFor(b, sortKey);
@@ -89,7 +102,8 @@
   $: visibleStart = Math.max(0, Math.floor(viewportTop / ROW_HEIGHT) - 8);
   $: visibleEnd = Math.min(filtered.length, Math.ceil((viewportTop + viewportHeight) / ROW_HEIGHT) + 8);
   $: visible = filtered.slice(visibleStart, visibleEnd);
-  $: selected = detachedSelected?.record ?? (selectedId ? records.get(selectedId)?.record : undefined);
+  $: filterNeedle = filter.trim().toLowerCase();
+  $: selected = selectedRecord;
   $: selectedIsDetached = Boolean(detachedSelected && detachedSelected.record.record_id === selectedId);
   $: selectedAttempts = selected ? attemptRecords(selected) : [];
   $: waterfallTotal = selected
@@ -120,19 +134,15 @@
       window.clearTimeout(noticeTimer);
       source?.close();
       stopResize();
+      cancelLiveFlush();
       for (const url of downloadUrls) URL.revokeObjectURL(url);
     };
-  });
-
-  onDestroy(() => {
-    source?.close();
-    stopResize();
   });
 
   function readLastSequence(): number {
     try {
       const value = Number(sessionStorage.getItem(sequenceKey) ?? "0");
-      return Number.isFinite(value) && value > 0 ? value : 0;
+      return isSafeInteger(value) && value > 0 ? value : 0;
     } catch {
       return 0;
     }
@@ -167,26 +177,62 @@
     }
   }
 
-  function connect() {
+  function connect(resetResume = false) {
+    cancelLiveFlush();
     source?.close();
-    source = new EventSource(`/_onair/inspector-next/events?snapshot_limit=${CLIENT_LIMIT}`);
-    source.onopen = () => {
+    connected = false;
+    streamReady = false;
+    if (resetResume) {
+      lastSequence = 0;
+      try {
+        sessionStorage.removeItem(sequenceKey);
+      } catch {
+        // Session persistence is optional.
+      }
+    }
+    const resume = lastSequence > 0 ? `&last_event_id=${lastSequence}` : "";
+    const nextSource = new EventSource(
+      `/_onair/inspector-next/events?snapshot_limit=${CLIENT_LIMIT}${resume}`
+    );
+    source = nextSource;
+    nextSource.onopen = () => {
+      if (source !== nextSource) return;
       connected = true;
-      malformedStream = false;
     };
-    source.onerror = () => {
+    nextSource.onerror = () => {
+      if (source !== nextSource) return;
       connected = false;
     };
     for (const name of ["snapshot", "record_upsert", "record_removed", "reset", "keepalive"]) {
-      source.addEventListener(name, (message) => {
+      nextSource.addEventListener(name, (message) => {
+        if (source !== nextSource) return;
         const data = (message as MessageEvent).data;
+        if (name === "keepalive" && data.trim() === "keepalive") {
+          // A named transport heartbeat can carry plain text instead of an
+          // inspector protocol envelope.
+          connected = true;
+          malformedStream = false;
+          return;
+        }
+
+        let event: StreamEvent;
         try {
-          const event: unknown = normalizeStreamEvent(JSON.parse(data));
-          if (!isStreamEvent(event)) throw new Error("invalid event envelope");
-          handleEvent(event);
+          const parsed: unknown = normalizeStreamEvent(JSON.parse(data));
+          if (!isStreamEvent(parsed)) throw new Error("invalid event envelope");
+          event = parsed;
         } catch {
           malformedStream = true;
           showNotice("stream warning: malformed event ignored", false);
+          // Leave EventSource open so the browser can perform its normal
+          // Last-Event-ID reconnect if the transport is also unhealthy.
+          return;
+        }
+
+        try {
+          dispatchEvent(event);
+        } catch {
+          showNotice("stream recovery: event processing failed", false);
+          nextSource.close();
         }
       });
     }
@@ -214,12 +260,28 @@
   function normalizeInspectorRecord(record: unknown): unknown {
     if (!record || typeof record !== "object") return record;
     const candidate = record as Record<string, unknown>;
+    const timeline =
+      candidate.timeline && typeof candidate.timeline === "object"
+        ? Object.fromEntries(
+            Object.entries(candidate.timeline as Record<string, unknown>).map(([key, value]) => [
+              key,
+              value ?? undefined
+            ])
+          )
+        : candidate.timeline;
     return {
       ...candidate,
-      backend_attempts: Array.isArray(candidate.backend_attempts) ? candidate.backend_attempts : [],
-      retried_attempts: Array.isArray(candidate.retried_attempts) ? candidate.retried_attempts : [],
+      backend_attempts:
+        candidate.backend_attempts === undefined
+          ? []
+          : candidate.backend_attempts,
+      retried_attempts:
+        candidate.retried_attempts === undefined
+          ? []
+          : candidate.retried_attempts,
       exposed_backend_error:
-        candidate.exposed_backend_error === undefined ? false : candidate.exposed_backend_error
+        candidate.exposed_backend_error === undefined ? false : candidate.exposed_backend_error,
+      timeline
     };
   }
 
@@ -228,7 +290,7 @@
     const candidate = event as { kind?: unknown; stream_seq?: unknown };
     if (
       typeof candidate.kind !== "string" ||
-      !Number.isFinite(candidate.stream_seq) ||
+      !isSafeInteger(candidate.stream_seq) ||
       !["snapshot", "record_upsert", "record_removed", "reset", "keepalive"].includes(candidate.kind)
     ) {
       return false;
@@ -242,9 +304,9 @@
           const snapshot = entry as { record_id?: unknown; revision?: unknown; record?: unknown };
           return (
             typeof snapshot.record_id === "string" &&
-            typeof snapshot.revision === "number" &&
-            Number.isFinite(snapshot.revision) &&
-            isInspectorRecord(snapshot.record)
+            isSafeInteger(snapshot.revision) &&
+            isInspectorRecord(snapshot.record) &&
+            snapshot.record.record_id === snapshot.record_id
           );
         })
       );
@@ -258,18 +320,18 @@
       };
       return (
         typeof upsert.record_id === "string" &&
-        typeof upsert.revision === "number" &&
-        Number.isFinite(upsert.revision) &&
+        isSafeInteger(upsert.revision) &&
         ["initial", "live", "terminal"].includes(upsert.phase as string) &&
-        isInspectorRecord(upsert.record)
+        isInspectorRecord(upsert.record) &&
+        upsert.record.record_id === upsert.record_id
       );
     }
     if (candidate.kind === "record_removed") {
       const removed = event as { record_id?: unknown; revision?: unknown };
       return (
         typeof removed.record_id === "string" &&
-        typeof removed.revision === "number" &&
-        Number.isFinite(removed.revision)
+        isSafeInteger(removed.revision) &&
+        ["retention_evicted", "explicit"].includes((event as { reason?: unknown }).reason as string)
       );
     }
     if (candidate.kind === "reset") {
@@ -280,6 +342,45 @@
     return true;
   }
 
+  function isSafeInteger(value: unknown): value is number {
+    return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  }
+
+  function isOptionalString(value: unknown): boolean {
+    return value === undefined || typeof value === "string";
+  }
+
+  function isOptionalSafeInteger(value: unknown): boolean {
+    return value === undefined || isSafeInteger(value);
+  }
+
+  function isInspectorAttempt(attempt: unknown): attempt is InspectorAttempt {
+    if (!attempt || typeof attempt !== "object") return false;
+    const candidate = attempt as Partial<InspectorAttempt>;
+    return Boolean(
+      isSafeInteger(candidate.attempt) &&
+        typeof candidate.backend === "string" &&
+        typeof candidate.backend_target === "string" &&
+        isSafeInteger(candidate.status) &&
+        typeof candidate.outcome === "string" &&
+        isSafeInteger(candidate.started_us) &&
+        isSafeInteger(candidate.ended_us) &&
+        isSafeInteger(candidate.elapsed_us) &&
+        isSafeInteger(candidate.elapsed_ms) &&
+        isOptionalString(candidate.backend_remote_addr) &&
+        isOptionalString(candidate.debug_capture_id) &&
+        isOptionalString(candidate.error_kind) &&
+        isOptionalSafeInteger(candidate.upstream_status) &&
+        isOptionalSafeInteger(candidate.request_rewritten_us) &&
+        isOptionalSafeInteger(candidate.debug_capture_done_us) &&
+        isOptionalSafeInteger(candidate.backend_forward_start_us) &&
+        isOptionalSafeInteger(candidate.backend_headers_received_us) &&
+        isOptionalSafeInteger(candidate.backend_body_first_chunk_us) &&
+        isOptionalSafeInteger(candidate.backend_body_complete_us) &&
+        isOptionalSafeInteger(candidate.stream_complete_us)
+    );
+  }
+
   function isInspectorRecord(record: unknown): record is InspectorRecord {
     if (!record || typeof record !== "object") return false;
     const candidate = record as Partial<InspectorRecord>;
@@ -287,7 +388,8 @@
     const outcome = candidate.outcome;
     return Boolean(
       typeof candidate.record_id === "string" &&
-        typeof candidate.started_at_unix_ms === "number" &&
+        candidate.record_id.length > 0 &&
+        isSafeInteger(candidate.started_at_unix_ms) &&
         typeof candidate.method === "string" &&
         typeof candidate.path === "string" &&
         typeof candidate.route === "string" &&
@@ -303,27 +405,63 @@
         typeof candidate.trusted_proxy_addr === "string" &&
         typeof candidate.forwarded_for === "string" &&
         typeof candidate.user_agent === "string" &&
-        typeof candidate.request_body_bytes === "number" &&
+        isSafeInteger(candidate.request_body_bytes) &&
         typeof candidate.exposed_backend_error === "boolean" &&
-        typeof candidate.status === "number" &&
+        isSafeInteger(candidate.status) &&
         Array.isArray(candidate.backend_attempts) &&
+        candidate.backend_attempts.every(isInspectorAttempt) &&
         Array.isArray(candidate.retried_attempts) &&
-        typeof candidate.input_tokens === "number" &&
-        typeof candidate.cached_input_tokens === "number" &&
-        typeof candidate.output_tokens === "number" &&
-        typeof candidate.completed_at_unix_ms === "number" &&
+        candidate.retried_attempts.every(isInspectorAttempt) &&
+        isSafeInteger(candidate.input_tokens) &&
+        isSafeInteger(candidate.cached_input_tokens) &&
+        isSafeInteger(candidate.output_tokens) &&
+        isSafeInteger(candidate.completed_at_unix_ms) &&
+        isOptionalString(candidate.client_request_id) &&
+        isOptionalString(candidate.query) &&
+        isOptionalString(candidate.backend_remote_addr) &&
+        isOptionalString(candidate.debug_capture_id) &&
+        isOptionalString(candidate.error_kind) &&
+        isOptionalSafeInteger(candidate.response_body_bytes) &&
         timeline &&
-        typeof timeline.started_unix_ms === "number" &&
-        typeof timeline.total_us === "number" &&
-        typeof timeline.proxy_entry_us === "number" &&
+        isSafeInteger(timeline.started_unix_ms) &&
+        isSafeInteger(timeline.total_us) &&
+        isSafeInteger(timeline.proxy_entry_us) &&
+        isOptionalSafeInteger(timeline.auth_done_us) &&
+        isOptionalSafeInteger(timeline.request_inspected_us) &&
+        isOptionalSafeInteger(timeline.route_selected_us) &&
+        isOptionalSafeInteger(timeline.request_rewritten_us) &&
+        isOptionalSafeInteger(timeline.debug_capture_done_us) &&
+        isOptionalSafeInteger(timeline.backend_forward_start_us) &&
+        isOptionalSafeInteger(timeline.backend_headers_received_us) &&
+        isOptionalSafeInteger(timeline.backend_body_first_chunk_us) &&
+        isOptionalSafeInteger(timeline.backend_body_complete_us) &&
+        isOptionalSafeInteger(timeline.response_rewritten_us) &&
+        isOptionalSafeInteger(timeline.client_response_ready_us) &&
+        isOptionalSafeInteger(timeline.stream_complete_us) &&
         outcome &&
-        typeof outcome.kind === "string"
+        typeof outcome.kind === "string" &&
+        isOptionalString(outcome.stage)
     );
   }
 
-  function handleEvent(event: StreamEvent) {
+  function handleEvent(event: StreamEvent, replay = false, publish = true) {
+    if (!replay && paused && (event.kind === "snapshot" || event.kind === "reset")) {
+      pausedNeedsResync = true;
+      return;
+    }
+    const sequence = eventSequence(event);
+    if (!replay) {
+      if (event.kind === "snapshot") {
+        if (streamReady && sequence < lastSequence) return;
+        if (!streamReady) lastSequence = sequence;
+      } else if (event.kind === "reset") {
+        lastSequence = sequence;
+      } else if (sequence <= lastSequence) {
+        return;
+      }
+    }
     const previousSelected = selectedId ? records.get(selectedId) : undefined;
-    lastSequence = Math.max(lastSequence, eventSequence(event));
+    lastSequence = Math.max(lastSequence, sequence);
     try {
       sessionStorage.setItem(sequenceKey, String(lastSequence));
     } catch {
@@ -333,24 +471,35 @@
     if (event.kind === "reset") {
       pending = [];
       droppedPending = false;
+      streamReady = false;
+      resetTableViewport();
+      if (selectedId && selectedRecord) {
+        detachedSelected = { revision: 0, record: selectedRecord };
+      }
       recoveryNotice = `stream reset: ${event.reason.replaceAll("_", " ")}`;
       showNotice("stream reset; snapshot reloaded", false);
       void refreshRuntime();
     }
     const result = applyEvent(records, event, paused, pending);
+    if (result.droppedPending) droppedPending = true;
+    if (publish) {
+      pending = [...pending];
+      records = new Map(records);
+    }
+
     if (event.kind === "snapshot") {
+      streamReady = true;
       recoveryNotice = "";
-      if (selectedId && !records.has(selectedId) && !detachedSelected) {
+      resetTableViewport();
+      if (selectedId && records.has(selectedId)) {
+        selectionRequest += 1;
+        detachedSelected = undefined;
+        selectedRecord = records.get(selectedId)!.record;
+        detailLoading = false;
+        detailError = "";
+      } else if (selectedId && !selectedRecord && !detailLoading) {
         void loadSelectedById(selectedId, false);
       }
-    }
-    if (result.droppedPending) droppedPending = true;
-    pending = [...pending];
-    records = new Map(records);
-
-    if (event.kind === "snapshot" && selectedId && records.has(selectedId)) {
-      detachedSelected = undefined;
-      detailError = "";
     }
     if (event.kind === "record_upsert") {
       if (
@@ -359,6 +508,7 @@
         event.revision > detachedSelected.revision
       ) {
         detachedSelected = undefined;
+        selectedRecord = event.record;
         detailError = "";
       } else if (!selectedId) {
         select(event.record, true);
@@ -371,36 +521,147 @@
         records.delete(event.record_id);
         records = new Map(records);
       }
+      const currentSelected = records.get(selectedId);
+      if (
+        event.record_id === selectedId &&
+        !detachedSelected &&
+        currentSelected?.revision === event.revision
+      ) {
+        selectionRequest += 1;
+        selectedRecord = currentSelected.record;
+        detailLoading = false;
+        detailError = "";
+      }
     }
     if (selectedId && !records.has(selectedId) && previousSelected && !detachedSelected) {
       detachedSelected = previousSelected;
+      selectedRecord = previousSelected.record;
     }
+    if (event.kind !== "reset") {
+      streamReady = true;
+      malformedStream = false;
+    }
+  }
+
+  function dispatchEvent(event: StreamEvent) {
+    if (event.kind === "record_upsert" && event.phase === "live" && !paused) {
+      const current = queuedLiveEvents.get(event.record_id);
+      if (
+        !current ||
+        event.revision > current.revision ||
+        (event.revision === current.revision && event.stream_seq > current.stream_seq)
+      ) {
+        queuedLiveEvents.set(event.record_id, event);
+      }
+      scheduleLiveFlush();
+      return;
+    }
+
+    flushLiveEvents();
+    handleEvent(event);
+  }
+
+  function scheduleLiveFlush() {
+    if (liveFlushFrame !== undefined || liveFlushTimer !== undefined) return;
+    liveFlushFrame = window.requestAnimationFrame(() => {
+      liveFlushFrame = undefined;
+      if (liveFlushTimer !== undefined) {
+        window.clearTimeout(liveFlushTimer);
+        liveFlushTimer = undefined;
+      }
+      flushLiveEvents();
+    });
+    liveFlushTimer = window.setTimeout(() => {
+      liveFlushTimer = undefined;
+      if (liveFlushFrame !== undefined) {
+        window.cancelAnimationFrame(liveFlushFrame);
+        liveFlushFrame = undefined;
+      }
+      flushLiveEvents();
+    }, 100);
+  }
+
+  function flushLiveEvents() {
+    if (!queuedLiveEvents.size) return;
+    const events = [...queuedLiveEvents.values()].sort((left, right) => left.stream_seq - right.stream_seq);
+    queuedLiveEvents.clear();
+    try {
+      for (const event of events) handleEvent(event, false, false);
+    } finally {
+      pending = [...pending];
+      records = new Map(records);
+    }
+  }
+
+  function cancelLiveFlush() {
+    if (liveFlushFrame !== undefined) {
+      window.cancelAnimationFrame(liveFlushFrame);
+      liveFlushFrame = undefined;
+    }
+    if (liveFlushTimer !== undefined) {
+      window.clearTimeout(liveFlushTimer);
+      liveFlushTimer = undefined;
+    }
+    queuedLiveEvents.clear();
   }
 
   function togglePause() {
     paused = !paused;
+    if (paused) {
+      // Move already queued live updates into the bounded paused buffer so a
+      // quick pause/resume cannot lose sequence state.
+      flushLiveEvents();
+      cancelLiveFlush();
+      return;
+    }
     if (!paused) {
       const queued = pending.splice(0);
-      for (const event of queued) applyEvent(records, event, false, pending);
       pending = [];
-      records = new Map(records);
+      const needsResync = droppedPending || pausedNeedsResync;
       droppedPending = false;
+      pausedNeedsResync = false;
+      cancelLiveFlush();
+      for (const event of queued) handleEvent(event, true);
+      if (needsResync) {
+        connect(true);
+        void refreshRuntime();
+      }
     }
+  }
+
+  function updateFilter(event: Event) {
+    filter = (event.currentTarget as HTMLInputElement).value;
+    resetTableViewport();
+  }
+
+  function resetTableViewport() {
+    viewportTop = 0;
+    if (tableWrap) tableWrap.scrollTop = 0;
+  }
+
+  function refreshInspector() {
+    showNotice("refreshing inspector");
+    connect(true);
+    void refreshRuntime();
   }
 
   async function refreshRuntime() {
     try {
       const response = await fetch("/_onair/operator/runtime", { cache: "no-store" });
       if (!response.ok) throw new Error(`runtime unavailable: HTTP ${response.status}`);
-      const runtime = (await response.json()) as { inspector_retained_requests?: number };
-      retainedCount = runtime.inspector_retained_requests;
+      const runtime = (await response.json()) as { inspector_retained_requests?: unknown };
+      retainedCount =
+        typeof runtime.inspector_retained_requests === "number" &&
+        Number.isFinite(runtime.inspector_retained_requests) &&
+        runtime.inspector_retained_requests >= 0
+          ? runtime.inspector_retained_requests
+          : undefined;
     } catch {
       retainedCount = undefined;
     }
   }
 
-  function matchesFilter(record: InspectorRecord): boolean {
-    const needle = filter.trim().toLowerCase();
+  function matchesFilter(record: InspectorRecord, needle: string): boolean {
     if (!needle) return true;
     return [
       record.record_id,
@@ -435,16 +696,23 @@
   }
 
   function formatTime(timestamp: number): string {
-    return timestamp ? new Date(timestamp).toLocaleTimeString() : "-";
+    if (!timestamp) return "-";
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? "-" : timeFormatter.format(date);
   }
 
   function formatDate(timestamp: number): string {
-    return timestamp ? new Date(timestamp).toISOString() : "-";
+    if (!timestamp) return "-";
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? "-" : date.toISOString();
   }
 
   function formatMs(microseconds: number | undefined): string {
     if (microseconds === undefined) return "-";
-    return `${Math.round(microseconds / 1000)} ms`;
+    const milliseconds = microseconds / 1000;
+    if (milliseconds < 10) return `${milliseconds.toFixed(2)} ms`;
+    if (milliseconds < 100) return `${milliseconds.toFixed(1)} ms`;
+    return `${Math.round(milliseconds).toLocaleString()} ms`;
   }
 
   function formatBytes(bytes: number | undefined): string {
@@ -476,8 +744,11 @@
   }
 
   function select(record: InspectorRecord, updateHash = true) {
+    selectionRequest += 1;
     selectedId = record.record_id;
+    selectedRecord = record;
     detachedSelected = undefined;
+    detailLoading = false;
     detailError = "";
     expandedAttempts = new Set();
     if (updateHash) history.replaceState(null, "", `#${encodeURIComponent(record.record_id)}`);
@@ -486,8 +757,11 @@
   async function handleHashChange() {
     const target = readHashRecordId();
     if (!target) {
+      selectionRequest += 1;
       selectedId = "";
+      selectedRecord = undefined;
       detachedSelected = undefined;
+      detailLoading = false;
       detailError = "";
       return;
     }
@@ -496,8 +770,11 @@
 
   async function loadSelectedById(recordId: string, updateHash: boolean) {
     if (!recordId) return;
+    const request = ++selectionRequest;
     selectedId = recordId;
+    selectedRecord = undefined;
     detachedSelected = undefined;
+    detailLoading = false;
     detailError = "";
     if (records.has(recordId)) {
       select(records.get(recordId)!.record, updateHash);
@@ -509,12 +786,25 @@
         cache: "no-store"
       });
       if (!response.ok) throw new Error(`record ${recordId} is not retained`);
-      detachedSelected = { revision: 0, record: (await response.json()) as InspectorRecord };
+      const record = normalizeInspectorRecord(await response.json());
+      if (!isInspectorRecord(record)) throw new Error(`record ${recordId} has an invalid shape`);
+      if (request !== selectionRequest || selectedId !== recordId) return;
+      const current = records.get(recordId);
+      if (current) {
+        detachedSelected = undefined;
+        selectedRecord = current.record;
+        detailLoading = false;
+        detailError = "";
+        return;
+      }
+      detachedSelected = { revision: 0, record };
+      selectedRecord = record;
       if (updateHash) history.replaceState(null, "", `#${encodeURIComponent(recordId)}`);
     } catch (error) {
+      if (request !== selectionRequest || selectedId !== recordId) return;
       detailError = error instanceof Error ? error.message : "record lookup failed";
     } finally {
-      detailLoading = false;
+      if (request === selectionRequest) detailLoading = false;
     }
   }
 
@@ -569,17 +859,18 @@
   function moveResize(event: PointerEvent) {
     if (!resizeStart) return;
     const column = columns.find((item) => item.key === resizeStart!.key)!;
-    persistWidths({
+    widths = {
       ...widths,
       [column.key]: Math.max(
         column.minWidth,
         Math.min(column.maxWidth, resizeStart!.width + event.clientX - resizeStart!.x)
       )
-    });
+    };
   }
 
   function stopResize() {
     if (resizeStart) {
+      persistWidths(widths);
       try {
         if (resizeStart.element.hasPointerCapture(resizeStart.pointerId)) {
           resizeStart.element.releasePointerCapture(resizeStart.pointerId);
@@ -722,10 +1013,10 @@
     <div class="actions">
       <label class="filter-wrap">
         <span class="sr-only">Filter records</span>
-        <input aria-label="filter records" placeholder="filter records" bind:value={filter} />
+        <input aria-label="filter records" placeholder="filter records" value={filter} on:input={updateFilter} />
       </label>
-      <button type="button" class:active={paused} on:click={togglePause}>{paused ? "resume" : "pause"}</button>
-      <button type="button" on:click={() => void refreshRuntime()}>refresh</button>
+      <button type="button" class:active={paused} aria-pressed={paused} on:click={togglePause}>{paused ? "resume" : "pause"}</button>
+      <button type="button" on:click={refreshInspector}>refresh</button>
       <button type="button" on:click={resetWidths}>reset widths</button>
     </div>
   </header>
@@ -733,7 +1024,7 @@
   <section class="status-strip" aria-label="inspector status">
     <span><strong>{records.size.toLocaleString()}</strong> loaded</span>
     <span><strong>{retainedCount === undefined ? "—" : retainedCount.toLocaleString()}</strong> retained</span>
-    <span><strong>{pending.length.toLocaleString()}</strong> pending</span>
+    <span><strong>{pending.length.toLocaleString()}</strong> paused pending</span>
     <span class:status-live={connected} class:status-offline={!connected}>{connected ? "live" : "reconnecting"}</span>
     {#if recoveryNotice}<span class="status-recovery">{recoveryNotice}</span>{/if}
   </section>
@@ -758,6 +1049,7 @@
     >
       <table
         aria-label="Inspector requests"
+        aria-busy={!streamReady}
         style={`--column-template: ${columnTemplate(widths)}; --table-min-width: ${tableMinimumWidth(widths)}px`}
       >
         <thead>
@@ -779,6 +1071,7 @@
                   type="button"
                   class="resize"
                   aria-label={`Resize ${column.label}`}
+                  aria-keyshortcuts="ArrowLeft ArrowRight Enter"
                   title={`Resize ${column.label}; double-click to reset`}
                   on:pointerdown={(event) => startResize(event, column.key)}
                   on:keydown={(event) => {
@@ -808,8 +1101,14 @@
               class:selected={record.record_id === selectedId}
               class:detached={record.record_id === selectedId && selectedIsDetached}
               aria-selected={record.record_id === selectedId}
+              aria-label={`Inspect request ${record.record_id}`}
               on:click={() => select(record)}
-              on:keydown={(event) => (event.key === "Enter" || event.key === " ") && select(record)}
+              on:keydown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  select(record);
+                }
+              }}
               tabindex="0"
             >
               <td title={formatDate(record.started_at_unix_ms)}>{formatTime(record.started_at_unix_ms)}</td>
@@ -826,10 +1125,14 @@
           {/each}
         </tbody>
       </table>
-      {#if filtered.length === 0}<div class="empty-state">No records match the current filter.</div>{/if}
+      {#if filtered.length === 0}
+        <div class="empty-state">
+          {#if !streamReady}Waiting for inspector stream…{:else if filter.trim()}No records match the current filter.{:else}No retained records.{/if}
+        </div>
+      {/if}
     </div>
 
-    <aside class="detail-pane" aria-live="polite">
+    <aside class="detail-pane" aria-label="Selected request details">
       <div class="detail-heading">
         <div>
           <div class="eyebrow">selected request</div>

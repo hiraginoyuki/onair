@@ -46,6 +46,16 @@ struct RetainedRecord {
     revision: u64,
 }
 
+struct EvictedRecord {
+    record_id: String,
+    revision: u64,
+}
+
+struct UpsertResult {
+    revision: u64,
+    evicted: Vec<EvictedRecord>,
+}
+
 pub(super) struct V2State {
     next_sequence: u64,
     replay: VecDeque<InspectorStreamEvent>,
@@ -131,17 +141,29 @@ fn upsert_with_fifo_eviction(
     records: &mut RetainedRecords,
     record: InspectorRequestRecord,
     retention_requests: usize,
-) {
+) -> UpsertResult {
     let record_id = record.base.record_id.clone();
     if let Some(existing) = records.records_by_id.get_mut(&record_id) {
         existing.record = record;
         existing.revision = existing.revision.saturating_add(1);
-        return;
+        return UpsertResult {
+            revision: existing.revision,
+            evicted: Vec::new(),
+        };
     }
-    if records.retention_order.len() >= retention_requests
-        && let Some(evicted_id) = records.retention_order.pop_front()
-    {
-        records.records_by_id.remove(&evicted_id);
+    let mut evicted = Vec::new();
+    while records.retention_order.len() >= retention_requests {
+        let Some(evicted_id) = records.retention_order.pop_front() else {
+            break;
+        };
+        if let Some(retained) = records.records_by_id.remove(&evicted_id) {
+            evicted.push(EvictedRecord {
+                record_id: evicted_id,
+                // A removal is a state transition after the last retained
+                // revision, so duplicate or stale deliveries can be ignored.
+                revision: retained.revision.saturating_add(1),
+            });
+        }
     }
     records.retention_order.push_back(record_id.clone());
     records.records_by_id.insert(
@@ -151,6 +173,10 @@ fn upsert_with_fifo_eviction(
             revision: 1,
         },
     );
+    UpsertResult {
+        revision: 1,
+        evicted,
+    }
 }
 
 impl Default for InspectorStore {
@@ -219,11 +245,13 @@ impl InspectorStore {
         }
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        {
+        let result = {
             let mut records = self.inner.records.lock();
-            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
-        }
-        self.publish_v2(record.clone(), InspectorRecordPhase::Terminal);
+            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests)
+        };
+        let UpsertResult { revision, evicted } = result;
+        self.publish_v2_removed(evicted);
+        self.publish_v2(record.clone(), InspectorRecordPhase::Terminal, revision);
 
         if let Some(persistence) = &self.inner.persistence {
             persistence
@@ -240,11 +268,13 @@ impl InspectorStore {
         }
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        {
+        let result = {
             let mut records = self.inner.records.lock();
-            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
-        }
-        self.publish_v2(record.clone(), InspectorRecordPhase::Live);
+            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests)
+        };
+        let UpsertResult { revision, evicted } = result;
+        self.publish_v2_removed(evicted);
+        self.publish_v2(record.clone(), InspectorRecordPhase::Live, revision);
 
         let _ = self.inner.events.send(record);
     }
@@ -260,11 +290,13 @@ impl InspectorStore {
         }
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        {
+        let result = {
             let mut records = self.inner.records.lock();
-            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
-        }
-        self.publish_v2(record.clone(), InspectorRecordPhase::Initial);
+            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests)
+        };
+        let UpsertResult { revision, evicted } = result;
+        self.publish_v2_removed(evicted);
+        self.publish_v2(record.clone(), InspectorRecordPhase::Initial, revision);
         let _ = self.inner.events.send(record);
     }
 
@@ -279,11 +311,13 @@ impl InspectorStore {
         }
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        {
+        let result = {
             let mut records = self.inner.records.lock();
-            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
-        }
-        self.publish_v2(record.clone(), InspectorRecordPhase::Terminal);
+            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests)
+        };
+        let UpsertResult { revision, evicted } = result;
+        self.publish_v2_removed(evicted);
+        self.publish_v2(record.clone(), InspectorRecordPhase::Terminal, revision);
 
         if let Some(persistence) = &self.inner.persistence {
             persistence
@@ -344,6 +378,28 @@ impl InspectorStore {
         (receiver, initial)
     }
 
+    pub fn subscribe_v2_from_page(
+        &self,
+        last_sequence: Option<u64>,
+        snapshot_limit: usize,
+    ) -> (
+        broadcast::Receiver<InspectorStreamEvent>,
+        Vec<InspectorStreamEvent>,
+    ) {
+        let receiver = self.inner.v2_events.subscribe();
+        let initial = match last_sequence {
+            Some(last_sequence) if self.replay_since(last_sequence).is_none() => vec![
+                self.next_control_event(InspectorResetReason::ResumeUnavailable),
+                self.snapshot_event(snapshot_limit),
+            ],
+            // A page reload has no client-side record map to apply replay to.
+            // Always send the authoritative snapshot even when its saved
+            // sequence is current.
+            _ => vec![self.snapshot_event(snapshot_limit)],
+        };
+        (receiver, initial)
+    }
+
     pub fn reset_event(&self) -> InspectorStreamEvent {
         self.next_control_event(InspectorResetReason::Lagged)
     }
@@ -355,7 +411,12 @@ impl InspectorStore {
     fn replay_since(&self, last_sequence: u64) -> Option<Vec<InspectorStreamEvent>> {
         let state = self.inner.v2_state.lock();
         let current = state.next_sequence;
-        if last_sequence >= current {
+        if last_sequence > current {
+            // A client sequence from a previous process cannot be resumed
+            // after the in-memory stream counter has restarted.
+            return None;
+        }
+        if last_sequence == current {
             return Some(Vec::new());
         }
         let oldest = state.replay.front().and_then(event_sequence);
@@ -404,14 +465,12 @@ impl InspectorStore {
         }
     }
 
-    fn publish_v2(&self, record: InspectorRequestRecord, phase: InspectorRecordPhase) {
-        let revision = {
-            let records = self.inner.records.lock();
-            records
-                .records_by_id
-                .get(&record.base.record_id)
-                .map_or(1, |retained| retained.revision)
-        };
+    fn publish_v2(
+        &self,
+        record: InspectorRequestRecord,
+        phase: InspectorRecordPhase,
+        revision: u64,
+    ) {
         let mut state = self.inner.v2_state.lock();
         state.next_sequence = state.next_sequence.saturating_add(1);
         let event = InspectorStreamEvent::RecordUpsert {
@@ -419,13 +478,31 @@ impl InspectorStore {
             record_id: record.base.record_id.clone(),
             revision,
             phase,
-            record,
+            record: Box::new(record),
         };
         if state.replay.len() >= V2_REPLAY_CAPACITY {
             state.replay.pop_front();
         }
         state.replay.push_back(event.clone());
         let _ = self.inner.v2_events.send(event);
+    }
+
+    fn publish_v2_removed(&self, evicted: Vec<EvictedRecord>) {
+        for evicted in evicted {
+            let mut state = self.inner.v2_state.lock();
+            state.next_sequence = state.next_sequence.saturating_add(1);
+            let event = InspectorStreamEvent::RecordRemoved {
+                stream_seq: state.next_sequence,
+                record_id: evicted.record_id,
+                revision: evicted.revision,
+                reason: super::InspectorRemovalReason::RetentionEvicted,
+            };
+            if state.replay.len() >= V2_REPLAY_CAPACITY {
+                state.replay.pop_front();
+            }
+            state.replay.push_back(event.clone());
+            let _ = self.inner.v2_events.send(event);
+        }
     }
 
     pub fn next_record_id(started_at_unix_ms: u64, client_request_id: Option<&str>) -> String {

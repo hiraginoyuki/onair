@@ -5,7 +5,8 @@
   "type": "module",
   "packageManager": "pnpm@10.11.0",
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && pnpm run check:artifact",
+    "check:artifact": "node scripts/check-artifact.mjs",
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "devDependencies": {

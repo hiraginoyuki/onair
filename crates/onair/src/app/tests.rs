@@ -33,6 +33,21 @@ const CLIENT_KEY: &str = "sk-test";
 const PUBLIC_MODEL: &str = "gpt-public";
 const BACKEND_MODEL: &str = "backend-private";
 
+#[test]
+fn inspector_last_sequence_reads_query_fallback() {
+    let request = Request::builder()
+        .uri("/_onair/inspector-next/events?last_event_id=42")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(inspector_last_sequence(&request), Some(42));
+
+    let invalid = Request::builder()
+        .uri("/_onair/inspector-next/events?last_event_id=nope")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(inspector_last_sequence(&invalid), None);
+}
+
 #[tokio::test]
 async fn extra_body_merges_into_upstream_request_and_preserves_model_rewrite() {
     // Operator wants upstream-specific toggles the proxy does not

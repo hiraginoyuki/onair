@@ -457,12 +457,20 @@ async fn inspector_next_events(
     }
 
     let snapshot_limit = inspector_limit(&request, &["snapshot_limit", "limit"]);
-    let last_sequence = request
+    let header_sequence = request
         .headers()
         .get("last-event-id")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
-    let (mut receiver, initial) = state.inspector.subscribe_v2(last_sequence, snapshot_limit);
+    let query_sequence = inspector_last_sequence(&request);
+    let (mut receiver, initial) = match header_sequence {
+        Some(last_sequence) => state
+            .inspector
+            .subscribe_v2(Some(last_sequence), snapshot_limit),
+        None => state
+            .inspector
+            .subscribe_v2_from_page(query_sequence, snapshot_limit),
+    };
     let mut shutdown = state.shutdown_receiver();
     let stream = async_stream::stream! {
         for event in initial {
@@ -504,6 +512,16 @@ async fn inspector_next_events(
         .into_response();
     add_inspector_headers(&mut response);
     response
+}
+
+fn inspector_last_sequence(request: &Request<Body>) -> Option<u64> {
+    request.uri().query().and_then(|query| {
+        form_urlencoded::parse(query.as_bytes()).find_map(|(key, value)| {
+            (key == "last_event_id")
+                .then(|| value.parse::<u64>().ok())
+                .flatten()
+        })
+    })
 }
 
 fn inspector_sse_event(event_name: &'static str, record: InspectorRequestRecord) -> Event {

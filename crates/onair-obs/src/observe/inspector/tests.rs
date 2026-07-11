@@ -10,7 +10,9 @@ use super::records::{
 use super::store::InspectorStore;
 use super::ui::ui_html;
 use crate::observe::TimelineSnapshot;
-use crate::observe::inspector::{InspectorRecordPhase, InspectorResetReason, InspectorStreamEvent};
+use crate::observe::inspector::{
+    InspectorRecordPhase, InspectorRemovalReason, InspectorResetReason, InspectorStreamEvent,
+};
 use crate::observe::inspector_persistence::stored_count;
 
 fn temp_database_path(label: &str) -> std::path::PathBuf {
@@ -136,6 +138,38 @@ fn retention_boundary_evicts_oldest_record() {
 }
 
 #[test]
+fn v2_stream_emits_retention_removal_before_replacement() {
+    let store = InspectorStore::new();
+    let (mut receiver, _) = store.subscribe_v2(None, 10);
+
+    store.record(true, 1, test_record("oldest"));
+    let _ = receiver.blocking_recv().expect("initial terminal update");
+
+    store.record(true, 1, test_record("newest"));
+    let removed = receiver.blocking_recv().expect("retention removal");
+    assert!(matches!(
+        removed,
+        InspectorStreamEvent::RecordRemoved {
+            stream_seq: 2,
+            record_id,
+            revision: 2,
+            reason: InspectorRemovalReason::RetentionEvicted,
+        } if record_id == "oldest"
+    ));
+
+    assert!(matches!(
+        receiver.blocking_recv().expect("replacement terminal update"),
+        InspectorStreamEvent::RecordUpsert {
+            stream_seq: 3,
+            record_id,
+            revision: 1,
+            phase: InspectorRecordPhase::Terminal,
+            ..
+        } if record_id == "newest"
+    ));
+}
+
+#[test]
 fn v2_stream_tracks_phases_revisions_and_replay() {
     let store = InspectorStore::new();
     let (mut receiver, initial) = store.subscribe_v2(None, 10);
@@ -219,6 +253,37 @@ fn v2_unavailable_resume_returns_reset_and_snapshot() {
             },
             InspectorStreamEvent::Snapshot { records, .. }
         ] if records.len() == 3
+    ));
+}
+
+#[test]
+fn v2_future_resume_returns_reset_and_snapshot() {
+    let store = InspectorStore::new();
+    store.record(true, 10, test_record("current"));
+
+    let (_, initial) = store.subscribe_v2(Some(99), 3);
+    assert!(matches!(
+        initial.as_slice(),
+        [
+            InspectorStreamEvent::Reset {
+                reason: InspectorResetReason::ResumeUnavailable,
+                ..
+            },
+            InspectorStreamEvent::Snapshot { records, .. }
+        ] if records.len() == 1
+    ));
+}
+
+#[test]
+fn v2_page_resume_starts_with_snapshot() {
+    let store = InspectorStore::new();
+    store.record(true, 10, test_record("current"));
+
+    let (_, initial) = store.subscribe_v2_from_page(Some(1), 3);
+    assert!(matches!(
+        initial.as_slice(),
+        [InspectorStreamEvent::Snapshot { stream_seq: 1, records }]
+            if records.len() == 1 && records[0].record_id == "current"
     ));
 }
 
