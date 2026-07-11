@@ -6,7 +6,7 @@ export const ROW_HEIGHT = 40;
 
 export const columns: Column[] = [
   { key: "time", label: "time", defaultWidth: 164, minWidth: 148, maxWidth: 240, align: "left" },
-  { key: "status", label: "status", defaultWidth: 80, minWidth: 80, maxWidth: 104, align: "right" },
+  { key: "status", label: "status", defaultWidth: 40, minWidth: 40, maxWidth: 104, align: "right" },
   { key: "total", label: "total ms", defaultWidth: 108, minWidth: 88, maxWidth: 148, align: "right" },
   { key: "route", label: "route", defaultWidth: 128, minWidth: 88, maxWidth: 240, align: "left" },
   { key: "model", label: "model", defaultWidth: 188, minWidth: 132, maxWidth: 340, align: "left" },
