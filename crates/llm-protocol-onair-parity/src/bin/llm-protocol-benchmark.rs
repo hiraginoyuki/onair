@@ -64,8 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let report = run_live_benchmark(&manifest, &prepared).await?;
     let output = prepared
-        .output_path
-        .as_deref()
+        .output_path()
         .expect("live benchmark preparation supplies a local output path");
     write_local_report(&repo_root, output, &report)?;
     println!(

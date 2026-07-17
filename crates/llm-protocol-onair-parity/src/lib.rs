@@ -78,9 +78,19 @@ pub struct BenchmarkRunOptions {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedBenchmarkRun {
-    pub mode: BenchmarkMode,
-    pub output_path: Option<PathBuf>,
-    pub config: Option<LiveBenchmarkConfig>,
+    mode: BenchmarkMode,
+    output_path: Option<PathBuf>,
+    config: Option<LiveBenchmarkConfig>,
+}
+
+impl PreparedBenchmarkRun {
+    pub fn mode(&self) -> BenchmarkMode {
+        self.mode
+    }
+
+    pub fn output_path(&self) -> Option<&Path> {
+        self.output_path.as_deref()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -600,23 +610,26 @@ fn ensure_output_path_has_no_symlinks(
         .strip_prefix(&local_root)
         .expect("local-only output paths are checked before symlink validation");
     let mut current = local_root;
+    ensure_path_component_is_not_symlink(&current)?;
     for component in relative.components() {
         current.push(component.as_os_str());
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(BenchmarkError::OutputPathContainsSymlink(current));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(BenchmarkError::CreateOutputDirectory {
-                    path: current,
-                    source,
-                });
-            }
-        }
+        ensure_path_component_is_not_symlink(&current)?;
     }
     Ok(())
+}
+
+fn ensure_path_component_is_not_symlink(path: &Path) -> Result<(), BenchmarkError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(
+            BenchmarkError::OutputPathContainsSymlink(path.to_path_buf()),
+        ),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(BenchmarkError::CreateOutputDirectory {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn absolute_normalized(path: &Path) -> PathBuf {
@@ -942,7 +955,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(prepared.mode, BenchmarkMode::DryRun);
+        assert_eq!(prepared.mode(), BenchmarkMode::DryRun);
+        assert_eq!(prepared.output_path(), None);
         let report = dry_run_report(&test_manifest());
         assert_eq!(report.mode, "dry_run");
         assert_eq!(report.observations.len(), 1);
@@ -1214,6 +1228,44 @@ mod tests {
         assert!(matches!(
             error,
             BenchmarkError::OutputPathContainsSymlink(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preparation_rejects_symlinked_local_root() {
+        use std::os::unix::fs::symlink;
+
+        let test_root = unique_test_root();
+        let root = test_root.join("repository");
+        let local = root.join(".local");
+        let external = test_root.join("external");
+        let config_path = test_root.join("config.json");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        symlink(&external, &local).unwrap();
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&single_profile_config()).unwrap(),
+        )
+        .unwrap();
+
+        let error = prepare_benchmark_run(
+            &root,
+            &test_manifest(),
+            &BenchmarkRunOptions {
+                live: true,
+                confirmed: true,
+                config_path: Some(config_path),
+                output_path: Some(local.join("observations.json")),
+            },
+        )
+        .unwrap_err();
+
+        fs::remove_dir_all(&test_root).unwrap();
+        assert!(matches!(
+            error,
+            BenchmarkError::OutputPathContainsSymlink(path) if path == local
         ));
     }
 
