@@ -46,7 +46,7 @@
       "cache_report": {
         "entries": [
           {
-            "reason": "unchanged",
+            "reason": "semantic_value_changed",
             "source": {
               "kind": "message",
               "location": {
@@ -54,7 +54,7 @@
                 "message_index": 0
               }
             },
-            "status": "preserved",
+            "status": "changed",
             "target": {
               "kind": "message",
               "location": {
@@ -64,7 +64,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "semantic_value_changed",
             "source": {
               "kind": "content_part",
               "location": {
@@ -73,7 +73,7 @@
                 "part_index": 0
               }
             },
-            "status": "preserved",
+            "status": "changed",
             "target": {
               "kind": "content_part",
               "location": {
@@ -84,7 +84,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "no_target_representation",
             "source": {
               "kind": "message",
               "location": {
@@ -92,17 +92,11 @@
                 "message_index": 1
               }
             },
-            "status": "preserved",
-            "target": {
-              "kind": "message",
-              "location": {
-                "kind": "message",
-                "message_index": 1
-              }
-            }
+            "status": "dropped",
+            "target": null
           },
           {
-            "reason": "unchanged",
+            "reason": "no_target_representation",
             "source": {
               "kind": "content_part",
               "location": {
@@ -111,12 +105,17 @@
                 "part_index": 0
               }
             },
-            "status": "preserved",
+            "status": "dropped",
+            "target": null
+          },
+          {
+            "reason": "no_source_representation",
+            "source": null,
+            "status": "introduced",
             "target": {
-              "kind": "content_part",
+              "kind": "instruction",
               "location": {
-                "kind": "message_part",
-                "message_index": 1,
+                "kind": "instructions",
                 "part_index": 0
               }
             }

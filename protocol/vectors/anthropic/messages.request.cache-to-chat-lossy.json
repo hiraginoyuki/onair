@@ -110,7 +110,7 @@
       "cache_report": {
         "entries": [
           {
-            "reason": "unchanged",
+            "reason": "order_changed",
             "source": {
               "kind": "instruction",
               "location": {
@@ -118,17 +118,18 @@
                 "part_index": 0
               }
             },
-            "status": "preserved",
+            "status": "moved",
             "target": {
-              "kind": "instruction",
+              "kind": "content_part",
               "location": {
-                "kind": "instructions",
+                "kind": "message_part",
+                "message_index": 0,
                 "part_index": 0
               }
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "semantic_value_changed",
             "source": {
               "kind": "message",
               "location": {
@@ -136,7 +137,7 @@
                 "message_index": 0
               }
             },
-            "status": "preserved",
+            "status": "changed",
             "target": {
               "kind": "message",
               "location": {
@@ -146,7 +147,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "order_changed",
             "source": {
               "kind": "content_part",
               "location": {
@@ -155,85 +156,7 @@
                 "part_index": 0
               }
             },
-            "status": "preserved",
-            "target": {
-              "kind": "content_part",
-              "location": {
-                "kind": "message_part",
-                "message_index": 0,
-                "part_index": 0
-              }
-            }
-          },
-          {
-            "reason": "unchanged",
-            "source": {
-              "kind": "content_part",
-              "location": {
-                "kind": "message_part",
-                "message_index": 0,
-                "part_index": 1
-              }
-            },
-            "status": "preserved",
-            "target": {
-              "kind": "content_part",
-              "location": {
-                "kind": "message_part",
-                "message_index": 0,
-                "part_index": 1
-              }
-            }
-          },
-          {
-            "reason": "unchanged",
-            "source": {
-              "kind": "asset",
-              "location": {
-                "kind": "asset",
-                "message_index": 0,
-                "part_index": 1
-              }
-            },
-            "status": "preserved",
-            "target": {
-              "kind": "asset",
-              "location": {
-                "kind": "asset",
-                "message_index": 0,
-                "part_index": 1
-              }
-            }
-          },
-          {
-            "reason": "unchanged",
-            "source": {
-              "kind": "message",
-              "location": {
-                "kind": "message",
-                "message_index": 1
-              }
-            },
-            "status": "preserved",
-            "target": {
-              "kind": "message",
-              "location": {
-                "kind": "message",
-                "message_index": 1
-              }
-            }
-          },
-          {
-            "reason": "unchanged",
-            "source": {
-              "kind": "content_part",
-              "location": {
-                "kind": "message_part",
-                "message_index": 1,
-                "part_index": 0
-              }
-            },
-            "status": "preserved",
+            "status": "moved",
             "target": {
               "kind": "content_part",
               "location": {
@@ -244,7 +167,85 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "order_changed",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 1
+              }
+            },
+            "status": "moved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 1,
+                "part_index": 1
+              }
+            }
+          },
+          {
+            "reason": "order_changed",
+            "source": {
+              "kind": "asset",
+              "location": {
+                "kind": "asset",
+                "message_index": 0,
+                "part_index": 1
+              }
+            },
+            "status": "moved",
+            "target": {
+              "kind": "asset",
+              "location": {
+                "kind": "asset",
+                "message_index": 1,
+                "part_index": 1
+              }
+            }
+          },
+          {
+            "reason": "semantic_value_changed",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 1
+              }
+            },
+            "status": "changed",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 1
+              }
+            }
+          },
+          {
+            "reason": "order_changed",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 1,
+                "part_index": 0
+              }
+            },
+            "status": "moved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 2,
+                "part_index": 1
+              }
+            }
+          },
+          {
+            "reason": "semantic_value_changed",
             "source": {
               "kind": "message",
               "location": {
@@ -252,7 +253,7 @@
                 "message_index": 2
               }
             },
-            "status": "preserved",
+            "status": "changed",
             "target": {
               "kind": "message",
               "location": {
@@ -262,7 +263,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "semantic_value_changed",
             "source": {
               "kind": "content_part",
               "location": {
@@ -271,7 +272,7 @@
                 "part_index": 0
               }
             },
-            "status": "preserved",
+            "status": "changed",
             "target": {
               "kind": "content_part",
               "location": {
@@ -282,7 +283,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "order_changed",
             "source": {
               "kind": "tool_definition",
               "location": {
@@ -290,7 +291,7 @@
                 "tool_index": 0
               }
             },
-            "status": "preserved",
+            "status": "moved",
             "target": {
               "kind": "tool_definition",
               "location": {
@@ -322,6 +323,31 @@
             },
             "status": "non_portable",
             "target": null
+          },
+          {
+            "reason": "no_source_representation",
+            "source": null,
+            "status": "introduced",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 3
+              }
+            }
+          },
+          {
+            "reason": "no_source_representation",
+            "source": null,
+            "status": "introduced",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 3,
+                "part_index": 0
+              }
+            }
           }
         ],
         "protocol_version": "0.1.0"

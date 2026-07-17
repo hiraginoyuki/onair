@@ -29,6 +29,35 @@ fn decode_vector(vector: &Value) -> DecodedEnvelope<OpenAiPayload> {
         .expect("active vector has a typed source payload")
 }
 
+fn assert_same_provider_cache_report(source_request: &ProtocolRequest, output: &EncodedEnvelope) {
+    let target = decode(
+        output.wire.retained_wire(),
+        output.wire.adapter_metadata.clone(),
+    )
+    .unwrap()
+    .output
+    .expect("canonical target request decodes");
+    let OpenAiPayload::Request(target_request) = target.value() else {
+        panic!("canonical target payload is a request");
+    };
+    let source_plan = CacheSegmentPlan::analyze(source_request).unwrap();
+    let target_plan = CacheSegmentPlan::analyze(target_request).unwrap();
+    let expected = CachePreservationReport::source_to_target(
+        &source_plan,
+        &target_plan,
+        CacheDirectiveCompatibility::SameProvider,
+    );
+    let actual = output
+        .cache_report
+        .as_ref()
+        .expect("cross-profile request cache report");
+    assert_eq!(actual, &expected);
+    assert_eq!(
+        actual.validate_conservation(&source_plan, &target_plan),
+        Ok(())
+    );
+}
+
 fn diagnostic_codes(result: &ConversionResult<EncodedEnvelope>) -> Vec<Value> {
     result
         .diagnostics
@@ -120,15 +149,8 @@ fn chat_and_responses_request_vectors_canonically_cross_encode() {
     let chat = read_vector("openai/chat.request.text-tool.json");
     let chat_decoded = decode_vector(&chat);
     let chat_encoded = encode_decoded(&chat_decoded, &profile_id(&chat["target_profile"])).unwrap();
-    let chat_body: Value = serde_json::from_slice(
-        &chat_encoded
-            .output
-            .as_ref()
-            .expect("encoded request")
-            .wire
-            .body,
-    )
-    .expect("Responses JSON");
+    let chat_output = chat_encoded.output.as_ref().expect("encoded request");
+    let chat_body: Value = serde_json::from_slice(&chat_output.wire.body).expect("Responses JSON");
     assert_eq!(chat_body["input"][0]["role"], "user");
     assert_eq!(chat_body["input"][1]["type"], "function_call");
     assert_eq!(chat_body["input"][2]["type"], "function_call_output");
@@ -137,19 +159,17 @@ fn chat_and_responses_request_vectors_canonically_cross_encode() {
     assert_eq!(chat_body["text"]["format"]["type"], "json_schema");
     assert_eq!(chat_body["prompt_cache_key"], "synthetic-cache");
     assert_eq!(chat_body["prompt_cache_retention"], "24h");
-    let chat_report = chat_encoded
-        .output
-        .as_ref()
-        .expect("encoded request")
-        .cache_report
-        .as_ref()
-        .expect("cross-profile request cache report");
-    assert!(
-        chat_report
-            .entries
-            .iter()
-            .all(|entry| entry.status == CachePreservationStatus::Preserved)
-    );
+    let OpenAiPayload::Request(chat_source_request) = chat_decoded.value() else {
+        panic!("Chat request vector decodes to a request");
+    };
+    assert_same_provider_cache_report(chat_source_request, chat_output);
+    let chat_report = chat_output.cache_report.as_ref().unwrap();
+    assert!(chat_report.entries.iter().any(|entry| {
+        matches!(
+            entry.status,
+            CachePreservationStatus::Changed | CachePreservationStatus::Moved
+        )
+    }));
     assert!(!format!("{chat_report:?}").contains("synthetic request"));
     assert!(!format!("{chat_report:?}").contains("synthetic-cache"));
 

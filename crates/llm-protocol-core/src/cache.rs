@@ -176,110 +176,22 @@ impl CacheSegmentPlan {
             .zip(&target.segments)
             .take_while(|(source, target)| source.matches(target))
             .count();
-        let mut source_entries = Vec::new();
-        let mut target_entries = Vec::new();
-        let mut matched_target_indices = BTreeSet::new();
-
-        for (source_index, source) in self
-            .segments
+        let entries = compare_segments(self, target, CacheDirectiveCompatibility::SameProvider);
+        let source_entries = entries
             .iter()
-            .enumerate()
-            .skip(common_stable_prefix_len)
-        {
-            if let Some(target_segment) = target.segments.get(source_index)
-                && target_segment.matches(source)
-            {
-                matched_target_indices.insert(source_index);
-                source_entries.push(CachePreservationEntry {
-                    source: Some(source.descriptor.clone()),
-                    target: Some(target_segment.descriptor.clone()),
-                    status: CachePreservationStatus::Preserved,
-                    reason: CacheChangeReason::Unchanged,
-                });
-                continue;
-            }
-
-            if let Some((target_index, target_segment)) =
-                target
-                    .segments
-                    .iter()
-                    .enumerate()
-                    .find(|(target_index, target_segment)| {
-                        !matched_target_indices.contains(target_index)
-                            && target_segment.matches(source)
-                    })
-            {
-                matched_target_indices.insert(target_index);
-                source_entries.push(CachePreservationEntry {
-                    source: Some(source.descriptor.clone()),
-                    target: Some(target_segment.descriptor.clone()),
-                    status: CachePreservationStatus::Moved,
-                    reason: CacheChangeReason::OrderChanged,
-                });
-                continue;
-            }
-
-            if let Some((target_index, target_segment)) =
-                target
-                    .segments
-                    .iter()
-                    .enumerate()
-                    .find(|(target_index, target_segment)| {
-                        !matched_target_indices.contains(target_index)
-                            && target_segment.descriptor == source.descriptor
-                    })
-            {
-                matched_target_indices.insert(target_index);
-                source_entries.push(CachePreservationEntry {
-                    source: Some(source.descriptor.clone()),
-                    target: Some(target_segment.descriptor.clone()),
-                    status: CachePreservationStatus::Changed,
-                    reason: CacheChangeReason::SemanticValueChanged,
-                });
-                continue;
-            }
-
-            if let Some((target_index, target_segment)) =
-                target
-                    .segments
-                    .iter()
-                    .enumerate()
-                    .find(|(target_index, target_segment)| {
-                        !matched_target_indices.contains(target_index)
-                            && target_segment.canonical_bytes == source.canonical_bytes
-                    })
-            {
-                matched_target_indices.insert(target_index);
-                source_entries.push(CachePreservationEntry {
-                    source: Some(source.descriptor.clone()),
-                    target: Some(target_segment.descriptor.clone()),
-                    status: CachePreservationStatus::Moved,
-                    reason: CacheChangeReason::OrderChanged,
-                });
-                continue;
-            }
-
-            source_entries.push(CachePreservationEntry {
-                source: Some(source.descriptor.clone()),
-                target: None,
-                status: CachePreservationStatus::Dropped,
-                reason: CacheChangeReason::NoTargetRepresentation,
-            });
-        }
-
-        for (target_index, target_segment) in target.segments.iter().enumerate() {
-            if target_index < common_stable_prefix_len
-                || matched_target_indices.contains(&target_index)
-            {
-                continue;
-            }
-            target_entries.push(CachePreservationEntry {
-                source: None,
-                target: Some(target_segment.descriptor.clone()),
-                status: CachePreservationStatus::Introduced,
-                reason: CacheChangeReason::NoSourceRepresentation,
-            });
-        }
+            .filter(|entry| {
+                entry.source.as_ref().is_some_and(|descriptor| {
+                    !self.segments[..common_stable_prefix_len]
+                        .iter()
+                        .any(|segment| segment.descriptor == *descriptor)
+                })
+            })
+            .cloned()
+            .collect();
+        let target_entries = entries
+            .into_iter()
+            .filter(|entry| entry.source.is_none())
+            .collect();
 
         ExperimentalCacheDiff {
             common_stable_prefix_len,
@@ -307,55 +219,110 @@ pub struct CachePreservationReport {
 }
 
 impl CachePreservationReport {
-    pub fn from_plan_diff(diff: &ExperimentalCacheDiff) -> Self {
-        let mut entries = diff.source_entries.clone();
-        entries.extend(diff.target_entries.clone());
-        Self { entries }
-    }
-
-    /// Report that all structural segments, including source cache directives,
-    /// are represented by an equivalent target profile.
-    pub fn preserved(plan: &CacheSegmentPlan) -> Self {
+    /// Compare the source request with the request obtained from the canonical
+    /// target envelope. This stable report covers every source and target
+    /// segment exactly once; it does not predict provider cache hits.
+    pub fn source_to_target(
+        source: &CacheSegmentPlan,
+        target: &CacheSegmentPlan,
+        directive_compatibility: CacheDirectiveCompatibility,
+    ) -> Self {
         Self {
-            entries: plan
-                .descriptors()
-                .map(|descriptor| CachePreservationEntry {
-                    source: Some(descriptor.clone()),
-                    target: Some(descriptor.clone()),
-                    status: CachePreservationStatus::Preserved,
-                    reason: CacheChangeReason::Unchanged,
-                })
-                .collect(),
+            entries: compare_segments(source, target, directive_compatibility),
         }
     }
 
-    /// Report a cross-provider conversion that preserves typed request
-    /// structure but intentionally does not synthesize target cache
-    /// directives. Only directives are non-portable; all other segments retain
-    /// their structural locations.
-    pub fn with_non_portable_directives(plan: &CacheSegmentPlan) -> Self {
-        Self {
-            entries: plan
-                .descriptors()
-                .map(|descriptor| {
-                    let is_directive = descriptor.kind == CacheSegmentKind::CacheDirective;
-                    CachePreservationEntry {
-                        source: Some(descriptor.clone()),
-                        target: (!is_directive).then(|| descriptor.clone()),
-                        status: if is_directive {
-                            CachePreservationStatus::NonPortable
-                        } else {
-                            CachePreservationStatus::Preserved
-                        },
-                        reason: if is_directive {
-                            CacheChangeReason::ProviderSemanticsDiffer
-                        } else {
-                            CacheChangeReason::Unchanged
-                        },
-                    }
-                })
-                .collect(),
+    pub fn validate_conservation(
+        &self,
+        source: &CacheSegmentPlan,
+        target: &CacheSegmentPlan,
+    ) -> Result<(), CacheReportValidationError> {
+        for (entry_index, entry) in self.entries.iter().enumerate() {
+            if !entry.has_valid_shape() {
+                return Err(CacheReportValidationError::InvalidEntryShape {
+                    entry_index,
+                    status: entry.status,
+                    reason: entry.reason,
+                });
+            }
+            if let Some(descriptor) = &entry.source
+                && !source
+                    .descriptors()
+                    .any(|candidate| candidate == descriptor)
+            {
+                return Err(CacheReportValidationError::UnknownSource {
+                    entry_index,
+                    descriptor: descriptor.clone(),
+                });
+            }
+            if let Some(descriptor) = &entry.target
+                && !target
+                    .descriptors()
+                    .any(|candidate| candidate == descriptor)
+            {
+                return Err(CacheReportValidationError::UnknownTarget {
+                    entry_index,
+                    descriptor: descriptor.clone(),
+                });
+            }
         }
+
+        for descriptor in source.descriptors() {
+            let occurrences = self
+                .entries
+                .iter()
+                .filter(|entry| entry.source.as_ref() == Some(descriptor))
+                .count();
+            if occurrences != 1 {
+                return Err(CacheReportValidationError::SourceOccurrenceCount {
+                    descriptor: descriptor.clone(),
+                    occurrences,
+                });
+            }
+        }
+        for descriptor in target.descriptors() {
+            let occurrences = self
+                .entries
+                .iter()
+                .filter(|entry| entry.target.as_ref() == Some(descriptor))
+                .count();
+            if occurrences != 1 {
+                return Err(CacheReportValidationError::TargetOccurrenceCount {
+                    descriptor: descriptor.clone(),
+                    occurrences,
+                });
+            }
+        }
+
+        let source_len = source.segments.len();
+        if source
+            .descriptors()
+            .enumerate()
+            .any(|(entry_index, expected)| {
+                self.entries
+                    .get(entry_index)
+                    .and_then(|entry| entry.source.as_ref())
+                    != Some(expected)
+            })
+        {
+            return Err(CacheReportValidationError::SourceOrder);
+        }
+        let represented_targets = self.entries[..source_len]
+            .iter()
+            .filter_map(|entry| entry.target.as_ref())
+            .collect::<Vec<_>>();
+        let expected_introductions = target
+            .descriptors()
+            .filter(|descriptor| !represented_targets.contains(descriptor))
+            .collect::<Vec<_>>();
+        let actual_introductions = self.entries[source_len..]
+            .iter()
+            .filter_map(|entry| entry.target.as_ref())
+            .collect::<Vec<_>>();
+        if actual_introductions != expected_introductions {
+            return Err(CacheReportValidationError::IntroducedTargetOrder);
+        }
+        Ok(())
     }
 }
 
@@ -367,7 +334,51 @@ pub struct CachePreservationEntry {
     pub reason: CacheChangeReason,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+impl CachePreservationEntry {
+    fn has_valid_shape(&self) -> bool {
+        match self.status {
+            CachePreservationStatus::Preserved => {
+                self.source.is_some()
+                    && self.target.is_some()
+                    && self.reason == CacheChangeReason::Unchanged
+            }
+            CachePreservationStatus::Moved => {
+                self.source.is_some()
+                    && self.target.is_some()
+                    && self.reason == CacheChangeReason::OrderChanged
+            }
+            CachePreservationStatus::Changed => {
+                self.source.is_some()
+                    && self.target.is_some()
+                    && self.reason == CacheChangeReason::SemanticValueChanged
+            }
+            CachePreservationStatus::Dropped => {
+                self.source.is_some()
+                    && self.target.is_none()
+                    && self.reason == CacheChangeReason::NoTargetRepresentation
+            }
+            CachePreservationStatus::Introduced => {
+                self.source.is_none()
+                    && self.target.is_some()
+                    && matches!(
+                        self.reason,
+                        CacheChangeReason::NoSourceRepresentation
+                            | CacheChangeReason::TargetDirectiveMustBeExplicit
+                    )
+            }
+            CachePreservationStatus::NonPortable => {
+                self.source.is_some()
+                    && matches!(
+                        self.reason,
+                        CacheChangeReason::ProviderSemanticsDiffer
+                            | CacheChangeReason::TargetDirectiveMustBeExplicit
+                    )
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CachePreservationStatus {
     Preserved,
@@ -390,21 +401,261 @@ pub enum CacheChangeReason {
     ProviderSemanticsDiffer,
 }
 
+/// Whether source and target cache directives belong to the same provider
+/// semantics. Cross-provider directives are never matched as equivalents.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CacheDirectiveCompatibility {
+    SameProvider,
+    CrossProvider,
+}
+
+#[derive(Debug, Error, Eq, PartialEq)]
+pub enum CacheReportValidationError {
+    #[error("cache report entry {entry_index} has an invalid {status:?}/{reason:?} shape")]
+    InvalidEntryShape {
+        entry_index: usize,
+        status: CachePreservationStatus,
+        reason: CacheChangeReason,
+    },
+    #[error("cache report entry {entry_index} references an unknown source segment {descriptor:?}")]
+    UnknownSource {
+        entry_index: usize,
+        descriptor: CacheSegmentDescriptor,
+    },
+    #[error("cache report entry {entry_index} references an unknown target segment {descriptor:?}")]
+    UnknownTarget {
+        entry_index: usize,
+        descriptor: CacheSegmentDescriptor,
+    },
+    #[error("source cache segment {descriptor:?} occurs {occurrences} times in the report")]
+    SourceOccurrenceCount {
+        descriptor: CacheSegmentDescriptor,
+        occurrences: usize,
+    },
+    #[error("target cache segment {descriptor:?} occurs {occurrences} times in the report")]
+    TargetOccurrenceCount {
+        descriptor: CacheSegmentDescriptor,
+        occurrences: usize,
+    },
+    #[error("cache report source entries do not retain source-plan order")]
+    SourceOrder,
+    #[error("cache report introduced entries do not retain target-plan order")]
+    IntroducedTargetOrder,
+}
+
+fn compare_segments(
+    source: &CacheSegmentPlan,
+    target: &CacheSegmentPlan,
+    directive_compatibility: CacheDirectiveCompatibility,
+) -> Vec<CachePreservationEntry> {
+    let mut entries = Vec::new();
+    let mut matched_target_indices = BTreeSet::new();
+
+    for (source_index, source_segment) in source.segments.iter().enumerate() {
+        if directive_compatibility == CacheDirectiveCompatibility::CrossProvider
+            && source_segment.descriptor.kind == CacheSegmentKind::CacheDirective
+        {
+            entries.push(CachePreservationEntry {
+                source: Some(source_segment.descriptor.clone()),
+                target: None,
+                status: CachePreservationStatus::NonPortable,
+                reason: CacheChangeReason::ProviderSemanticsDiffer,
+            });
+            continue;
+        }
+
+        if let Some(target_segment) = target.segments.get(source_index)
+            && target_is_eligible(
+                &matched_target_indices,
+                source_index,
+                target_segment,
+                directive_compatibility,
+            )
+            && target_segment.matches(source_segment)
+        {
+            matched_target_indices.insert(source_index);
+            entries.push(CachePreservationEntry {
+                source: Some(source_segment.descriptor.clone()),
+                target: Some(target_segment.descriptor.clone()),
+                status: CachePreservationStatus::Preserved,
+                reason: CacheChangeReason::Unchanged,
+            });
+            continue;
+        }
+
+        if let Some((target_index, target_segment)) = target
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(target_index, target_segment)| {
+                target_is_eligible(
+                    &matched_target_indices,
+                    *target_index,
+                    target_segment,
+                    directive_compatibility,
+                )
+            })
+            .find(|(_, target_segment)| target_segment.matches(source_segment))
+        {
+            matched_target_indices.insert(target_index);
+            entries.push(CachePreservationEntry {
+                source: Some(source_segment.descriptor.clone()),
+                target: Some(target_segment.descriptor.clone()),
+                status: CachePreservationStatus::Moved,
+                reason: CacheChangeReason::OrderChanged,
+            });
+            continue;
+        }
+
+        if let Some((target_index, target_segment)) = target
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(target_index, target_segment)| {
+                target_is_eligible(
+                    &matched_target_indices,
+                    *target_index,
+                    target_segment,
+                    directive_compatibility,
+                )
+            })
+            .find(|(_, target_segment)| target_segment.descriptor == source_segment.descriptor)
+        {
+            matched_target_indices.insert(target_index);
+            entries.push(CachePreservationEntry {
+                source: Some(source_segment.descriptor.clone()),
+                target: Some(target_segment.descriptor.clone()),
+                status: CachePreservationStatus::Changed,
+                reason: CacheChangeReason::SemanticValueChanged,
+            });
+            continue;
+        }
+
+        if let Some((target_index, target_segment)) = target
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(target_index, target_segment)| {
+                target_is_eligible(
+                    &matched_target_indices,
+                    *target_index,
+                    target_segment,
+                    directive_compatibility,
+                )
+            })
+            .find(|(_, target_segment)| {
+                target_segment.canonical_bytes == source_segment.canonical_bytes
+            })
+        {
+            matched_target_indices.insert(target_index);
+            entries.push(CachePreservationEntry {
+                source: Some(source_segment.descriptor.clone()),
+                target: Some(target_segment.descriptor.clone()),
+                status: CachePreservationStatus::Moved,
+                reason: CacheChangeReason::OrderChanged,
+            });
+            continue;
+        }
+
+        entries.push(CachePreservationEntry {
+            source: Some(source_segment.descriptor.clone()),
+            target: None,
+            status: CachePreservationStatus::Dropped,
+            reason: CacheChangeReason::NoTargetRepresentation,
+        });
+    }
+
+    entries.extend(
+        target
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(target_index, _)| !matched_target_indices.contains(target_index))
+            .map(|(_, target_segment)| CachePreservationEntry {
+                source: None,
+                target: Some(target_segment.descriptor.clone()),
+                status: CachePreservationStatus::Introduced,
+                reason: CacheChangeReason::NoSourceRepresentation,
+            }),
+    );
+    entries
+}
+
+fn target_is_eligible(
+    matched_target_indices: &BTreeSet<usize>,
+    target_index: usize,
+    target_segment: &CacheSegment,
+    directive_compatibility: CacheDirectiveCompatibility,
+) -> bool {
+    !matched_target_indices.contains(&target_index)
+        && !(directive_compatibility == CacheDirectiveCompatibility::CrossProvider
+            && target_segment.descriptor.kind == CacheSegmentKind::CacheDirective)
+}
+
 /// A target-specific cache-directive recommendation. Converting a request does
 /// not apply this automatically.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CachePlanRecommendation {
-    pub target_intent: CacheIntent,
-    pub report: CachePreservationReport,
+    target_intent: CacheIntent,
+    report: CachePreservationReport,
+    source_plan: CacheSegmentPlan,
 }
 
 impl CachePlanRecommendation {
+    pub fn for_request(
+        request: &ProtocolRequest,
+        target_intent: CacheIntent,
+    ) -> Result<Self, CachePlanError> {
+        let source_plan = CacheSegmentPlan::analyze(request)?;
+        let target_request = ProtocolRequest {
+            cache_intent: Some(target_intent.clone()),
+            ..request.clone()
+        };
+        let target_plan = CacheSegmentPlan::analyze(&target_request)?;
+        let compatibility =
+            cache_intent_compatibility(request.cache_intent.as_ref(), &target_intent);
+        let mut report =
+            CachePreservationReport::source_to_target(&source_plan, &target_plan, compatibility);
+        for entry in &mut report.entries {
+            if entry.status == CachePreservationStatus::Introduced
+                && entry
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.kind == CacheSegmentKind::CacheDirective)
+            {
+                entry.reason = CacheChangeReason::TargetDirectiveMustBeExplicit;
+            }
+        }
+        debug_assert_eq!(
+            report.validate_conservation(&source_plan, &target_plan),
+            Ok(())
+        );
+        Ok(Self {
+            target_intent,
+            report,
+            source_plan,
+        })
+    }
+
+    pub fn target_intent(&self) -> &CacheIntent {
+        &self.target_intent
+    }
+
+    pub fn report(&self) -> &CachePreservationReport {
+        &self.report
+    }
+
     pub fn apply(
         &self,
         request: ProtocolRequest,
     ) -> Result<AppliedCachePlan, CachePlanApplicationError> {
         if request.cache_intent.as_ref() == Some(&self.target_intent) {
             return Err(CachePlanApplicationError::AlreadyApplied);
+        }
+        let source_plan = CacheSegmentPlan::analyze(&request)
+            .map_err(|_| CachePlanApplicationError::AnalysisFailed)?;
+        if source_plan != self.source_plan {
+            return Err(CachePlanApplicationError::SourceRequestMismatch);
         }
 
         Ok(AppliedCachePlan {
@@ -426,6 +677,19 @@ impl CachePlanRecommendation {
     }
 }
 
+fn cache_intent_compatibility(
+    source: Option<&CacheIntent>,
+    target: &CacheIntent,
+) -> CacheDirectiveCompatibility {
+    match (source, target) {
+        (Some(CacheIntent::OpenAi(_)), CacheIntent::Anthropic(_))
+        | (Some(CacheIntent::Anthropic(_)), CacheIntent::OpenAi(_)) => {
+            CacheDirectiveCompatibility::CrossProvider
+        }
+        _ => CacheDirectiveCompatibility::SameProvider,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppliedCachePlan {
     pub request: ProtocolRequest,
@@ -438,6 +702,10 @@ pub struct AppliedCachePlan {
 pub enum CachePlanApplicationError {
     #[error("the recommended target cache intent is already present on the request")]
     AlreadyApplied,
+    #[error("the request cache plan could not be analyzed")]
+    AnalysisFailed,
+    #[error("the recommendation was created for a different source request")]
+    SourceRequestMismatch,
 }
 
 /// Source directive family. This is recorded separately from segment content.
@@ -751,31 +1019,50 @@ mod tests {
     #[test]
     fn applying_a_recommendation_is_explicit_and_adapted() {
         let source = request();
-        let recommendation = CachePlanRecommendation {
-            target_intent: CacheIntent::Anthropic(AnthropicCacheIntent {
+        let source_plan = CacheSegmentPlan::analyze(&source).unwrap();
+        let recommendation = CachePlanRecommendation::for_request(
+            &source,
+            CacheIntent::Anthropic(AnthropicCacheIntent {
                 breakpoints: vec![AnthropicCacheBreakpoint {
                     location: CacheLocation::Message { message_index: 0 },
                     ttl: Some("5m".to_owned()),
                 }],
             }),
-            report: CachePreservationReport {
-                entries: vec![CachePreservationEntry {
-                    source: Some(CacheSegmentDescriptor {
-                        kind: CacheSegmentKind::CacheDirective,
-                        location: CacheLocation::CacheDirective { directive_index: 0 },
-                    }),
-                    target: Some(CacheSegmentDescriptor {
-                        kind: CacheSegmentKind::CacheDirective,
-                        location: CacheLocation::CacheDirective { directive_index: 0 },
-                    }),
-                    status: CachePreservationStatus::NonPortable,
-                    reason: CacheChangeReason::ProviderSemanticsDiffer,
-                }],
-            },
-        };
+        )
+        .unwrap();
 
         assert!(matches!(source.cache_intent, Some(CacheIntent::OpenAi(_))));
+        assert_eq!(
+            recommendation
+                .report()
+                .entries
+                .iter()
+                .filter(|entry| entry.status == CachePreservationStatus::NonPortable)
+                .count(),
+            2
+        );
+        assert!(recommendation.report().entries.iter().any(|entry| {
+            entry.status == CachePreservationStatus::Introduced
+                && entry.reason == CacheChangeReason::TargetDirectiveMustBeExplicit
+        }));
+        assert!(!format!("{recommendation:?}").contains("synthetic-key"));
+        assert!(!format!("{recommendation:?}").contains("synthetic request"));
+        let mut different_source = source.clone();
+        different_source.messages[0].content[0] = ContentPart::Text {
+            text: "different synthetic request".to_owned(),
+        };
+        assert!(matches!(
+            recommendation.apply(different_source),
+            Err(CachePlanApplicationError::SourceRequestMismatch)
+        ));
         let applied = recommendation.apply(source).unwrap();
+        let target_plan = CacheSegmentPlan::analyze(&applied.request).unwrap();
+        assert_eq!(
+            applied
+                .report
+                .validate_conservation(&source_plan, &target_plan),
+            Ok(())
+        );
         assert!(matches!(
             applied.request.cache_intent,
             Some(CacheIntent::Anthropic(_))
@@ -806,31 +1093,79 @@ mod tests {
     fn cross_provider_cache_report_marks_directives_non_portable() {
         let source = CacheSegmentPlan::analyze(&request()).unwrap();
         let mut target_request = request();
-        target_request.cache_intent = Some(CacheIntent::Anthropic(AnthropicCacheIntent {
-            breakpoints: vec![AnthropicCacheBreakpoint {
-                location: CacheLocation::Message { message_index: 0 },
-                ttl: Some("5m".to_owned()),
-            }],
-        }));
+        target_request.messages[0].content[0] = ContentPart::Text {
+            text: "synthetic changed request".to_owned(),
+        };
+        target_request.messages[0].content.truncate(1);
+        target_request.tools.push(crate::ToolDefinition {
+            name: "synthetic_tool".to_owned(),
+            description: None,
+            input_schema: json!({"type": "object"}),
+            strict: None,
+            extensions: Vec::new(),
+        });
+        target_request.cache_intent = None;
         let target = CacheSegmentPlan::analyze(&target_request).unwrap();
 
-        let mut report =
-            CachePreservationReport::from_plan_diff(&source.experimental_diff(&target));
-        for entry in &mut report.entries {
-            if entry
-                .source
-                .as_ref()
-                .is_some_and(|descriptor| descriptor.kind == CacheSegmentKind::CacheDirective)
-            {
-                entry.status = CachePreservationStatus::NonPortable;
-                entry.reason = CacheChangeReason::ProviderSemanticsDiffer;
-            }
-        }
+        let report = CachePreservationReport::source_to_target(
+            &source,
+            &target,
+            CacheDirectiveCompatibility::CrossProvider,
+        );
 
-        assert!(report.entries.iter().any(|entry| {
-            entry.status == CachePreservationStatus::NonPortable
-                && entry.reason == CacheChangeReason::ProviderSemanticsDiffer
-        }));
+        assert_eq!(report.validate_conservation(&source, &target), Ok(()));
+        assert_eq!(
+            report
+                .entries
+                .iter()
+                .map(|entry| entry.status)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                CachePreservationStatus::Preserved,
+                CachePreservationStatus::Moved,
+                CachePreservationStatus::Changed,
+                CachePreservationStatus::Dropped,
+                CachePreservationStatus::Introduced,
+                CachePreservationStatus::NonPortable,
+            ])
+        );
         assert!(!format!("{report:?}").contains("synthetic-key"));
+    }
+
+    #[test]
+    fn cache_report_conservation_rejects_duplicate_and_invalid_entries() {
+        let plan = CacheSegmentPlan::analyze(&request()).unwrap();
+        let mut report = CachePreservationReport::source_to_target(
+            &plan,
+            &plan,
+            CacheDirectiveCompatibility::SameProvider,
+        );
+        report.entries.push(report.entries[0].clone());
+        assert!(matches!(
+            report.validate_conservation(&plan, &plan),
+            Err(CacheReportValidationError::SourceOccurrenceCount { occurrences: 2, .. })
+        ));
+
+        let mut report = CachePreservationReport::source_to_target(
+            &plan,
+            &plan,
+            CacheDirectiveCompatibility::SameProvider,
+        );
+        report.entries[0].reason = CacheChangeReason::NoSourceRepresentation;
+        assert!(matches!(
+            report.validate_conservation(&plan, &plan),
+            Err(CacheReportValidationError::InvalidEntryShape { entry_index: 0, .. })
+        ));
+
+        let mut report = CachePreservationReport::source_to_target(
+            &plan,
+            &plan,
+            CacheDirectiveCompatibility::SameProvider,
+        );
+        report.entries.swap(0, 1);
+        assert_eq!(
+            report.validate_conservation(&plan, &plan),
+            Err(CacheReportValidationError::SourceOrder)
+        );
     }
 }

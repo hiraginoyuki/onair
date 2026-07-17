@@ -4,6 +4,44 @@
       "cache_report": {
         "entries": [
           {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            }
+          },
+          {
             "reason": "provider_semantics_differ",
             "source": {
               "kind": "cache_directive",
@@ -13,6 +51,24 @@
               }
             },
             "status": "non_portable",
+            "target": null
+          },
+          {
+            "reason": "provider_semantics_differ",
+            "source": {
+              "kind": "cache_directive",
+              "location": {
+                "directive_index": 1,
+                "kind": "cache_directive"
+              }
+            },
+            "status": "non_portable",
+            "target": null
+          },
+          {
+            "reason": "target_directive_must_be_explicit",
+            "source": null,
+            "status": "introduced",
             "target": {
               "kind": "cache_directive",
               "location": {
@@ -79,6 +135,44 @@
       "report": {
         "entries": [
           {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            }
+          },
+          {
             "reason": "provider_semantics_differ",
             "source": {
               "kind": "cache_directive",
@@ -88,6 +182,24 @@
               }
             },
             "status": "non_portable",
+            "target": null
+          },
+          {
+            "reason": "provider_semantics_differ",
+            "source": {
+              "kind": "cache_directive",
+              "location": {
+                "directive_index": 1,
+                "kind": "cache_directive"
+              }
+            },
+            "status": "non_portable",
+            "target": null
+          },
+          {
+            "reason": "target_directive_must_be_explicit",
+            "source": null,
+            "status": "introduced",
             "target": {
               "kind": "cache_directive",
               "location": {

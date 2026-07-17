@@ -135,7 +135,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "semantic_value_changed",
             "source": {
               "kind": "message",
               "location": {
@@ -143,7 +143,7 @@
                 "message_index": 1
               }
             },
-            "status": "preserved",
+            "status": "changed",
             "target": {
               "kind": "message",
               "location": {
@@ -153,7 +153,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "semantic_value_changed",
             "source": {
               "kind": "content_part",
               "location": {
@@ -162,7 +162,7 @@
                 "part_index": 0
               }
             },
-            "status": "preserved",
+            "status": "changed",
             "target": {
               "kind": "content_part",
               "location": {
@@ -173,7 +173,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "no_target_representation",
             "source": {
               "kind": "content_part",
               "location": {
@@ -182,18 +182,11 @@
                 "part_index": 1
               }
             },
-            "status": "preserved",
-            "target": {
-              "kind": "content_part",
-              "location": {
-                "kind": "message_part",
-                "message_index": 1,
-                "part_index": 1
-              }
-            }
+            "status": "dropped",
+            "target": null
           },
           {
-            "reason": "unchanged",
+            "reason": "order_changed",
             "source": {
               "kind": "message",
               "location": {
@@ -201,7 +194,7 @@
                 "message_index": 2
               }
             },
-            "status": "preserved",
+            "status": "moved",
             "target": {
               "kind": "message",
               "location": {
@@ -211,7 +204,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "order_changed",
             "source": {
               "kind": "content_part",
               "location": {
@@ -220,7 +213,7 @@
                 "part_index": 0
               }
             },
-            "status": "preserved",
+            "status": "moved",
             "target": {
               "kind": "content_part",
               "location": {
@@ -231,7 +224,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "order_changed",
             "source": {
               "kind": "tool_definition",
               "location": {
@@ -239,7 +232,7 @@
                 "tool_index": 0
               }
             },
-            "status": "preserved",
+            "status": "moved",
             "target": {
               "kind": "tool_definition",
               "location": {
@@ -249,14 +242,14 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "order_changed",
             "source": {
               "kind": "output_schema",
               "location": {
                 "kind": "output_schema"
               }
             },
-            "status": "preserved",
+            "status": "moved",
             "target": {
               "kind": "output_schema",
               "location": {
@@ -265,7 +258,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "order_changed",
             "source": {
               "kind": "cache_directive",
               "location": {
@@ -273,7 +266,7 @@
                 "kind": "cache_directive"
               }
             },
-            "status": "preserved",
+            "status": "moved",
             "target": {
               "kind": "cache_directive",
               "location": {
@@ -283,7 +276,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "order_changed",
             "source": {
               "kind": "cache_directive",
               "location": {
@@ -291,7 +284,7 @@
                 "kind": "cache_directive"
               }
             },
-            "status": "preserved",
+            "status": "moved",
             "target": {
               "kind": "cache_directive",
               "location": {

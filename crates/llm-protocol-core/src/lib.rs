@@ -14,11 +14,11 @@ pub mod cache;
 pub mod sse;
 
 pub use cache::{
-    AppliedCachePlan, CacheChangeReason, CacheDirectiveKind, CachePlanApplicationError,
-    CachePlanCorrelation, CachePlanError, CachePlanRecommendation, CachePreservationEntry,
-    CachePreservationReport, CachePreservationStatus, CacheSegment, CacheSegmentDescriptor,
-    CacheSegmentKind, CacheSegmentPlan, CorrelationError, CorrelationId, ExperimentalCacheDiff,
-    HmacSha256Key,
+    AppliedCachePlan, CacheChangeReason, CacheDirectiveCompatibility, CacheDirectiveKind,
+    CachePlanApplicationError, CachePlanCorrelation, CachePlanError, CachePlanRecommendation,
+    CachePreservationEntry, CachePreservationReport, CachePreservationStatus,
+    CacheReportValidationError, CacheSegment, CacheSegmentDescriptor, CacheSegmentKind,
+    CacheSegmentPlan, CorrelationError, CorrelationId, ExperimentalCacheDiff, HmacSha256Key,
 };
 pub use sse::{
     DEFAULT_MAX_SSE_FRAME_BYTES, SseField, SseFieldKind, SseFrame, SseFramer, SseFramingError,
@@ -954,6 +954,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use serde_json::json;
 
     fn protocol_root() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../protocol")
@@ -1277,6 +1278,50 @@ mod tests {
     }
 
     #[test]
+    fn cache_report_schema_rejects_invalid_status_shapes() {
+        let descriptor = json!({
+            "kind": "message",
+            "location": {"kind": "message", "message_index": 0}
+        });
+        let valid = json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "entries": [{
+                "source": descriptor,
+                "target": descriptor,
+                "status": "preserved",
+                "reason": "unchanged"
+            }]
+        });
+        assert!(validation_errors("schemas/cache-report.schema.json", &valid).is_empty());
+
+        for invalid in [
+            json!({
+                "protocol_version": PROTOCOL_VERSION,
+                "entries": [{
+                    "source": descriptor,
+                    "target": null,
+                    "status": "preserved",
+                    "reason": "unchanged"
+                }]
+            }),
+            json!({
+                "protocol_version": PROTOCOL_VERSION,
+                "entries": [{
+                    "source": null,
+                    "target": descriptor,
+                    "status": "introduced",
+                    "reason": "semantic_value_changed"
+                }]
+            }),
+        ] {
+            assert!(
+                !validation_errors("schemas/cache-report.schema.json", &invalid).is_empty(),
+                "invalid cache-report status shape unexpectedly passed"
+            );
+        }
+    }
+
+    #[test]
     fn profile_registry_and_vector_manifest_validate_against_their_schemas() {
         validate_with_schema(
             "schemas/profile-registry.schema.json",
@@ -1373,9 +1418,31 @@ mod tests {
     }
 
     fn assert_cache_report_is_content_free(document: &Value) {
-        let Some(cache_report) = document["expect"].get("cache_report") else {
-            return;
-        };
+        visit_cache_reports(document, &mut |cache_report| {
+            assert_one_cache_report_is_content_free(cache_report)
+        });
+    }
+
+    fn visit_cache_reports(value: &Value, visitor: &mut impl FnMut(&Value)) {
+        match value {
+            Value::Object(object) => {
+                if let Some(report) = object.get("cache_report") {
+                    visitor(report);
+                }
+                for value in object.values() {
+                    visit_cache_reports(value, visitor);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    visit_cache_reports(value, visitor);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_one_cache_report_is_content_free(cache_report: &Value) {
         for forbidden_key in [
             "content",
             "prompt",

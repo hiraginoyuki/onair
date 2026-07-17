@@ -6,9 +6,10 @@ use std::{
 
 use llm_protocol_anthropic as anthropic;
 use llm_protocol_core::{
-    ANTHROPIC_MESSAGES_PROFILE, CacheIntent, CachePlanRecommendation, CachePreservationReport,
-    ConversionResult, DecodedEnvelope, Diagnostic, OPENAI_CHAT_COMPLETIONS_PROFILE,
-    OPENAI_RESPONSES_PROFILE, PROTOCOL_VERSION, ProfileId, ProtocolPayload,
+    ANTHROPIC_MESSAGES_PROFILE, CacheDirectiveCompatibility, CacheIntent, CachePlanRecommendation,
+    CachePreservationReport, CachePreservationStatus, CacheSegmentPlan, ConversionResult,
+    DecodedEnvelope, Diagnostic, OPENAI_CHAT_COMPLETIONS_PROFILE, OPENAI_RESPONSES_PROFILE,
+    PROTOCOL_VERSION, ProfileId, ProtocolPayload,
 };
 use llm_protocol_openai as openai;
 use serde_json::{Map, Value, json};
@@ -56,6 +57,7 @@ fn run_manifest(bless: bool) {
     let mut feature_claims = BTreeMap::new();
     let mut ids = BTreeSet::new();
     let mut paths = BTreeSet::new();
+    let mut cache_report_statuses = BTreeSet::new();
     let mut active_count = 0;
 
     for entry in entries {
@@ -82,6 +84,7 @@ fn run_manifest(bless: bool) {
         active_count += 1;
         add_envelope_version(&mut vector);
         let actual = execute_vector(&vector);
+        collect_production_cache_report_statuses(&actual, &mut cache_report_statuses);
         validate_coverage_claims(entry, &vector, &actual, &mut coverage_claims);
         validate_feature_claims(entry, &vector, &actual, &mut feature_claims);
         if bless {
@@ -108,6 +111,36 @@ fn run_manifest(bless: bool) {
         claimed_features, expected_features,
         "feature claims must contain one source-decode and one cross-profile cell per feature"
     );
+    assert_eq!(
+        cache_report_statuses,
+        BTreeSet::from([
+            CachePreservationStatus::Preserved,
+            CachePreservationStatus::Moved,
+            CachePreservationStatus::Changed,
+            CachePreservationStatus::Dropped,
+            CachePreservationStatus::Introduced,
+            CachePreservationStatus::NonPortable,
+        ]),
+        "production codec vectors must exercise every stable cache-report status"
+    );
+}
+
+fn collect_production_cache_report_statuses(
+    actual: &Value,
+    statuses: &mut BTreeSet<CachePreservationStatus>,
+) {
+    let Some(entries) = actual["encode"]
+        .get("cache_report")
+        .and_then(|report| report["entries"].as_array())
+    else {
+        return;
+    };
+    for entry in entries {
+        statuses.insert(
+            serde_json::from_value(entry["status"].clone())
+                .expect("cache report status matches the normative enum"),
+        );
+    }
 }
 
 fn expected_feature_cells(manifest: &Value) -> BTreeSet<FeatureCell> {
@@ -609,6 +642,13 @@ fn assert_envelope_vector_invariants(
                     encode_expectation.get("cache_report").is_some(),
                     "converted request must include its complete cache report"
                 );
+                assert_cache_report_matches_target(
+                    vector,
+                    payload,
+                    source_profile,
+                    target_profile,
+                    encode_expectation,
+                );
             }
         }
         "unsupported" => {
@@ -617,6 +657,68 @@ fn assert_envelope_vector_invariants(
             assert!(encode_expectation.get("cache_report").is_none());
         }
         kind => panic!("unexpected envelope vector kind {kind}"),
+    }
+}
+
+fn assert_cache_report_matches_target(
+    vector: &Value,
+    source_payload: &ProtocolPayload,
+    source_profile: &ProfileId,
+    target_profile: &ProfileId,
+    encode_expectation: &Value,
+) {
+    let ProtocolPayload::Request(source_request) = source_payload else {
+        panic!("cache reports require source request IR");
+    };
+    let target_payload = payload_from_ir_document(&encode_expectation["round_trip_decode"]["ir"]);
+    let ProtocolPayload::Request(target_request) = target_payload else {
+        panic!("converted request must re-decode as target request IR");
+    };
+    let source_plan = CacheSegmentPlan::analyze(source_request).expect("source cache plan");
+    let target_plan = CacheSegmentPlan::analyze(&target_request).expect("target cache plan");
+    let compatibility = cache_directive_compatibility(source_profile, target_profile);
+    if compatibility == CacheDirectiveCompatibility::CrossProvider {
+        assert!(
+            target_request.cache_intent.is_none(),
+            "ordinary cross-provider conversion must not insert target cache directives"
+        );
+    }
+
+    let report: CachePreservationReport =
+        serde_json::from_value(encode_expectation["cache_report"].clone())
+            .expect("cache report matches the normative shape");
+    report
+        .validate_conservation(&source_plan, &target_plan)
+        .unwrap_or_else(|error| {
+            panic!(
+                "vector {} cache report violates conservation: {error}",
+                required_string(vector, "id")
+            )
+        });
+    assert_eq!(
+        report,
+        CachePreservationReport::source_to_target(&source_plan, &target_plan, compatibility),
+        "vector {} cache report must use actual target re-decode facts",
+        required_string(vector, "id")
+    );
+}
+
+fn cache_directive_compatibility(
+    source_profile: &ProfileId,
+    target_profile: &ProfileId,
+) -> CacheDirectiveCompatibility {
+    let source_is_openai = matches!(
+        source_profile.as_str(),
+        OPENAI_CHAT_COMPLETIONS_PROFILE | OPENAI_RESPONSES_PROFILE
+    );
+    let target_is_openai = matches!(
+        target_profile.as_str(),
+        OPENAI_CHAT_COMPLETIONS_PROFILE | OPENAI_RESPONSES_PROFILE
+    );
+    if source_is_openai == target_is_openai {
+        CacheDirectiveCompatibility::SameProvider
+    } else {
+        CacheDirectiveCompatibility::CrossProvider
     }
 }
 
@@ -722,14 +824,19 @@ fn execute_cache_plan_application(vector: &Value) -> Value {
     };
     let target_intent: CacheIntent = serde_json::from_value(operation["target_intent"].clone())
         .expect("cache-plan target intent matches the normative IR shape");
-    let report: CachePreservationReport = serde_json::from_value(operation["report"].clone())
-        .expect("cache-plan report matches the normative report shape");
-    let applied = CachePlanRecommendation {
-        target_intent,
-        report,
-    }
-    .apply(request)
-    .expect("synthetic cache-plan recommendation applies exactly once");
+    let expected_report: CachePreservationReport =
+        serde_json::from_value(operation["report"].clone())
+            .expect("cache-plan report matches the normative report shape");
+    let recommendation = CachePlanRecommendation::for_request(&request, target_intent)
+        .expect("synthetic cache-plan recommendation can be analyzed");
+    assert_eq!(
+        recommendation.report(),
+        &expected_report,
+        "cache-plan input freezes the analyzer-generated recommendation report"
+    );
+    let applied = recommendation
+        .apply(request)
+        .expect("synthetic cache-plan recommendation applies exactly once");
 
     json!({
         "analysis": {

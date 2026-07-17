@@ -139,7 +139,144 @@
             "provider_semantics_differ"
           ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "preserved"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "$ref": "#/$defs/descriptor"
+              },
+              "target": {
+                "$ref": "#/$defs/descriptor"
+              },
+              "reason": {
+                "const": "unchanged"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "moved"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "$ref": "#/$defs/descriptor"
+              },
+              "target": {
+                "$ref": "#/$defs/descriptor"
+              },
+              "reason": {
+                "const": "order_changed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "changed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "$ref": "#/$defs/descriptor"
+              },
+              "target": {
+                "$ref": "#/$defs/descriptor"
+              },
+              "reason": {
+                "const": "semantic_value_changed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "dropped"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "$ref": "#/$defs/descriptor"
+              },
+              "target": {
+                "type": "null"
+              },
+              "reason": {
+                "const": "no_target_representation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "introduced"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "type": "null"
+              },
+              "target": {
+                "$ref": "#/$defs/descriptor"
+              },
+              "reason": {
+                "enum": [
+                  "no_source_representation",
+                  "target_directive_must_be_explicit"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "non_portable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "$ref": "#/$defs/descriptor"
+              },
+              "reason": {
+                "enum": [
+                  "target_directive_must_be_explicit",
+                  "provider_semantics_differ"
+                ]
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

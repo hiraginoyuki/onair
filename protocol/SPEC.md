@@ -163,11 +163,44 @@ assets, and explicit directives. Each public segment descriptor contains only
 its structural kind and location. The semantic material used for comparison is
 not exposed by the plan or its reports.
 
-Source-to-target reports classify each segment/directive as preserved, moved,
-changed, dropped, introduced, or non-portable with a reason. The first
-arbitrary IR-to-IR comparison API additionally reports the common stable
-prefix and is explicitly experimental: its structural comparison semantics may
-change as codec consumers establish the required distinctions.
+Source-to-target reports compare the source request plan with the plan obtained
+by decoding the canonical target envelope under its target profile. That target
+re-decode is authoritative for what the target represents; an encoder may not
+infer preservation from the source request alone. Every source descriptor has
+exactly one terminal report entry, and every target descriptor occurs exactly
+once as a target. Source entries retain source-plan order, followed by target-
+only introductions in target-plan order.
+
+Matching is deterministic and consumes each target segment at most once. For
+each source segment in source-plan order, implementations first preserve an
+identical segment at the same plan ordinal, then select the first unmatched
+target with identical descriptor and semantic value as moved, then the first
+unmatched target with the same descriptor as changed, and then the first
+unmatched target with the same semantic value as moved. If none exists, the
+source is dropped. Cross-provider source directives bypass matching and are
+non-portable. Remaining target segments are introduced. Semantic equality is
+equality of the canonical typed IR value; it does not expose content in the
+report.
+
+The stable classifications have these shapes:
+
+- `preserved` uses source and target descriptors with reason `unchanged`;
+- `moved` uses source and target descriptors with reason `order_changed`;
+- `changed` uses source and target descriptors with reason
+  `semantic_value_changed`;
+- `dropped` uses a source descriptor and null target with reason
+  `no_target_representation`;
+- `introduced` uses null source and a target descriptor with reason
+  `no_source_representation` or `target_directive_must_be_explicit`; and
+- `non_portable` uses a source descriptor, an optional target descriptor, and
+  reason `provider_semantics_differ` or
+  `target_directive_must_be_explicit`.
+
+These classifications describe ordered cache-relevant request structure, not
+provider cache-key equivalence or cache-hit behavior. The arbitrary IR-to-IR
+comparison API additionally reports the common stable prefix and remains
+explicitly experimental: its comparison semantics may change as codec
+consumers establish the required distinctions.
 
 Ordinary conversion must never synthesize a target cache directive. An
 analyzer may recommend a target-specific plan; applying it is an explicit
@@ -178,7 +211,10 @@ When a typed request is otherwise representable but its source cache intent
 uses a different provider family, conversion returns the usable target request
 without a synthesized target directive. Its fidelity is `lossy`, and the
 content-free cache report marks the source directives `non_portable` with
-reason `provider_semantics_differ`.
+reason `provider_semantics_differ`. Cross-provider directives are not matched
+as equivalent segments. Ordinary conversion must yield no target cache
+directive; any target-only directive would be reported as introduced and is a
+conformance failure unless it came from a separate explicit plan application.
 
 Cache reports must not include prompt content or a fingerprint by default.
 Deployment-local correlation may use caller-supplied HMAC-SHA-256 keys. Plain

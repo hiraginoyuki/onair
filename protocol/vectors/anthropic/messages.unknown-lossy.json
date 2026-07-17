@@ -50,7 +50,7 @@
       "cache_report": {
         "entries": [
           {
-            "reason": "unchanged",
+            "reason": "semantic_value_changed",
             "source": {
               "kind": "message",
               "location": {
@@ -58,7 +58,7 @@
                 "message_index": 0
               }
             },
-            "status": "preserved",
+            "status": "changed",
             "target": {
               "kind": "message",
               "location": {
@@ -68,7 +68,7 @@
             }
           },
           {
-            "reason": "unchanged",
+            "reason": "semantic_value_changed",
             "source": {
               "kind": "content_part",
               "location": {
@@ -77,7 +77,7 @@
                 "part_index": 0
               }
             },
-            "status": "preserved",
+            "status": "changed",
             "target": {
               "kind": "content_part",
               "location": {

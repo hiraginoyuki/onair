@@ -9,14 +9,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llm_protocol_core::{
     ANTHROPIC_MESSAGES_PROFILE, AdapterMetadata, ApiFamily, AssetReference, AssetReferenceType,
-    CachePreservationReport, CacheSegmentPlan, CanonicalEnvelope, ContentPart, ContinuationHandle,
-    ConversationRole, ConversionResult, DecodedEnvelope, Diagnostic, DiagnosticCode,
-    DiagnosticSeverity, EnvelopeError, ErrorCategory, Fidelity, FinishReason, GenerationControls,
-    JsonSchemaOutputIntent, OPENAI_CHAT_COMPLETIONS_PROFILE, OPENAI_RESPONSES_PROFILE,
-    OpaqueExtension, OpaquePayload, OpenAiCacheIntent, OutputPartType, OutputSchemaEnforcement,
-    PROTOCOL_VERSION, ProfileId, ProtocolBodyKind, ProtocolError, ProtocolHeaderLine,
-    ProtocolPayload, ProtocolRequest, ProtocolResponse, ReplayEnvelope, RetainedWire,
-    SourceLocation, SseFrame, SseFramer, SseFramingError, StreamEvent, ToolDefinition, Usage,
+    CacheDirectiveCompatibility, CachePreservationReport, CacheSegmentPlan, CanonicalEnvelope,
+    ContentPart, ContinuationHandle, ConversationRole, ConversionResult, DecodedEnvelope,
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, EnvelopeError, ErrorCategory, Fidelity,
+    FinishReason, GenerationControls, JsonSchemaOutputIntent, OPENAI_CHAT_COMPLETIONS_PROFILE,
+    OPENAI_RESPONSES_PROFILE, OpaqueExtension, OpaquePayload, OpenAiCacheIntent, OutputPartType,
+    OutputSchemaEnforcement, PROTOCOL_VERSION, ProfileId, ProtocolBodyKind, ProtocolError,
+    ProtocolHeaderLine, ProtocolPayload, ProtocolRequest, ProtocolResponse, ReplayEnvelope,
+    RetainedWire, SourceLocation, SseFrame, SseFramer, SseFramingError, StreamEvent,
+    ToolDefinition, Usage,
 };
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -902,17 +903,12 @@ fn encode_value(
 
     let cache_report = if source_profile != target_profile {
         match value {
-            OpenAiPayload::Request(request) => {
-                let plan = CacheSegmentPlan::analyze(request)
-                    .map_err(|error| CodecError::InvalidEnvelope(error.to_string()))?;
-                if source_openai.is_some() {
-                    Some(CachePreservationReport::preserved(&plan))
-                } else if request.cache_intent.is_some() {
-                    Some(CachePreservationReport::with_non_portable_directives(&plan))
-                } else {
-                    Some(CachePreservationReport::preserved(&plan))
-                }
-            }
+            OpenAiPayload::Request(request) => Some(cache_report_for_request(
+                request,
+                source_openai.is_some(),
+                target,
+                &body,
+            )?),
             _ => None,
         }
     } else {
@@ -929,6 +925,50 @@ fn encode_value(
         },
         cache_report,
     }))
+}
+
+fn cache_report_for_request(
+    source_request: &ProtocolRequest,
+    source_is_openai: bool,
+    target: OpenAiProfile,
+    target_body: &[u8],
+) -> Result<CachePreservationReport, CodecError> {
+    let target_payload = decode_json(
+        target,
+        &RetainedWire {
+            profile_id: target.profile_id(),
+            status: 200,
+            body_kind: ProtocolBodyKind::Json,
+            protocol_headers: Vec::new(),
+            body: target_body.to_vec(),
+        },
+    )?
+    .output
+    .ok_or_else(|| {
+        CodecError::InvalidEnvelope(
+            "canonical OpenAI request did not decode to target IR".to_owned(),
+        )
+    })?;
+    let ProtocolPayload::Request(target_request) = target_payload else {
+        return Err(CodecError::InvalidEnvelope(
+            "canonical OpenAI request decoded as a non-request payload".to_owned(),
+        ));
+    };
+    let source_plan = CacheSegmentPlan::analyze(source_request)
+        .map_err(|error| CodecError::InvalidEnvelope(error.to_string()))?;
+    let target_plan = CacheSegmentPlan::analyze(&target_request)
+        .map_err(|error| CodecError::InvalidEnvelope(error.to_string()))?;
+    let compatibility = if source_is_openai {
+        CacheDirectiveCompatibility::SameProvider
+    } else {
+        CacheDirectiveCompatibility::CrossProvider
+    };
+    let report =
+        CachePreservationReport::source_to_target(&source_plan, &target_plan, compatibility);
+    report
+        .validate_conservation(&source_plan, &target_plan)
+        .map_err(|error| CodecError::InvalidEnvelope(error.to_string()))?;
+    Ok(report)
 }
 
 fn encode_request(
