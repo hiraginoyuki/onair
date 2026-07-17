@@ -79,6 +79,112 @@ fn profile_identifiers_are_frozen() {
 }
 
 #[test]
+fn request_subset_guards_are_independent_and_boundary_aware() {
+    let chat_profile = OpenAiProfile::ChatCompletions.profile_id();
+    for (n, expected_fidelity) in [
+        (0, Fidelity::Exact),
+        (1, Fidelity::Exact),
+        (2, Fidelity::Unsupported),
+    ] {
+        let object = json!({"messages": [], "n": n}).as_object().unwrap().clone();
+        assert_eq!(
+            decode_chat_request(&object, &chat_profile)
+                .unwrap()
+                .fidelity,
+            expected_fidelity,
+            "chat n={n}"
+        );
+    }
+    for (option, value) in [
+        ("tool_choice", json!("required")),
+        ("parallel_tool_calls", json!(true)),
+        ("logprobs", json!(true)),
+        ("top_logprobs", json!(1)),
+        ("stream_options", json!({})),
+    ] {
+        let mut object = json!({"messages": []}).as_object().unwrap().clone();
+        object.insert(option.to_owned(), value);
+        let result = decode_chat_request(&object, &chat_profile).unwrap();
+        assert_eq!(result.fidelity, Fidelity::Unsupported, "chat {option}");
+        assert!(result.output.is_none(), "chat {option}");
+    }
+
+    let responses_profile = OpenAiProfile::Responses.profile_id();
+    for option in [
+        "tool_choice",
+        "parallel_tool_calls",
+        "truncation",
+        "include",
+        "background",
+    ] {
+        let mut object = json!({"input": []}).as_object().unwrap().clone();
+        object.insert(option.to_owned(), json!(true));
+        let result = decode_responses_request(&object, &responses_profile).unwrap();
+        assert_eq!(result.fidelity, Fidelity::Unsupported, "responses {option}");
+        assert!(result.output.is_none(), "responses {option}");
+    }
+}
+
+#[test]
+fn responses_statuses_map_to_distinct_terminal_reasons() {
+    for (status, expected_reason) in [
+        ("completed", FinishReason::STOP),
+        ("queued", FinishReason::STOP),
+        ("in_progress", FinishReason::STOP),
+        ("incomplete", FinishReason::LENGTH),
+        ("failed", FinishReason::ERROR),
+        ("cancelled", FinishReason::ERROR),
+        ("synthetic_future_status", FinishReason::STOP),
+    ] {
+        let object = json!({"status": status, "output": []})
+            .as_object()
+            .unwrap()
+            .clone();
+        let payload =
+            decode_responses_response(&object, &OpenAiProfile::Responses.profile_id()).unwrap();
+        let OpenAiPayload::Response(response) = payload else {
+            panic!("responses status decoded to a non-response payload");
+        };
+        assert_eq!(response.finish_reason.as_str(), expected_reason, "{status}");
+    }
+}
+
+#[test]
+fn error_categories_prefer_known_types_then_fall_back_to_status() {
+    for (error_type, expected) in [
+        ("invalid_request_error", ErrorCategory::InvalidRequest),
+        ("authentication_error", ErrorCategory::Authentication),
+        ("permission_error", ErrorCategory::Permission),
+        ("not_found_error", ErrorCategory::NotFound),
+        ("rate_limit_error", ErrorCategory::RateLimit),
+        ("conflict_error", ErrorCategory::Conflict),
+        ("server_error", ErrorCategory::Server),
+    ] {
+        assert_eq!(
+            error_category(Some(error_type), 418),
+            expected,
+            "{error_type}"
+        );
+    }
+
+    for (status, expected) in [
+        (400, ErrorCategory::InvalidRequest),
+        (422, ErrorCategory::InvalidRequest),
+        (401, ErrorCategory::Authentication),
+        (403, ErrorCategory::Permission),
+        (404, ErrorCategory::NotFound),
+        (409, ErrorCategory::Conflict),
+        (429, ErrorCategory::RateLimit),
+        (500, ErrorCategory::Server),
+        (599, ErrorCategory::Server),
+        (418, ErrorCategory::Unknown),
+        (600, ErrorCategory::Unknown),
+    ] {
+        assert_eq!(error_category(None, status), expected, "status {status}");
+    }
+}
+
+#[test]
 fn active_openai_vectors_run_through_the_common_ir_boundary() {
     let manifest: Value = serde_json::from_slice(
         &std::fs::read(protocol_root().join("vectors/manifest.json")).unwrap(),

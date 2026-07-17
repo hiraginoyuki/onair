@@ -1732,13 +1732,14 @@ fn encode_error(error: &ProtocolError, tracker: &mut ConversionTracker) -> Value
 }
 
 fn decode_messages_stream(frames: Vec<SseFrame>, profile_id: &ProfileId) -> Vec<StreamEvent> {
-    let mut events = Vec::new();
-    let mut started = false;
+    let mut events = (!frames.is_empty())
+        .then_some(StreamEvent::RequestStarted)
+        .into_iter()
+        .collect::<Vec<_>>();
     let mut message_id = None;
     let mut open_parts = BTreeSet::new();
     let mut tool_calls: BTreeMap<u64, (String, Option<String>)> = BTreeMap::new();
     let mut finish_reason = FinishReason::new(FinishReason::STOP).expect("stop is non-empty");
-    let mut terminal = false;
     let mut event_index = 0_u64;
 
     for frame in frames {
@@ -1764,10 +1765,6 @@ fn decode_messages_stream(frames: Vec<SseFrame>, profile_id: &ProfileId) -> Vec<
             .or(event_name.as_deref());
         match event_type {
             Some("message_start") => {
-                if !started {
-                    events.push(StreamEvent::RequestStarted);
-                    started = true;
-                }
                 message_id = value
                     .get("message")
                     .and_then(Value::as_object)
@@ -1876,9 +1873,9 @@ fn decode_messages_stream(frames: Vec<SseFrame>, profile_id: &ProfileId) -> Vec<
                 events.push(StreamEvent::Terminal {
                     finish_reason: finish_reason.clone(),
                 });
-                terminal = true;
             }
             Some("error") => {
+                close_stream_parts(&mut events, &mut open_parts, message_id.clone());
                 let error_object = value
                     .get("error")
                     .and_then(Value::as_object)
@@ -1905,7 +1902,6 @@ fn decode_messages_stream(frames: Vec<SseFrame>, profile_id: &ProfileId) -> Vec<
                         ),
                     },
                 });
-                terminal = true;
             }
             _ => events.push(StreamEvent::Opaque {
                 extension: opaque_json(
@@ -1921,12 +1917,7 @@ fn decode_messages_stream(frames: Vec<SseFrame>, profile_id: &ProfileId) -> Vec<
         }
         event_index += 1;
     }
-    if !started && !events.is_empty() {
-        events.insert(0, StreamEvent::RequestStarted);
-    }
-    if !terminal {
-        close_stream_parts(&mut events, &mut open_parts, message_id);
-    }
+    close_stream_parts(&mut events, &mut open_parts, message_id);
     events
 }
 

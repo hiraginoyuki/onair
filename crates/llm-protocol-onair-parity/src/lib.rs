@@ -517,11 +517,12 @@ fn validate_live_config(
         }
         reqwest::header::HeaderName::from_bytes(profile.credential_header.as_bytes())
             .map_err(|_| BenchmarkError::InvalidCredentialHeader(profile.profile_id.clone()))?;
+        if !profile.endpoint.starts_with("https://") {
+            return Err(BenchmarkError::InvalidEndpoint(profile.profile_id.clone()));
+        }
         let endpoint = reqwest::Url::parse(&profile.endpoint)
             .map_err(|_| BenchmarkError::InvalidEndpoint(profile.profile_id.clone()))?;
-        if endpoint.scheme() != "https"
-            || endpoint.host().is_none()
-            || !endpoint.username().is_empty()
+        if !endpoint.username().is_empty()
             || endpoint.password().is_some()
             || endpoint.query().is_some()
             || endpoint.fragment().is_some()
@@ -883,6 +884,17 @@ mod tests {
         }
     }
 
+    fn single_profile_config() -> LiveBenchmarkConfig {
+        let mut config = all_profile_config();
+        config.hard_caps = BenchmarkCaps {
+            calls: 1,
+            input_tokens: 256,
+            output_tokens: 128,
+        };
+        config.profiles.truncate(1);
+        config
+    }
+
     fn prepared_live(config: LiveBenchmarkConfig) -> PreparedBenchmarkRun {
         PreparedBenchmarkRun {
             mode: BenchmarkMode::Live,
@@ -1008,6 +1020,90 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_manifest_rejects_each_invalid_top_level_field() {
+        let mut manifest = test_manifest();
+        manifest.synthetic = false;
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(BenchmarkError::InvalidManifest)
+        ));
+
+        let mut manifest = test_manifest();
+        manifest.mode = "live_default".to_owned();
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(BenchmarkError::InvalidManifest)
+        ));
+
+        let mut manifest = test_manifest();
+        manifest.scenarios.clear();
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(BenchmarkError::InvalidManifest)
+        ));
+    }
+
+    #[test]
+    fn live_config_rejects_each_missing_cap_and_profile_field() {
+        for field in ["calls", "input_tokens", "output_tokens", "profiles"] {
+            let mut config = single_profile_config();
+            match field {
+                "calls" => config.hard_caps.calls = 0,
+                "input_tokens" => config.hard_caps.input_tokens = 0,
+                "output_tokens" => config.hard_caps.output_tokens = 0,
+                "profiles" => config.profiles.clear(),
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    validate_live_config(&test_manifest(), &config),
+                    Err(BenchmarkError::MissingHardCaps)
+                ),
+                "accepted missing {field}"
+            );
+        }
+
+        for field in ["endpoint", "credential_header", "credential_env"] {
+            let mut config = single_profile_config();
+            match field {
+                "endpoint" => config.profiles[0].endpoint.clear(),
+                "credential_header" => config.profiles[0].credential_header.clear(),
+                "credential_env" => config.profiles[0].credential_env.clear(),
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    validate_live_config(&test_manifest(), &config),
+                    Err(BenchmarkError::MissingHardCaps)
+                ),
+                "accepted missing {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn live_config_rejects_each_forbidden_endpoint_component() {
+        for endpoint in [
+            "http://example.invalid/v1/chat/completions",
+            "https:/v1/chat/completions",
+            "https://user@example.invalid/v1/chat/completions",
+            "https://user:password@example.invalid/v1/chat/completions",
+            "https://example.invalid/v1/chat/completions?debug=true",
+            "https://example.invalid/v1/chat/completions#fragment",
+        ] {
+            let mut config = single_profile_config();
+            config.profiles[0].endpoint = endpoint.to_owned();
+            assert!(
+                matches!(
+                    validate_live_config(&test_manifest(), &config),
+                    Err(BenchmarkError::InvalidEndpoint(_))
+                ),
+                "accepted endpoint {endpoint}"
+            );
+        }
+    }
+
+    #[test]
     fn benchmark_config_may_be_external_but_output_must_be_local_only() {
         let root = Path::new("/synthetic-repository");
         assert!(is_local_only_path(
@@ -1019,6 +1115,14 @@ mod tests {
             Path::new("/synthetic-repository/protocol/config.json")
         ));
         assert!(is_local_config_path(root, Path::new("/tmp/config.json")));
+        assert!(is_local_config_path(
+            root,
+            Path::new("/synthetic-repository/.local/config.json")
+        ));
+        assert!(!is_local_config_path(
+            root,
+            Path::new("/synthetic-repository/protocol/config.json")
+        ));
         assert!(!is_local_only_path(
             root,
             Path::new("/tmp/observations.json")
@@ -1114,6 +1218,40 @@ mod tests {
     }
 
     #[test]
+    fn output_path_metadata_distinguishes_normal_missing_and_invalid_components() {
+        let test_root = unique_test_root();
+        let root = test_root.join("repository");
+        let local = root.join(".local");
+        let normal = local.join("normal");
+        fs::create_dir_all(&normal).unwrap();
+
+        assert!(
+            ensure_output_path_has_no_symlinks(&root, &normal.join("observations.json")).is_ok()
+        );
+        assert!(
+            ensure_output_path_has_no_symlinks(
+                &root,
+                &local.join("future/directory/observations.json"),
+            )
+            .is_ok()
+        );
+
+        let blocking_file = local.join("blocking-file");
+        fs::write(&blocking_file, b"synthetic").unwrap();
+        let error =
+            ensure_output_path_has_no_symlinks(&root, &blocking_file.join("observations.json"))
+                .unwrap_err();
+        assert!(matches!(
+            error,
+            BenchmarkError::CreateOutputDirectory { path, source }
+                if path == blocking_file.join("observations.json")
+                    && source.kind() != std::io::ErrorKind::NotFound
+        ));
+
+        fs::remove_dir_all(&test_root).unwrap();
+    }
+
+    #[test]
     fn benchmark_observations_retain_only_cache_token_totals() {
         let raw = br#"{
             "id": "synthetic-response-id",
@@ -1127,6 +1265,16 @@ mod tests {
         assert_eq!(observation.state, CacheObservationState::Observed);
         assert_eq!(observation.read_tokens, Some(5));
         assert_eq!(observation.write_tokens, Some(2));
+        for (usage, read_tokens, write_tokens) in [
+            (json!({"cache_read_input_tokens": 7}), Some(7), None),
+            (json!({"cache_creation_input_tokens": 3}), None, Some(3)),
+        ] {
+            let body = serde_json::to_vec(&json!({"usage": usage})).unwrap();
+            let observation = redacted_cache_tokens(&body);
+            assert_eq!(observation.state, CacheObservationState::Observed);
+            assert_eq!(observation.read_tokens, read_tokens);
+            assert_eq!(observation.write_tokens, write_tokens);
+        }
         let report = BenchmarkReport {
             protocol_version: BENCHMARK_PROTOCOL_VERSION.to_owned(),
             mode: "live".to_owned(),

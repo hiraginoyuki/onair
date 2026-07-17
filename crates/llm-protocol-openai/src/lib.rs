@@ -758,7 +758,6 @@ fn decode_responses_response(
         .and_then(Value::as_str)
         .unwrap_or("completed");
     let finish_reason = match status {
-        "completed" | "in_progress" | "queued" => FinishReason::STOP,
         "incomplete" => FinishReason::LENGTH,
         "failed" | "cancelled" => FinishReason::ERROR,
         _ => FinishReason::STOP,

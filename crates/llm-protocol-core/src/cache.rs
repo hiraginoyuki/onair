@@ -587,8 +587,8 @@ fn target_is_eligible(
     target_segment: &CacheSegment,
     directive_compatibility: CacheDirectiveCompatibility,
 ) -> bool {
-    !matched_target_indices.contains(&target_index)
-        && !(directive_compatibility == CacheDirectiveCompatibility::CrossProvider
+    !(matched_target_indices.contains(&target_index)
+        || directive_compatibility == CacheDirectiveCompatibility::CrossProvider
             && target_segment.descriptor.kind == CacheSegmentKind::CacheDirective)
 }
 
@@ -1008,6 +1008,16 @@ mod tests {
 
         let diff = source.experimental_diff(&target);
         assert_eq!(diff.common_stable_prefix_len, 5);
+        assert_eq!(
+            diff.source_entries
+                .iter()
+                .filter_map(|entry| entry.source.as_ref())
+                .collect::<Vec<_>>(),
+            source
+                .descriptors()
+                .skip(diff.common_stable_prefix_len)
+                .collect::<Vec<_>>()
+        );
         assert!(
             diff.target_entries
                 .iter()
@@ -1133,6 +1143,55 @@ mod tests {
     }
 
     #[test]
+    fn cache_target_eligibility_excludes_matches_and_cross_provider_directives() {
+        let plan = CacheSegmentPlan::analyze(&request()).unwrap();
+        let (normal_index, normal) = plan
+            .segments()
+            .iter()
+            .enumerate()
+            .find(|(_, segment)| segment.descriptor.kind == CacheSegmentKind::Message)
+            .unwrap();
+        let (directive_index, directive) = plan
+            .segments()
+            .iter()
+            .enumerate()
+            .find(|(_, segment)| segment.descriptor.kind == CacheSegmentKind::CacheDirective)
+            .unwrap();
+        let unmatched = BTreeSet::new();
+
+        assert!(target_is_eligible(
+            &unmatched,
+            normal_index,
+            normal,
+            CacheDirectiveCompatibility::SameProvider,
+        ));
+        assert!(target_is_eligible(
+            &unmatched,
+            normal_index,
+            normal,
+            CacheDirectiveCompatibility::CrossProvider,
+        ));
+        assert!(target_is_eligible(
+            &unmatched,
+            directive_index,
+            directive,
+            CacheDirectiveCompatibility::SameProvider,
+        ));
+        assert!(!target_is_eligible(
+            &unmatched,
+            directive_index,
+            directive,
+            CacheDirectiveCompatibility::CrossProvider,
+        ));
+        assert!(!target_is_eligible(
+            &BTreeSet::from([normal_index]),
+            normal_index,
+            normal,
+            CacheDirectiveCompatibility::SameProvider,
+        ));
+    }
+
+    #[test]
     fn cache_report_conservation_rejects_duplicate_and_invalid_entries() {
         let plan = CacheSegmentPlan::analyze(&request()).unwrap();
         let mut report = CachePreservationReport::source_to_target(
@@ -1167,5 +1226,213 @@ mod tests {
             report.validate_conservation(&plan, &plan),
             Err(CacheReportValidationError::SourceOrder)
         );
+    }
+
+    #[test]
+    fn cache_report_conservation_rejects_unknown_descriptors() {
+        let mut single_segment_request = request();
+        single_segment_request.messages.clear();
+        single_segment_request.output_schema = None;
+        single_segment_request.cache_intent = None;
+        let plan = CacheSegmentPlan::analyze(&single_segment_request).unwrap();
+        assert_eq!(plan.segments().len(), 1);
+
+        let unknown = CacheSegmentDescriptor {
+            kind: CacheSegmentKind::Message,
+            location: CacheLocation::Message { message_index: 42 },
+        };
+        let report = CachePreservationReport {
+            entries: vec![CachePreservationEntry {
+                source: Some(unknown.clone()),
+                target: None,
+                status: CachePreservationStatus::Dropped,
+                reason: CacheChangeReason::NoTargetRepresentation,
+            }],
+        };
+        assert!(matches!(
+            report.validate_conservation(&plan, &plan),
+            Err(CacheReportValidationError::UnknownSource {
+                entry_index: 0,
+                descriptor,
+            }) if descriptor == unknown
+        ));
+
+        let report = CachePreservationReport {
+            entries: vec![CachePreservationEntry {
+                source: None,
+                target: Some(unknown.clone()),
+                status: CachePreservationStatus::Introduced,
+                reason: CacheChangeReason::NoSourceRepresentation,
+            }],
+        };
+        assert!(matches!(
+            report.validate_conservation(&plan, &plan),
+            Err(CacheReportValidationError::UnknownTarget {
+                entry_index: 0,
+                descriptor,
+            }) if descriptor == unknown
+        ));
+    }
+
+    #[test]
+    fn cache_report_entry_shapes_require_all_status_fields() {
+        let descriptor = CacheSegmentDescriptor {
+            kind: CacheSegmentKind::Message,
+            location: CacheLocation::Message { message_index: 0 },
+        };
+        let entry = |source: bool,
+                     target: bool,
+                     status: CachePreservationStatus,
+                     reason: CacheChangeReason| CachePreservationEntry {
+            source: source.then(|| descriptor.clone()),
+            target: target.then(|| descriptor.clone()),
+            status,
+            reason,
+        };
+
+        for (valid, invalid_entries) in [
+            (
+                entry(
+                    true,
+                    true,
+                    CachePreservationStatus::Moved,
+                    CacheChangeReason::OrderChanged,
+                ),
+                vec![
+                    entry(
+                        false,
+                        true,
+                        CachePreservationStatus::Moved,
+                        CacheChangeReason::OrderChanged,
+                    ),
+                    entry(
+                        true,
+                        false,
+                        CachePreservationStatus::Moved,
+                        CacheChangeReason::OrderChanged,
+                    ),
+                    entry(
+                        true,
+                        true,
+                        CachePreservationStatus::Moved,
+                        CacheChangeReason::Unchanged,
+                    ),
+                ],
+            ),
+            (
+                entry(
+                    true,
+                    true,
+                    CachePreservationStatus::Changed,
+                    CacheChangeReason::SemanticValueChanged,
+                ),
+                vec![
+                    entry(
+                        false,
+                        true,
+                        CachePreservationStatus::Changed,
+                        CacheChangeReason::SemanticValueChanged,
+                    ),
+                    entry(
+                        true,
+                        false,
+                        CachePreservationStatus::Changed,
+                        CacheChangeReason::SemanticValueChanged,
+                    ),
+                    entry(
+                        true,
+                        true,
+                        CachePreservationStatus::Changed,
+                        CacheChangeReason::Unchanged,
+                    ),
+                ],
+            ),
+            (
+                entry(
+                    true,
+                    false,
+                    CachePreservationStatus::Dropped,
+                    CacheChangeReason::NoTargetRepresentation,
+                ),
+                vec![
+                    entry(
+                        false,
+                        false,
+                        CachePreservationStatus::Dropped,
+                        CacheChangeReason::NoTargetRepresentation,
+                    ),
+                    entry(
+                        true,
+                        true,
+                        CachePreservationStatus::Dropped,
+                        CacheChangeReason::NoTargetRepresentation,
+                    ),
+                    entry(
+                        true,
+                        false,
+                        CachePreservationStatus::Dropped,
+                        CacheChangeReason::Unchanged,
+                    ),
+                ],
+            ),
+            (
+                entry(
+                    false,
+                    true,
+                    CachePreservationStatus::Introduced,
+                    CacheChangeReason::NoSourceRepresentation,
+                ),
+                vec![
+                    entry(
+                        true,
+                        true,
+                        CachePreservationStatus::Introduced,
+                        CacheChangeReason::NoSourceRepresentation,
+                    ),
+                    entry(
+                        false,
+                        false,
+                        CachePreservationStatus::Introduced,
+                        CacheChangeReason::NoSourceRepresentation,
+                    ),
+                    entry(
+                        false,
+                        true,
+                        CachePreservationStatus::Introduced,
+                        CacheChangeReason::Unchanged,
+                    ),
+                ],
+            ),
+            (
+                entry(
+                    true,
+                    false,
+                    CachePreservationStatus::NonPortable,
+                    CacheChangeReason::ProviderSemanticsDiffer,
+                ),
+                vec![
+                    entry(
+                        false,
+                        false,
+                        CachePreservationStatus::NonPortable,
+                        CacheChangeReason::ProviderSemanticsDiffer,
+                    ),
+                    entry(
+                        true,
+                        false,
+                        CachePreservationStatus::NonPortable,
+                        CacheChangeReason::Unchanged,
+                    ),
+                ],
+            ),
+        ] {
+            assert!(valid.has_valid_shape(), "expected valid entry: {valid:?}");
+            for invalid in invalid_entries {
+                assert!(
+                    !invalid.has_valid_shape(),
+                    "expected invalid entry: {invalid:?}"
+                );
+            }
+        }
     }
 }

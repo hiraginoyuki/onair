@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use llm_protocol_openai as openai;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::*;
 
@@ -53,6 +53,247 @@ fn profile_identifier_is_frozen() {
         MESSAGES_PROFILE
     );
     assert_eq!(AnthropicProfile::Messages.api_family(), ApiFamily::Messages);
+}
+
+#[test]
+fn message_text_assets_and_response_roles_cover_the_typed_variants() {
+    let profile = AnthropicProfile::Messages.profile_id();
+    let mut breakpoints = Vec::new();
+    let message = decode_message(
+        &json!({"role": "user", "content": "synthetic text"}),
+        &profile,
+        0,
+        &mut breakpoints,
+    )
+    .unwrap();
+    assert_eq!(message.role, ConversationRole::User);
+    assert_eq!(
+        message.content,
+        vec![ContentPart::Text {
+            text: "synthetic text".to_owned(),
+        }]
+    );
+    assert!(breakpoints.is_empty());
+
+    let asset_object = json!({
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "c3ludGhldGlj"
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let asset = decode_asset(&asset_object, "image", "/content/0").unwrap();
+    assert_eq!(asset.reference_type, AssetReferenceType::Data);
+    assert_eq!(asset.value, "data:image/png;base64,c3ludGhldGlj".to_owned());
+    assert_eq!(asset.media_type.as_deref(), Some("image/png"));
+
+    assert_eq!(
+        decode_response_role("user").unwrap(),
+        ConversationRole::User
+    );
+    assert!(decode_response_role("system").is_err());
+}
+
+#[test]
+fn error_categories_prefer_known_types_then_fall_back_to_status() {
+    for (error_type, expected) in [
+        ("invalid_request_error", ErrorCategory::InvalidRequest),
+        ("authentication_error", ErrorCategory::Authentication),
+        ("permission_error", ErrorCategory::Permission),
+        ("not_found_error", ErrorCategory::NotFound),
+        ("rate_limit_error", ErrorCategory::RateLimit),
+        ("conflict_error", ErrorCategory::Conflict),
+        ("api_error", ErrorCategory::Server),
+        ("overloaded_error", ErrorCategory::Server),
+    ] {
+        assert_eq!(
+            error_category(Some(error_type), 418),
+            expected,
+            "{error_type}"
+        );
+    }
+
+    for (status, expected) in [
+        (400, ErrorCategory::InvalidRequest),
+        (422, ErrorCategory::InvalidRequest),
+        (401, ErrorCategory::Authentication),
+        (403, ErrorCategory::Permission),
+        (404, ErrorCategory::NotFound),
+        (409, ErrorCategory::Conflict),
+        (429, ErrorCategory::RateLimit),
+        (500, ErrorCategory::Server),
+        (599, ErrorCategory::Server),
+        (418, ErrorCategory::Unknown),
+        (600, ErrorCategory::Unknown),
+    ] {
+        assert_eq!(error_category(None, status), expected, "status {status}");
+    }
+}
+
+#[test]
+fn typed_stream_parts_and_errors_have_a_closed_ordered_lifecycle() {
+    let body = [
+        (
+            "message_start",
+            json!({
+                "type": "message_start",
+                "message": {"id": "msg_synthetic"}
+            }),
+        ),
+        (
+            "content_block_start",
+            json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "call_synthetic", "name": "lookup"}
+            }),
+        ),
+        (
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "{\"q\":"}
+            }),
+        ),
+        (
+            "content_block_start",
+            json!({
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "thinking"}
+            }),
+        ),
+        (
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "thinking_delta", "thinking": "synthetic reasoning"}
+            }),
+        ),
+        (
+            "content_block_start",
+            json!({
+                "type": "content_block_start",
+                "index": 2,
+                "content_block": {"type": "refusal"}
+            }),
+        ),
+        (
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": 2,
+                "delta": {"type": "refusal_delta", "refusal": "synthetic refusal"}
+            }),
+        ),
+        (
+            "error",
+            json!({
+                "type": "error",
+                "error": {"type": "overloaded_error", "message": "synthetic failure"}
+            }),
+        ),
+    ]
+    .into_iter()
+    .map(|(event, value)| format!("event: {event}\ndata: {value}\n\n"))
+    .collect::<String>();
+    let events = decode_sse_chunks(&AnthropicProfile::Messages.profile_id(), &[body.as_bytes()])
+        .unwrap()
+        .output
+        .unwrap();
+
+    assert!(matches!(events.first(), Some(StreamEvent::RequestStarted)));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        StreamEvent::OutputPartStarted {
+            part_index: 0,
+            part_type: OutputPartType::ToolCall,
+            ..
+        }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        StreamEvent::OutputPartStarted {
+            part_index: 1,
+            part_type: OutputPartType::Reasoning,
+            ..
+        }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        StreamEvent::OutputPartStarted {
+            part_index: 2,
+            part_type: OutputPartType::Refusal,
+            ..
+        }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        StreamEvent::ToolCallDelta {
+            call_id,
+            name: Some(name),
+            arguments_delta,
+        } if call_id == "call_synthetic" && name == "lookup" && arguments_delta == "{\"q\":"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        StreamEvent::ReasoningDelta { text } if text == "synthetic reasoning"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        StreamEvent::RefusalPart { text, .. } if text == "synthetic refusal"
+    )));
+    let error_index = events
+        .iter()
+        .position(|event| matches!(event, StreamEvent::Error { .. }))
+        .unwrap();
+    assert_eq!(
+        events[..error_index]
+            .iter()
+            .filter(|event| matches!(event, StreamEvent::OutputPartEnded { .. }))
+            .count(),
+        3
+    );
+    assert!(matches!(
+        &events[error_index],
+        StreamEvent::Error { error }
+            if error.category == ErrorCategory::Server && error.message == "synthetic failure"
+    ));
+}
+
+#[test]
+fn opaque_stream_locations_advance_across_unparseable_frames() {
+    let body = concat!(
+        "event: synthetic.invalid\n",
+        "data: {not-json}\n\n",
+        "event: synthetic.future\n",
+        "data: {\"type\":\"synthetic.future\"}\n\n",
+        "event: synthetic.later\n",
+        "data: {\"type\":\"synthetic.later\"}\n\n",
+    );
+    let events = decode_sse_chunks(&AnthropicProfile::Messages.profile_id(), &[body.as_bytes()])
+        .unwrap()
+        .output
+        .unwrap();
+    let indices = events
+        .iter()
+        .filter_map(|event| {
+            let StreamEvent::Opaque { extension } = event else {
+                return None;
+            };
+            let SourceLocation::SseEvent { index, .. } = &extension.source_location else {
+                return None;
+            };
+            Some(*index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(indices, vec![0, 1, 2]);
 }
 
 #[test]
