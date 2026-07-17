@@ -54,9 +54,14 @@ the same IR boundary. They do not route production OnAir traffic.
 `llm-protocol-onair-parity` is a test-only workspace crate. It compares a
 selected buffered request/response subset against public current `onair-core`
 compatibility entry points using synthetic inputs; it does not route production
-traffic through the alpha codecs. It intentionally leaves streaming proxy
-normalizer parity out of scope because alpha stream conformance already tests
-the codec lifecycle under arbitrary byte partitioning.
+traffic through the alpha codecs. Each selected parity assertion projects the
+raw target JSON through an independent test-only semantic DTO and compares both
+implementations with a literal expected value; alpha target decoders are not the
+parity oracle. The projection normalizes only named representation differences,
+including system/developer instruction placement, provider-generated response
+metadata, and provider-specific cache-usage detail. It intentionally leaves
+streaming proxy normalizer parity out of scope because alpha stream conformance
+already tests the codec lifecycle under arbitrary byte partitioning.
 
 The same crate exposes `llm-protocol-benchmark`. It reads this tracked
 synthetic manifest and defaults to dry-run without network activity. Live mode
