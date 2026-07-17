@@ -102,9 +102,18 @@ pub struct BenchmarkReport {
 pub struct BenchmarkObservation {
     pub scenario_id: String,
     pub profile_id: String,
+    pub outcome: BenchmarkObservationOutcome,
     pub status: Option<u16>,
     pub latency_ms: u128,
     pub cache_tokens: CacheTokenObservation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkObservationOutcome {
+    NotRun,
+    ResponseReceived,
+    RequestFailed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -181,8 +190,6 @@ pub enum BenchmarkError {
     InvalidCredentialHeader(String),
     #[error("benchmark request construction failed: {0}")]
     RequestConstruction(String),
-    #[error("benchmark request failed for profile {profile_id}")]
-    Request { profile_id: String },
     #[error("live benchmark execution requires a prepared live configuration")]
     InvalidLivePreparation,
     #[error("failed to create local benchmark output directory {path}: {source}")]
@@ -289,13 +296,10 @@ pub fn dry_run_report(manifest: &ScenarioManifest) -> BenchmarkReport {
             .map(|scenario| BenchmarkObservation {
                 scenario_id: scenario.id.clone(),
                 profile_id: "not_contacted".to_owned(),
+                outcome: BenchmarkObservationOutcome::NotRun,
                 status: None,
                 latency_ms: 0,
-                cache_tokens: CacheTokenObservation {
-                    state: CacheObservationState::Inconclusive,
-                    read_tokens: None,
-                    write_tokens: None,
-                },
+                cache_tokens: inconclusive_cache_tokens(),
             })
             .collect(),
         note: "Dry run only. No provider request was made; cache results are not portability evidence."
@@ -307,6 +311,65 @@ pub async fn run_live_benchmark(
     manifest: &ScenarioManifest,
     prepared: &PreparedBenchmarkRun,
 ) -> Result<BenchmarkReport, BenchmarkError> {
+    let transport = ReqwestBenchmarkTransport {
+        client: reqwest::Client::new(),
+    };
+    run_live_benchmark_with_transport(manifest, prepared, &transport, |name| {
+        std::env::var(name).ok()
+    })
+    .await
+}
+
+#[derive(Clone, Debug)]
+struct BenchmarkTransportResponse {
+    status: u16,
+    body: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BenchmarkTransportError;
+
+trait BenchmarkTransport {
+    async fn execute(
+        &self,
+        request: reqwest::Request,
+    ) -> Result<BenchmarkTransportResponse, BenchmarkTransportError>;
+}
+
+struct ReqwestBenchmarkTransport {
+    client: reqwest::Client,
+}
+
+impl BenchmarkTransport for ReqwestBenchmarkTransport {
+    async fn execute(
+        &self,
+        request: reqwest::Request,
+    ) -> Result<BenchmarkTransportResponse, BenchmarkTransportError> {
+        let response = self
+            .client
+            .execute(request)
+            .await
+            .map_err(|_| BenchmarkTransportError)?;
+        let status = response.status().as_u16();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|_| BenchmarkTransportError)?
+            .to_vec();
+        Ok(BenchmarkTransportResponse { status, body })
+    }
+}
+
+async fn run_live_benchmark_with_transport<T, F>(
+    manifest: &ScenarioManifest,
+    prepared: &PreparedBenchmarkRun,
+    transport: &T,
+    credential_for: F,
+) -> Result<BenchmarkReport, BenchmarkError>
+where
+    T: BenchmarkTransport,
+    F: Fn(&str) -> Option<String>,
+{
     if prepared.mode != BenchmarkMode::Live {
         return Err(BenchmarkError::InvalidLivePreparation);
     }
@@ -314,48 +377,37 @@ pub async fn run_live_benchmark(
         .config
         .as_ref()
         .ok_or(BenchmarkError::InvalidLivePreparation)?;
-    let client = reqwest::Client::new();
+    validate_manifest(manifest)?;
+    validate_live_config(manifest, config)?;
+
     let mut observations = Vec::new();
     for scenario in &manifest.scenarios {
         for profile in &config.profiles {
             let request = synthetic_request_for_profile(&profile.profile_id, scenario)?;
-            let credential = std::env::var(&profile.credential_env)
-                .map_err(|_| BenchmarkError::MissingCredential(profile.credential_env.clone()))?;
-            let header_name =
-                reqwest::header::HeaderName::from_bytes(profile.credential_header.as_bytes())
-                    .map_err(|_| {
-                        BenchmarkError::InvalidCredentialHeader(profile.profile_id.clone())
-                    })?;
-            let header_value = reqwest::header::HeaderValue::from_str(&credential)
-                .map_err(|_| BenchmarkError::InvalidCredentialHeader(profile.profile_id.clone()))?;
-            let mut request_builder = client
-                .post(&profile.endpoint)
-                .header(header_name, header_value)
-                .body(request.body);
-            for header in request.headers {
-                request_builder = request_builder.header(header.name(), header.value());
-            }
+            let credential = credential_for(&profile.credential_env)
+                .ok_or_else(|| BenchmarkError::MissingCredential(profile.credential_env.clone()))?;
+            let request = benchmark_http_request(profile, request, &credential)?;
             let started = Instant::now();
-            let response = request_builder
-                .send()
-                .await
-                .map_err(|_| BenchmarkError::Request {
+            let response = transport.execute(request).await;
+            let latency_ms = started.elapsed().as_millis();
+            match response {
+                Ok(response) => observations.push(BenchmarkObservation {
+                    scenario_id: scenario.id.clone(),
                     profile_id: profile.profile_id.clone(),
-                })?;
-            let status = response.status().as_u16();
-            let response_bytes = response
-                .bytes()
-                .await
-                .map_err(|_| BenchmarkError::Request {
+                    outcome: BenchmarkObservationOutcome::ResponseReceived,
+                    status: Some(response.status),
+                    latency_ms,
+                    cache_tokens: redacted_cache_tokens(&response.body),
+                }),
+                Err(_) => observations.push(BenchmarkObservation {
+                    scenario_id: scenario.id.clone(),
                     profile_id: profile.profile_id.clone(),
-                })?;
-            observations.push(BenchmarkObservation {
-                scenario_id: scenario.id.clone(),
-                profile_id: profile.profile_id.clone(),
-                status: Some(status),
-                latency_ms: started.elapsed().as_millis(),
-                cache_tokens: redacted_cache_tokens(&response_bytes),
-            });
+                    outcome: BenchmarkObservationOutcome::RequestFailed,
+                    status: None,
+                    latency_ms,
+                    cache_tokens: inconclusive_cache_tokens(),
+                }),
+            }
         }
     }
     Ok(BenchmarkReport {
@@ -363,9 +415,36 @@ pub async fn run_live_benchmark(
         mode: "live".to_owned(),
         synthetic: true,
         observations,
-        note: "Cache token values are observed provider fields or inconclusive; they are not portability evidence."
+        note: "Request failures are retained without response bodies. Cache token values are observed provider fields or inconclusive; they are not portability evidence."
             .to_owned(),
     })
+}
+
+fn benchmark_http_request(
+    profile: &LiveProfileConfig,
+    request: SyntheticWireRequest,
+    credential: &str,
+) -> Result<reqwest::Request, BenchmarkError> {
+    let endpoint = reqwest::Url::parse(&profile.endpoint)
+        .map_err(|_| BenchmarkError::InvalidEndpoint(profile.profile_id.clone()))?;
+    let credential_name =
+        reqwest::header::HeaderName::from_bytes(profile.credential_header.as_bytes())
+            .map_err(|_| BenchmarkError::InvalidCredentialHeader(profile.profile_id.clone()))?;
+    let credential_value = reqwest::header::HeaderValue::from_str(credential)
+        .map_err(|_| BenchmarkError::InvalidCredentialHeader(profile.profile_id.clone()))?;
+    let mut http_request = reqwest::Request::new(reqwest::Method::POST, endpoint);
+    http_request
+        .headers_mut()
+        .insert(credential_name, credential_value);
+    for header in request.headers {
+        let name = reqwest::header::HeaderName::from_bytes(header.name().as_bytes())
+            .map_err(|error| BenchmarkError::RequestConstruction(error.to_string()))?;
+        let value = reqwest::header::HeaderValue::from_str(header.value())
+            .map_err(|error| BenchmarkError::RequestConstruction(error.to_string()))?;
+        http_request.headers_mut().append(name, value);
+    }
+    *http_request.body_mut() = Some(request.body.into());
+    Ok(http_request)
 }
 
 pub fn write_local_report(
@@ -396,6 +475,12 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<(), BenchmarkError> 
         || !manifest.synthetic
         || manifest.mode != "dry_run_default"
         || manifest.scenarios.is_empty()
+        || manifest.scenarios.iter().any(|scenario| {
+            scenario.id.is_empty()
+                || scenario.max_calls == 0
+                || scenario.max_input_tokens == 0
+                || scenario.max_output_tokens == 0
+        })
     {
         return Err(BenchmarkError::InvalidManifest);
     }
@@ -430,6 +515,8 @@ fn validate_live_config(
         {
             return Err(BenchmarkError::MissingHardCaps);
         }
+        reqwest::header::HeaderName::from_bytes(profile.credential_header.as_bytes())
+            .map_err(|_| BenchmarkError::InvalidCredentialHeader(profile.profile_id.clone()))?;
         let endpoint = reqwest::Url::parse(&profile.endpoint)
             .map_err(|_| BenchmarkError::InvalidEndpoint(profile.profile_id.clone()))?;
         if endpoint.scheme() != "https"
@@ -641,11 +728,7 @@ fn synthetic_request_for_profile(
 
 fn redacted_cache_tokens(body: &[u8]) -> CacheTokenObservation {
     let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return CacheTokenObservation {
-            state: CacheObservationState::Inconclusive,
-            read_tokens: None,
-            write_tokens: None,
-        };
+        return inconclusive_cache_tokens();
     };
     let usage = value.get("usage").and_then(Value::as_object);
     let read_tokens = usage
@@ -679,9 +762,23 @@ fn redacted_cache_tokens(body: &[u8]) -> CacheTokenObservation {
     }
 }
 
+fn inconclusive_cache_tokens() -> CacheTokenObservation {
+    CacheTokenObservation {
+        state: CacheObservationState::Inconclusive,
+        read_tokens: None,
+        write_tokens: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        collections::VecDeque,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use super::*;
     use llm_protocol_core::ANTHROPIC_MESSAGES_PROFILE;
@@ -693,6 +790,115 @@ mod tests {
             "llm-protocol-alpha-parity-{}-{sequence}",
             std::process::id()
         ))
+    }
+
+    #[derive(Clone, Debug)]
+    struct CapturedRequest {
+        method: reqwest::Method,
+        url: String,
+        headers: reqwest::header::HeaderMap,
+        body: Vec<u8>,
+    }
+
+    struct RecordingTransport {
+        requests: Mutex<Vec<CapturedRequest>>,
+        responses: Mutex<VecDeque<Result<BenchmarkTransportResponse, BenchmarkTransportError>>>,
+    }
+
+    impl RecordingTransport {
+        fn new(
+            responses: impl IntoIterator<
+                Item = Result<BenchmarkTransportResponse, BenchmarkTransportError>,
+            >,
+        ) -> Self {
+            Self {
+                requests: Mutex::new(Vec::new()),
+                responses: Mutex::new(responses.into_iter().collect()),
+            }
+        }
+
+        fn requests(&self) -> Vec<CapturedRequest> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl BenchmarkTransport for RecordingTransport {
+        async fn execute(
+            &self,
+            request: reqwest::Request,
+        ) -> Result<BenchmarkTransportResponse, BenchmarkTransportError> {
+            let captured = CapturedRequest {
+                method: request.method().clone(),
+                url: request.url().to_string(),
+                headers: request.headers().clone(),
+                body: request
+                    .body()
+                    .and_then(reqwest::Body::as_bytes)
+                    .expect("synthetic benchmark requests use in-memory bodies")
+                    .to_vec(),
+            };
+            self.requests.lock().unwrap().push(captured);
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Err(BenchmarkTransportError))
+        }
+    }
+
+    fn successful_response(status: u16, body: Value) -> BenchmarkTransportResponse {
+        BenchmarkTransportResponse {
+            status,
+            body: serde_json::to_vec(&body).unwrap(),
+        }
+    }
+
+    fn all_profile_config() -> LiveBenchmarkConfig {
+        LiveBenchmarkConfig {
+            hard_caps: BenchmarkCaps {
+                calls: 3,
+                input_tokens: 768,
+                output_tokens: 384,
+            },
+            profiles: vec![
+                LiveProfileConfig {
+                    profile_id: OPENAI_CHAT_COMPLETIONS_PROFILE.to_owned(),
+                    endpoint: "https://chat.example.invalid/v1/chat/completions".to_owned(),
+                    credential_header: "authorization".to_owned(),
+                    credential_env: "SYNTHETIC_OPENAI_KEY".to_owned(),
+                },
+                LiveProfileConfig {
+                    profile_id: OPENAI_RESPONSES_PROFILE.to_owned(),
+                    endpoint: "https://responses.example.invalid/v1/responses".to_owned(),
+                    credential_header: "authorization".to_owned(),
+                    credential_env: "SYNTHETIC_OPENAI_KEY".to_owned(),
+                },
+                LiveProfileConfig {
+                    profile_id: ANTHROPIC_MESSAGES_PROFILE.to_owned(),
+                    endpoint: "https://messages.example.invalid/v1/messages".to_owned(),
+                    credential_header: "x-api-key".to_owned(),
+                    credential_env: "SYNTHETIC_ANTHROPIC_KEY".to_owned(),
+                },
+            ],
+        }
+    }
+
+    fn prepared_live(config: LiveBenchmarkConfig) -> PreparedBenchmarkRun {
+        PreparedBenchmarkRun {
+            mode: BenchmarkMode::Live,
+            output_path: Some(PathBuf::from(
+                "/synthetic-repository/.local/observations.json",
+            )),
+            config: Some(config),
+        }
+    }
+
+    fn synthetic_credential(name: &str) -> Option<String> {
+        match name {
+            "SYNTHETIC_OPENAI_KEY" => Some("Bearer synthetic-openai-key".to_owned()),
+            "SYNTHETIC_ANTHROPIC_KEY" => Some("synthetic-anthropic-key".to_owned()),
+            _ => None,
+        }
     }
 
     fn test_manifest() -> ScenarioManifest {
@@ -728,6 +934,10 @@ mod tests {
         let report = dry_run_report(&test_manifest());
         assert_eq!(report.mode, "dry_run");
         assert_eq!(report.observations.len(), 1);
+        assert_eq!(
+            report.observations[0].outcome,
+            BenchmarkObservationOutcome::NotRun
+        );
         assert_eq!(
             report.observations[0].cache_tokens.state,
             CacheObservationState::Inconclusive
@@ -775,6 +985,26 @@ mod tests {
                 required: 256,
             }
         ));
+    }
+
+    #[test]
+    fn benchmark_manifest_requires_nonzero_scenario_budgets() {
+        for field in ["max_calls", "max_input_tokens", "max_output_tokens"] {
+            let mut manifest = test_manifest();
+            match field {
+                "max_calls" => manifest.scenarios[0].max_calls = 0,
+                "max_input_tokens" => manifest.scenarios[0].max_input_tokens = 0,
+                "max_output_tokens" => manifest.scenarios[0].max_output_tokens = 0,
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    validate_manifest(&manifest),
+                    Err(BenchmarkError::InvalidManifest)
+                ),
+                "accepted zero {field}"
+            );
+        }
     }
 
     #[test]
@@ -904,6 +1134,7 @@ mod tests {
             observations: vec![BenchmarkObservation {
                 scenario_id: "synthetic".to_owned(),
                 profile_id: OPENAI_CHAT_COMPLETIONS_PROFILE.to_owned(),
+                outcome: BenchmarkObservationOutcome::ResponseReceived,
                 status: Some(200),
                 latency_ms: 1,
                 cache_tokens: observation,
@@ -913,6 +1144,284 @@ mod tests {
         let serialized = serde_json::to_string(&report).unwrap();
         assert!(!serialized.contains("synthetic-response-id"));
         assert!(!serialized.contains("synthetic private text"));
+    }
+
+    #[tokio::test]
+    async fn injected_transport_covers_all_profiles_and_redacts_responses() {
+        let transport = RecordingTransport::new([
+            Ok(successful_response(
+                200,
+                json!({
+                    "id": "chat-sensitive-response",
+                    "choices": [{"message": {"content": "chat-sensitive-output"}}],
+                    "usage": {"prompt_tokens_details": {"cached_tokens": 3}}
+                }),
+            )),
+            Ok(successful_response(
+                201,
+                json!({
+                    "id": "responses-sensitive-response",
+                    "output_text": "responses-sensitive-output",
+                    "usage": {"input_tokens_details": {"cached_tokens": 5}}
+                }),
+            )),
+            Ok(successful_response(
+                202,
+                json!({
+                    "id": "messages-sensitive-response",
+                    "content": [{"type": "text", "text": "messages-sensitive-output"}],
+                    "usage": {
+                        "cache_read_input_tokens": 7,
+                        "cache_creation_input_tokens": 2
+                    }
+                }),
+            )),
+        ]);
+        let report = run_live_benchmark_with_transport(
+            &test_manifest(),
+            &prepared_live(all_profile_config()),
+            &transport,
+            synthetic_credential,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.mode, "live");
+        assert_eq!(report.observations.len(), 3);
+        assert_eq!(
+            report
+                .observations
+                .iter()
+                .map(|observation| (
+                    observation.profile_id.as_str(),
+                    observation.outcome,
+                    observation.status,
+                    observation.cache_tokens.read_tokens,
+                    observation.cache_tokens.write_tokens,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    OPENAI_CHAT_COMPLETIONS_PROFILE,
+                    BenchmarkObservationOutcome::ResponseReceived,
+                    Some(200),
+                    Some(3),
+                    None,
+                ),
+                (
+                    OPENAI_RESPONSES_PROFILE,
+                    BenchmarkObservationOutcome::ResponseReceived,
+                    Some(201),
+                    Some(5),
+                    None,
+                ),
+                (
+                    ANTHROPIC_MESSAGES_PROFILE,
+                    BenchmarkObservationOutcome::ResponseReceived,
+                    Some(202),
+                    Some(7),
+                    Some(2),
+                ),
+            ]
+        );
+
+        let requests = transport.requests();
+        assert_eq!(requests.len(), 3);
+        for request in &requests {
+            assert_eq!(request.method, reqwest::Method::POST);
+            assert_eq!(
+                request.headers.get("content-type").unwrap(),
+                "application/json"
+            );
+        }
+        assert_eq!(
+            requests[0].url,
+            "https://chat.example.invalid/v1/chat/completions"
+        );
+        assert_eq!(
+            requests[0].headers.get("authorization").unwrap(),
+            "Bearer synthetic-openai-key"
+        );
+        let chat: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(chat["model"], "synthetic-benchmark-model");
+        assert_eq!(chat["max_completion_tokens"], 128);
+        assert!(chat["messages"].is_array());
+
+        assert_eq!(
+            requests[1].url,
+            "https://responses.example.invalid/v1/responses"
+        );
+        assert_eq!(
+            requests[1].headers.get("authorization").unwrap(),
+            "Bearer synthetic-openai-key"
+        );
+        let responses: Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(responses["model"], "synthetic-benchmark-model");
+        assert_eq!(responses["max_output_tokens"], 128);
+        assert!(responses["input"].is_array());
+
+        assert_eq!(
+            requests[2].url,
+            "https://messages.example.invalid/v1/messages"
+        );
+        assert_eq!(
+            requests[2].headers.get("x-api-key").unwrap(),
+            "synthetic-anthropic-key"
+        );
+        assert_eq!(
+            requests[2].headers.get("anthropic-version").unwrap(),
+            "2023-06-01"
+        );
+        let messages: Value = serde_json::from_slice(&requests[2].body).unwrap();
+        assert_eq!(messages["model"], "synthetic-benchmark-model");
+        assert_eq!(messages["max_tokens"], 128);
+        assert!(messages["messages"].is_array());
+
+        let serialized = serde_json::to_string(&report).unwrap();
+        for forbidden in [
+            "sensitive-response",
+            "sensitive-output",
+            "synthetic-openai-key",
+            "synthetic-anthropic-key",
+            "example.invalid",
+            "Synthetic benchmark request.",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "redacted report contained {forbidden}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn live_execution_revalidates_hard_caps_before_transport() {
+        for kind in ["calls", "input_tokens", "output_tokens"] {
+            let mut config = all_profile_config();
+            let (configured, required) = match kind {
+                "calls" => {
+                    config.hard_caps.calls = 2;
+                    (2, 3)
+                }
+                "input_tokens" => {
+                    config.hard_caps.input_tokens = 767;
+                    (767, 768)
+                }
+                "output_tokens" => {
+                    config.hard_caps.output_tokens = 383;
+                    (383, 384)
+                }
+                _ => unreachable!(),
+            };
+            let transport = RecordingTransport::new([]);
+            let error = run_live_benchmark_with_transport(
+                &test_manifest(),
+                &prepared_live(config),
+                &transport,
+                |_| panic!("credential lookup must follow cap validation"),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                error,
+                BenchmarkError::CapBelowTotal {
+                    kind: actual_kind,
+                    configured: actual_configured,
+                    required: actual_required,
+                } if actual_kind == kind
+                    && actual_configured == configured
+                    && actual_required == required
+            ));
+            assert!(transport.requests().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn live_execution_accounts_for_transport_failure_and_continues() {
+        let mut config = all_profile_config();
+        config.hard_caps = BenchmarkCaps {
+            calls: 2,
+            input_tokens: 512,
+            output_tokens: 256,
+        };
+        config.profiles.truncate(2);
+        let transport = RecordingTransport::new([
+            Err(BenchmarkTransportError),
+            Ok(successful_response(
+                200,
+                json!({"usage": {"input_tokens_details": {"cached_tokens": 5}}}),
+            )),
+        ]);
+        let report = run_live_benchmark_with_transport(
+            &test_manifest(),
+            &prepared_live(config),
+            &transport,
+            synthetic_credential,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(transport.requests().len(), 2);
+        assert_eq!(report.observations.len(), 2);
+        assert_eq!(
+            report.observations[0],
+            BenchmarkObservation {
+                scenario_id: "synthetic".to_owned(),
+                profile_id: OPENAI_CHAT_COMPLETIONS_PROFILE.to_owned(),
+                outcome: BenchmarkObservationOutcome::RequestFailed,
+                status: None,
+                latency_ms: report.observations[0].latency_ms,
+                cache_tokens: inconclusive_cache_tokens(),
+            }
+        );
+        assert_eq!(
+            report.observations[1].outcome,
+            BenchmarkObservationOutcome::ResponseReceived
+        );
+        assert_eq!(report.observations[1].status, Some(200));
+        assert_eq!(report.observations[1].cache_tokens.read_tokens, Some(5));
+    }
+
+    #[tokio::test]
+    async fn live_execution_rejects_missing_or_invalid_credentials_without_transport() {
+        let mut config = all_profile_config();
+        config.hard_caps = BenchmarkCaps {
+            calls: 1,
+            input_tokens: 256,
+            output_tokens: 128,
+        };
+        config.profiles.truncate(1);
+
+        let missing_transport = RecordingTransport::new([]);
+        let missing = run_live_benchmark_with_transport(
+            &test_manifest(),
+            &prepared_live(config.clone()),
+            &missing_transport,
+            |_| None,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            missing,
+            BenchmarkError::MissingCredential(name) if name == "SYNTHETIC_OPENAI_KEY"
+        ));
+        assert!(missing_transport.requests().is_empty());
+
+        let invalid_transport = RecordingTransport::new([]);
+        let invalid = run_live_benchmark_with_transport(
+            &test_manifest(),
+            &prepared_live(config),
+            &invalid_transport,
+            |_| Some("synthetic\ninvalid".to_owned()),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            invalid,
+            BenchmarkError::InvalidCredentialHeader(profile)
+                if profile == OPENAI_CHAT_COMPLETIONS_PROFILE
+        ));
+        assert!(invalid_transport.requests().is_empty());
     }
 
     #[test]
@@ -960,6 +1469,25 @@ mod tests {
         };
         let error = validate_live_config(&test_manifest(), &config).unwrap_err();
         assert!(matches!(error, BenchmarkError::InvalidEndpoint(_)));
+    }
+
+    #[test]
+    fn live_config_rejects_invalid_credential_header_name() {
+        let mut config = all_profile_config();
+        config.profiles.truncate(1);
+        config.hard_caps = BenchmarkCaps {
+            calls: 1,
+            input_tokens: 256,
+            output_tokens: 128,
+        };
+        config.profiles[0].credential_header = "invalid header".to_owned();
+
+        let error = validate_live_config(&test_manifest(), &config).unwrap_err();
+        assert!(matches!(
+            error,
+            BenchmarkError::InvalidCredentialHeader(profile)
+                if profile == OPENAI_CHAT_COMPLETIONS_PROFILE
+        ));
     }
 
     #[test]

@@ -69,9 +69,9 @@ requires `--live`, `--confirm-live`, a local-only JSON configuration beneath
 `.local/` when it is stored inside this checkout (an external local path is
 also accepted), hard call/input/output caps that cover all selected
 scenario/profile work, and a local-only output path beneath `.local/`. It
-generates synthetic protocol requests and writes only redacted status, latency,
-profile identity, and observed-or-inconclusive cache token totals. It never
-treats cache observations as portability evidence.
+generates synthetic protocol requests and writes only redacted outcome, status,
+latency, profile identity, and observed-or-inconclusive cache token totals. It
+never treats cache observations as portability evidence.
 
 ## Status
 
