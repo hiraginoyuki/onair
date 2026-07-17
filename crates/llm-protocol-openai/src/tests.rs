@@ -75,18 +75,21 @@ fn active_openai_vectors_run_through_the_common_ir_boundary() {
 
         assert_eq!(
             serde_json::to_value(encoded.fidelity).unwrap(),
-            vector["expect"]["fidelity"],
+            vector["expect"]["encode"]["fidelity"],
             "vector {vector_id}"
         );
         assert_eq!(
             diagnostic_codes(&encoded),
-            vector["expect"]["diagnostic_codes"]
+            vector["expect"]["encode"]["diagnostics"]
                 .as_array()
                 .unwrap()
-                .to_vec(),
+                .iter()
+                .map(|diagnostic| diagnostic["code"].clone())
+                .collect::<Vec<_>>(),
             "vector {vector_id}"
         );
-        if let Some(expect_replay) = vector["expect"].get("exact_replay") {
+        if vector["kind"] == "exact_replay" {
+            let expected_envelope = &vector["expect"]["encode"]["envelope"];
             let output = encoded.output.as_ref().expect("replay output");
             assert_eq!(
                 output
@@ -95,17 +98,17 @@ fn active_openai_vectors_run_through_the_common_ir_boundary() {
                     .iter()
                     .map(|header| header.raw_line.clone())
                     .collect::<Vec<_>>(),
-                expect_replay["protocol_headers"]
+                expected_envelope["protocol_headers"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .map(|value| value.as_str().unwrap().to_owned())
+                    .map(|value| value["raw_line"].as_str().unwrap().to_owned())
                     .collect::<Vec<_>>(),
                 "vector {vector_id}"
             );
             assert_eq!(
                 encode_base64(&output.wire.body),
-                expect_replay["body_base64"].as_str().unwrap(),
+                expected_envelope["body_base64"].as_str().unwrap(),
                 "vector {vector_id}"
             );
         }
@@ -171,6 +174,42 @@ fn chat_and_responses_request_vectors_canonically_cross_encode() {
     );
     assert_eq!(responses_body["max_completion_tokens"], 24);
     assert_eq!(responses_body["response_format"]["type"], "json_schema");
+    assert_eq!(
+        responses_body["response_format"]["json_schema"]["name"],
+        "synthetic_output"
+    );
+    assert!(
+        responses_body["response_format"]["json_schema"]
+            .get("type")
+            .is_none()
+    );
+}
+
+#[test]
+fn chat_structured_output_requires_a_provider_schema_name() {
+    let responses = read_vector("openai/responses.request.text-tool.json");
+    let decoded = decode_vector(&responses).edit(|payload| {
+        let OpenAiPayload::Request(request) = payload else {
+            panic!("request vector decodes to a request");
+        };
+        request
+            .output_schema
+            .as_mut()
+            .expect("request has structured-output intent")
+            .name = None;
+    });
+
+    let result = encode_canonical(
+        decoded.into_canonical(),
+        &OpenAiProfile::ChatCompletions.profile_id(),
+    )
+    .unwrap();
+    assert_eq!(result.fidelity, Fidelity::Unsupported);
+    assert_eq!(
+        diagnostic_codes(&result),
+        vec![json!("unsupported_feature")]
+    );
+    assert!(result.output.is_none());
 }
 
 #[test]
@@ -327,6 +366,143 @@ fn continuation_and_unknown_fields_are_contained_across_profiles() {
 }
 
 #[test]
+fn contradictory_continuation_profile_metadata_is_rejected() {
+    let continuation = read_vector("openai/responses.request.continuation-unsupported.json");
+    let canonical = decode_vector(&continuation)
+        .edit(|payload| {
+            let OpenAiPayload::Request(request) = payload else {
+                panic!("continuation vector decodes to a request");
+            };
+            request
+                .continuation
+                .as_mut()
+                .expect("request has a continuation")
+                .extension
+                .issuing_profile = ProfileId::new(ANTHROPIC_MESSAGES_PROFILE).unwrap();
+        })
+        .into_canonical();
+
+    let result = encode_canonical(canonical, &OpenAiProfile::Responses.profile_id()).unwrap();
+    assert_eq!(result.fidelity, Fidelity::Unsupported);
+    assert_eq!(
+        diagnostic_codes(&result),
+        vec![json!("non_portable_continuation_handle")]
+    );
+    assert!(result.output.is_none());
+}
+
+#[test]
+fn standard_responses_null_error_field_is_not_a_protocol_error() {
+    let profile = OpenAiProfile::Responses.profile_id();
+    let wire = WireEnvelope {
+        profile_id: profile,
+        status: 200,
+        body_kind: ProtocolBodyKind::Json,
+        protocol_headers: vec![ProtocolHeaderLine::new("content-type: application/json").unwrap()],
+        body: serde_json::to_vec(&json!({
+            "id": "resp_synthetic",
+            "object": "response",
+            "status": "completed",
+            "error": null,
+            "incomplete_details": null,
+            "model": "synthetic-model",
+            "output": []
+        }))
+        .unwrap(),
+        adapter_metadata: AdapterMetadata::default(),
+    };
+
+    let decoded = decode(wire.retained_wire(), wire.adapter_metadata).unwrap();
+    assert_eq!(decoded.fidelity, Fidelity::Exact);
+    assert!(matches!(
+        decoded.output.as_ref().map(DecodedEnvelope::value),
+        Some(OpenAiPayload::Response(_))
+    ));
+}
+
+#[test]
+fn multiple_chat_choices_are_not_reported_as_an_exact_empty_response() {
+    let profile = OpenAiProfile::ChatCompletions.profile_id();
+    let wire = WireEnvelope {
+        profile_id: profile,
+        status: 200,
+        body_kind: ProtocolBodyKind::Json,
+        protocol_headers: vec![ProtocolHeaderLine::new("content-type: application/json").unwrap()],
+        body: serde_json::to_vec(&json!({
+            "id": "chatcmpl_synthetic",
+            "model": "synthetic-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "first"},
+                    "finish_reason": "stop"
+                },
+                {
+                    "index": 1,
+                    "message": {"role": "assistant", "content": "second"},
+                    "finish_reason": "stop"
+                }
+            ]
+        }))
+        .unwrap(),
+        adapter_metadata: AdapterMetadata::default(),
+    };
+
+    let decoded = decode(wire.retained_wire(), wire.adapter_metadata).unwrap();
+    assert_eq!(decoded.fidelity, Fidelity::Unsupported);
+    assert_eq!(
+        decoded
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        vec![DiagnosticCode::UnsupportedFeature]
+    );
+    assert!(decoded.output.is_none());
+}
+
+#[test]
+fn canonical_responses_encoding_preserves_nonterminal_status() {
+    for status in ["queued", "in_progress"] {
+        let profile = OpenAiProfile::Responses.profile_id();
+        let wire = WireEnvelope {
+            profile_id: profile.clone(),
+            status: 200,
+            body_kind: ProtocolBodyKind::Json,
+            protocol_headers: vec![
+                ProtocolHeaderLine::new("content-type: application/json").unwrap(),
+            ],
+            body: serde_json::to_vec(&json!({
+                "id": "resp_synthetic",
+                "object": "response",
+                "status": status,
+                "error": null,
+                "model": "synthetic-model",
+                "output": []
+            }))
+            .unwrap(),
+            adapter_metadata: AdapterMetadata::default(),
+        };
+        let canonical = decode(wire.retained_wire(), wire.adapter_metadata)
+            .unwrap()
+            .output
+            .expect("nonterminal response decodes")
+            .edit(|payload| {
+                let OpenAiPayload::Response(response) = payload else {
+                    panic!("wire body decodes to a response");
+                };
+                response.model = Some("synthetic-mutated-model".to_owned());
+            })
+            .into_canonical();
+
+        let result = encode_canonical(canonical, &profile).unwrap();
+        assert_eq!(result.fidelity, Fidelity::Exact, "status {status}");
+        let body: Value = serde_json::from_slice(&result.output.unwrap().wire.body).unwrap();
+        assert_eq!(body["status"], status, "status {status}");
+    }
+}
+
+#[test]
 fn openai_stream_normalization_is_partition_invariant_and_cross_encodes() {
     for (path, source, target, marker) in [
         (
@@ -397,6 +573,9 @@ fn unknown_sse_events_are_opaque_for_replay_and_lossy_across_profiles() {
     assert_eq!(encoded.fidelity, Fidelity::Lossy);
     assert_eq!(
         diagnostic_codes(&encoded),
-        vec![json!("forward_compatible_unknown")]
+        vec![
+            json!("semantic_change"),
+            json!("forward_compatible_unknown"),
+        ]
     );
 }

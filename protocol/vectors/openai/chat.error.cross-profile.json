@@ -1,16 +1,66 @@
 {
-  "protocol_version": "0.1.0",
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "error",
+        "payload": {
+          "category": "rate_limit",
+          "code": "synthetic_rate_limit",
+          "extensions": [],
+          "message": "synthetic rate limit",
+          "param": "model",
+          "retry_after_ms": 2000
+        },
+        "profile_id": "openai.chat-completions.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "diagnostics": [],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "eyJlcnJvciI6eyJjb2RlIjoic3ludGhldGljX3JhdGVfbGltaXQiLCJtZXNzYWdlIjoic3ludGhldGljIHJhdGUgbGltaXQiLCJwYXJhbSI6Im1vZGVsIiwidHlwZSI6InJhdGVfbGltaXRfZXJyb3IifX0=",
+        "body_kind": "json",
+        "profile_id": "openai.responses.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "content-type: application/json"
+          },
+          {
+            "raw_line": "retry-after: 2"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 429
+      },
+      "fidelity": "exact",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "error",
+          "payload": {
+            "category": "rate_limit",
+            "code": "synthetic_rate_limit",
+            "extensions": [],
+            "message": "synthetic rate limit",
+            "param": "model",
+            "retry_after_ms": 2000
+          },
+          "profile_id": "openai.responses.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  },
   "id": "openai.chat.error.cross-profile",
-  "title": "Chat rate-limit error preserves typed error semantics when encoded for Responses",
-  "synthetic": true,
-  "source_profile": "openai.chat-completions.alpha-0.1.0",
-  "target_profile": "openai.responses.alpha-0.1.0",
-  "kind": "cross_profile_conversion",
   "input": {
     "envelope": {
-      "profile_id": "openai.chat-completions.alpha-0.1.0",
-      "status": 429,
+      "body_base64": "eyJlcnJvciI6eyJtZXNzYWdlIjoic3ludGhldGljIHJhdGUgbGltaXQiLCJ0eXBlIjoicmF0ZV9saW1pdF9lcnJvciIsInBhcmFtIjoibW9kZWwiLCJjb2RlIjoic3ludGhldGljX3JhdGVfbGltaXQifX0=",
       "body_kind": "json",
+      "profile_id": "openai.chat-completions.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "content-type: application/json"
@@ -19,11 +69,14 @@
           "raw_line": "retry-after: 2"
         }
       ],
-      "body_base64": "eyJlcnJvciI6eyJtZXNzYWdlIjoic3ludGhldGljIHJhdGUgbGltaXQiLCJ0eXBlIjoicmF0ZV9saW1pdF9lcnJvciIsInBhcmFtIjoibW9kZWwiLCJjb2RlIjoic3ludGhldGljX3JhdGVfbGltaXQifX0="
+      "protocol_version": "0.1.0",
+      "status": 429
     }
   },
-  "expect": {
-    "fidelity": "exact",
-    "diagnostic_codes": []
-  }
+  "kind": "cross_profile_conversion",
+  "protocol_version": "0.1.0",
+  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "openai.responses.alpha-0.1.0",
+  "title": "Chat rate-limit error preserves typed error semantics when encoded for Responses"
 }

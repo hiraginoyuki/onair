@@ -22,6 +22,28 @@ The cache-report schema covers content-free structural reports. It intentionally
 does not model prompt content, raw cache keys, retention values, or default
 fingerprints.
 
+Active envelope vectors freeze both sides of the IR boundary: complete source
+IR, complete target wire envelopes, and complete target IR obtained by
+re-decoding canonical output, plus ordered diagnostics and cache reports.
+Cache-analysis vectors carry a complete typed cache-plan
+application and resulting request IR. The shared test-only conformance runner
+rejects duplicate or orphaned vectors and executes every active manifest entry.
+An ignored maintenance test can regenerate expectations only when explicitly
+enabled with `LLM_PROTOCOL_BLESS=1`; generated changes still require review
+because the committed vectors, not Rust serialization, are normative.
+
+The manifest also declares a machine-checked coverage matrix. All six directed
+profile pairs must cover requests, buffered responses, protocol errors,
+streams, and cache reports, for thirty cells total. Each cell is claimed once
+with an explicit support classification. `supported` cells may still be
+adapted or lossy; unsupported cells must produce no target envelope.
+
+A second machine-checked matrix covers all nine typed content-part variants and
+all thirteen stream-event variants. Every feature has separate source-decode
+and cross-profile disposition evidence. Ordered target semantics are checked by
+re-decoding the canonical target envelope; opaque content and events can only
+claim explicit non-portability across profiles.
+
 All public artifacts in this directory use contract version `0.1.0`.
 The reference implementation currently includes frozen OpenAI Chat
 Completions, OpenAI Responses, and Anthropic Messages codecs for the selected

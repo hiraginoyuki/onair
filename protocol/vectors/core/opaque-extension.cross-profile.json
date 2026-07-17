@@ -1,25 +1,176 @@
 {
-  "protocol_version": "0.1.0",
-  "id": "core.opaque-extension.cross-profile",
-  "title": "Unknown provider field is reported rather than dropped across profiles",
-  "synthetic": true,
-  "source_profile": "openai.responses.alpha-0.1.0",
-  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
-  "kind": "cross_profile_conversion",
-  "input": {
-    "opaque_extension": {
-      "issuing_profile": "openai.responses.alpha-0.1.0",
-      "namespace": "openai.responses.future_event",
-      "source_location": "/output/0/future_field",
-      "payload": {
-        "synthetic": true
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "request",
+        "payload": {
+          "extensions": [
+            {
+              "issuing_profile": "openai.responses.alpha-0.1.0",
+              "namespace": "openai.responses.request.unknown_field",
+              "payload": {
+                "kind": "json",
+                "value": {
+                  "enabled": true
+                }
+              },
+              "source_location": {
+                "kind": "json_pointer",
+                "pointer": "/future_synthetic_option"
+              }
+            }
+          ],
+          "generation": {
+            "max_output_tokens": 24,
+            "stop_sequences": []
+          },
+          "instructions": [],
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "synthetic request",
+                  "type": "text"
+                }
+              ],
+              "extensions": [],
+              "role": "user"
+            }
+          ],
+          "model": "synthetic-model",
+          "stream": false,
+          "tools": []
+        },
+        "profile_id": "openai.responses.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "cache_report": {
+        "entries": [
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            }
+          }
+        ],
+        "protocol_version": "0.1.0"
+      },
+      "diagnostics": [
+        {
+          "code": "forward_compatible_unknown",
+          "location": {
+            "kind": "json_pointer",
+            "pointer": "/future_synthetic_option"
+          },
+          "severity": "warning"
+        }
+      ],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "eyJtYXhfdG9rZW5zIjoyNCwibWVzc2FnZXMiOlt7ImNvbnRlbnQiOlt7InRleHQiOiJzeW50aGV0aWMgcmVxdWVzdCIsInR5cGUiOiJ0ZXh0In1dLCJyb2xlIjoidXNlciJ9XSwibW9kZWwiOiJzeW50aGV0aWMtbW9kZWwifQ==",
+        "body_kind": "json",
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "content-type: application/json"
+          },
+          {
+            "raw_line": "anthropic-version: 2023-06-01"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 200
+      },
+      "fidelity": "lossy",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "request",
+          "payload": {
+            "extensions": [],
+            "generation": {
+              "max_output_tokens": 24,
+              "stop_sequences": []
+            },
+            "instructions": [],
+            "messages": [
+              {
+                "content": [
+                  {
+                    "text": "synthetic request",
+                    "type": "text"
+                  }
+                ],
+                "extensions": [],
+                "role": "user"
+              }
+            ],
+            "model": "synthetic-model",
+            "stream": false,
+            "tools": []
+          },
+          "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
       }
     }
   },
-  "expect": {
-    "fidelity": "lossy",
-    "diagnostic_codes": [
-      "forward_compatible_unknown"
-    ]
-  }
+  "id": "core.opaque-extension.cross-profile",
+  "input": {
+    "envelope": {
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsImlucHV0Ijoic3ludGhldGljIHJlcXVlc3QiLCJtYXhfb3V0cHV0X3Rva2VucyI6MjQsImZ1dHVyZV9zeW50aGV0aWNfb3B0aW9uIjp7ImVuYWJsZWQiOnRydWV9fQ==",
+      "body_kind": "json",
+      "profile_id": "openai.responses.alpha-0.1.0",
+      "protocol_headers": [
+        {
+          "raw_line": "Content-Type: application/json"
+        }
+      ],
+      "protocol_version": "0.1.0",
+      "status": 200
+    }
+  },
+  "kind": "cross_profile_conversion",
+  "protocol_version": "0.1.0",
+  "source_profile": "openai.responses.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "title": "Unknown provider field is reported rather than dropped across profiles"
 }

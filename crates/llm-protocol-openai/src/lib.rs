@@ -14,15 +14,18 @@ use llm_protocol_core::{
     DiagnosticSeverity, EnvelopeError, ErrorCategory, Fidelity, FinishReason, GenerationControls,
     JsonSchemaOutputIntent, OPENAI_CHAT_COMPLETIONS_PROFILE, OPENAI_RESPONSES_PROFILE,
     OpaqueExtension, OpaquePayload, OpenAiCacheIntent, OutputPartType, OutputSchemaEnforcement,
-    ProfileId, ProtocolBodyKind, ProtocolError, ProtocolHeaderLine, ProtocolPayload,
-    ProtocolRequest, ProtocolResponse, ReplayEnvelope, RetainedWire, SourceLocation, SseFrame,
-    SseFramer, SseFramingError, StreamEvent, ToolDefinition, Usage,
+    PROTOCOL_VERSION, ProfileId, ProtocolBodyKind, ProtocolError, ProtocolHeaderLine,
+    ProtocolPayload, ProtocolRequest, ProtocolResponse, ReplayEnvelope, RetainedWire,
+    SourceLocation, SseFrame, SseFramer, SseFramingError, StreamEvent, ToolDefinition, Usage,
 };
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 pub const CHAT_COMPLETIONS_PROFILE: &str = OPENAI_CHAT_COMPLETIONS_PROFILE;
 pub const RESPONSES_PROFILE: &str = OPENAI_RESPONSES_PROFILE;
+
+const RESPONSES_QUEUED_HANDLE_NAMESPACE: &str = "openai.responses.response_handle.queued";
+const RESPONSES_IN_PROGRESS_HANDLE_NAMESPACE: &str = "openai.responses.response_handle.in_progress";
 
 /// A decoded OpenAI envelope. A codec determines the payload from the frozen
 /// profile and envelope shape; callers do not choose a pair-specific
@@ -194,6 +197,12 @@ pub fn wire_envelope_from_json(value: &Value) -> Result<WireEnvelope, CodecError
     let object = value
         .as_object()
         .ok_or_else(|| CodecError::InvalidEnvelope("envelope must be an object".to_owned()))?;
+    let protocol_version = required_str(object, "protocol_version")?;
+    if protocol_version != PROTOCOL_VERSION {
+        return Err(CodecError::InvalidEnvelope(format!(
+            "unsupported protocol_version {protocol_version}"
+        )));
+    }
     let profile_id = profile_id_field(object, "profile_id")?;
     let status = required_u16(object, "status")?;
     let body_kind = match required_str(object, "body_kind")? {
@@ -247,6 +256,7 @@ pub fn wire_envelope_from_json(value: &Value) -> Result<WireEnvelope, CodecError
 
 pub fn wire_envelope_to_json(wire: &WireEnvelope) -> Value {
     json!({
+        "protocol_version": PROTOCOL_VERSION,
         "profile_id": wire.profile_id,
         "status": wire.status,
         "body_kind": match wire.body_kind {
@@ -399,14 +409,14 @@ fn decode_json(
         .as_object()
         .ok_or_else(|| invalid_shape(profile, "JSON body must be an object"))?;
 
-    if object.contains_key("error") || retained.status >= 400 {
+    if object.get("error").is_some_and(Value::is_object) || retained.status >= 400 {
         return decode_error(profile, object, retained);
     }
 
     match profile {
         OpenAiProfile::ChatCompletions => {
             if object.contains_key("choices") {
-                decode_chat_response(object, &retained.profile_id).map(PayloadResult::exact)
+                decode_chat_response(object, &retained.profile_id)
             } else {
                 decode_chat_request(object, &retained.profile_id)
             }
@@ -678,37 +688,15 @@ fn decode_responses_request(
 fn decode_chat_response(
     object: &Map<String, Value>,
     profile_id: &ProfileId,
-) -> Result<OpenAiPayload, CodecError> {
+) -> Result<PayloadResult, CodecError> {
     let choices = required_array(object, "choices", OpenAiProfile::ChatCompletions)?;
     if choices.len() > 1 {
-        return Ok(OpenAiPayload::Response(ProtocolResponse {
-            id: optional_string(object, "id"),
-            model: optional_string(object, "model"),
-            output: Vec::new(),
-            usage: object.get("usage").and_then(decode_chat_usage),
-            finish_reason: FinishReason::new(FinishReason::STOP)
-                .expect("stop finish reason is non-empty"),
-            continuation: None,
-            extensions: vec![opaque_json(
-                profile_id,
-                "openai.chat.response.multiple_choices",
-                SourceLocation::JsonPointer {
-                    pointer: "/choices".to_owned(),
-                },
-                Value::Array(choices.clone()),
-            )],
-        }));
-    }
-    let finish_reasons: BTreeSet<_> = choices
-        .iter()
-        .filter_map(|choice| choice.get("finish_reason").and_then(Value::as_str))
-        .map(normalize_chat_finish_reason)
-        .collect();
-    if finish_reasons.len() > 1 {
-        return Err(invalid_shape(
-            OpenAiProfile::ChatCompletions,
-            "multiple choices with distinct finish reasons are outside the response IR shape",
-        ));
+        return Ok(PayloadResult::unsupported(vec![unsupported_diagnostic(
+            SourceLocation::JsonPointer {
+                pointer: "/choices".to_owned(),
+            },
+            "multiple Chat Completions choices are outside the typed alpha response subset",
+        )]));
     }
     let mut output = Vec::with_capacity(choices.len());
     for (index, choice) in choices.iter().enumerate() {
@@ -732,21 +720,24 @@ fn decode_chat_response(
         "openai.chat.response.unknown_field",
         "",
     );
-    Ok(OpenAiPayload::Response(ProtocolResponse {
-        id: optional_string(object, "id"),
-        model: optional_string(object, "model"),
-        output,
-        usage: object.get("usage").and_then(decode_chat_usage),
-        finish_reason: FinishReason::new(
-            finish_reasons
-                .into_iter()
-                .next()
-                .unwrap_or(FinishReason::STOP.to_owned()),
-        )
-        .expect("normal finish reasons are non-empty"),
-        continuation: None,
-        extensions,
-    }))
+    let finish_reason = choices
+        .first()
+        .and_then(|choice| choice.get("finish_reason"))
+        .and_then(Value::as_str)
+        .map(normalize_chat_finish_reason)
+        .unwrap_or_else(|| FinishReason::STOP.to_owned());
+    Ok(PayloadResult::exact(OpenAiPayload::Response(
+        ProtocolResponse {
+            id: optional_string(object, "id"),
+            model: optional_string(object, "model"),
+            output,
+            usage: object.get("usage").and_then(decode_chat_usage),
+            finish_reason: FinishReason::new(finish_reason)
+                .expect("normal finish reasons are non-empty"),
+            continuation: None,
+            extensions,
+        },
+    )))
 }
 
 fn decode_responses_response(
@@ -779,7 +770,11 @@ fn decode_responses_response(
             issuing_profile: profile_id.clone(),
             extension: opaque_text(
                 profile_id,
-                "openai.responses.response_handle",
+                match status {
+                    "queued" => RESPONSES_QUEUED_HANDLE_NAMESPACE,
+                    "in_progress" => RESPONSES_IN_PROGRESS_HANDLE_NAMESPACE,
+                    _ => unreachable!("continuation is created only for nonterminal status"),
+                },
                 SourceLocation::JsonPointer {
                     pointer: "/id".to_owned(),
                 },
@@ -862,7 +857,16 @@ fn encode_value(
             result
         }
         OpenAiPayload::Error(error) => encode_error(error, target, &mut tracker),
-        OpenAiPayload::Stream(events) => Value::String(encode_stream(events, target, &mut tracker)),
+        OpenAiPayload::Stream(events) => {
+            if source_profile != target_profile {
+                tracker.adapted(
+                    DiagnosticCode::SemanticChange,
+                    None,
+                    "stream lifecycle frames were adapted to the target OpenAI dialect",
+                );
+            }
+            Value::String(encode_stream(events, target, &mut tracker))
+        }
     };
 
     if tracker.fidelity == Fidelity::Unsupported {
@@ -940,12 +944,12 @@ fn encode_request(
         "unknown request fields cannot be canonically projected across OpenAI profiles",
     );
     if let Some(handle) = &request.continuation
-        && handle.issuing_profile != target.profile_id()
+        && !handle.is_issued_by(&target.profile_id())
     {
         tracker.unsupported(
             DiagnosticCode::NonPortableContinuationHandle,
             Some(handle.extension.source_location.clone()),
-            "a provider continuation handle cannot be encoded for a different profile",
+            "a provider continuation handle cannot be encoded with contradictory metadata or for a different profile",
         );
         return Ok(Value::Null);
     }
@@ -990,14 +994,20 @@ fn encode_response(
         tracker,
         "unknown response fields cannot be canonically projected across OpenAI profiles",
     );
-    if let Some(handle) = &response.continuation
-        && handle.issuing_profile != target.profile_id()
-    {
-        tracker.lossy(
-            DiagnosticCode::NonPortableContinuationHandle,
-            Some(handle.extension.source_location.clone()),
-            "a provider continuation handle was omitted from a different-profile response",
-        );
+    if let Some(handle) = &response.continuation {
+        if !handle.is_issued_by(&target.profile_id()) {
+            tracker.lossy(
+                DiagnosticCode::NonPortableContinuationHandle,
+                Some(handle.extension.source_location.clone()),
+                "a provider continuation handle with contradictory metadata or a different profile was omitted from the response",
+            );
+        } else if target != OpenAiProfile::Responses {
+            tracker.lossy(
+                DiagnosticCode::NonPortableContinuationHandle,
+                Some(handle.extension.source_location.clone()),
+                "the target profile cannot represent a Responses continuation handle",
+            );
+        }
     }
 
     match target {
@@ -2085,7 +2095,12 @@ fn encode_chat_message(
                     }
                 }));
             }
-            _ => regular_parts.push(encode_chat_content_part(part, index, part_index, tracker)?),
+            _ => {
+                let encoded = encode_chat_content_part(part, index, part_index, tracker)?;
+                if !encoded.is_null() {
+                    regular_parts.push(encoded);
+                }
+            }
         }
     }
     if regular_parts.is_empty() {
@@ -2192,13 +2207,13 @@ fn append_responses_input_message(
                     "summary": summary.as_ref().map(|summary| vec![json!({"type": "summary_text", "text": summary})]).unwrap_or_default(),
                 }));
             }
-            _ => regular_content.push(encode_responses_content_part(
-                part,
-                message.role,
-                index,
-                part_index,
-                tracker,
-            )?),
+            _ => {
+                let encoded =
+                    encode_responses_content_part(part, message.role, index, part_index, tracker)?;
+                if !encoded.is_null() {
+                    regular_content.push(encoded);
+                }
+            }
         }
     }
     if has_tool_call
@@ -2541,31 +2556,50 @@ fn insert_output_schema(
     let Some(output_schema) = output_schema else {
         return Ok(());
     };
+    let Some(name) = output_schema
+        .name
+        .as_deref()
+        .filter(|name| !name.is_empty())
+    else {
+        tracker.unsupported(
+            DiagnosticCode::UnsupportedFeature,
+            Some(SourceLocation::JsonPointer {
+                pointer: "/output_schema/name".to_owned(),
+            }),
+            "OpenAI JSON Schema output formats require a non-empty provider schema name",
+        );
+        return Ok(());
+    };
     let strict = matches!(output_schema.enforcement, OutputSchemaEnforcement::Required);
-    let format = json!({
-        "type": "json_schema",
-        "name": output_schema.name,
-        "description": output_schema.description,
-        "schema": output_schema.schema,
-        "strict": strict,
-    });
     match target {
         OpenAiProfile::ChatCompletions => {
             object.insert(
                 "response_format".to_owned(),
-                json!({"type": "json_schema", "json_schema": format}),
+                json!({
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": name,
+                        "description": output_schema.description,
+                        "schema": output_schema.schema,
+                        "strict": strict,
+                    }
+                }),
             );
         }
         OpenAiProfile::Responses => {
-            object.insert("text".to_owned(), json!({"format": format}));
+            object.insert(
+                "text".to_owned(),
+                json!({
+                    "format": {
+                        "type": "json_schema",
+                        "name": name,
+                        "description": output_schema.description,
+                        "schema": output_schema.schema,
+                        "strict": strict,
+                    }
+                }),
+            );
         }
-    }
-    if output_schema.name.is_none() {
-        tracker.adapted(
-            DiagnosticCode::SemanticChange,
-            None,
-            "the JSON Schema output intent was encoded without a provider schema name",
-        );
     }
     Ok(())
 }
@@ -2666,18 +2700,38 @@ fn encode_responses_response(
     for (index, message) in response.output.iter().enumerate() {
         append_responses_output_message(&mut output, message, index, tracker)?;
     }
+    let status = if let Some(handle) = &response.continuation {
+        match handle.extension.namespace.as_str() {
+            RESPONSES_QUEUED_HANDLE_NAMESPACE => "queued",
+            RESPONSES_IN_PROGRESS_HANDLE_NAMESPACE => "in_progress",
+            _ => {
+                tracker.lossy(
+                    DiagnosticCode::NonPortableContinuationHandle,
+                    Some(handle.extension.source_location.clone()),
+                    "the Responses continuation handle does not identify a canonical response lifecycle state",
+                );
+                encode_responses_finish_status(response.finish_reason.as_str())
+            }
+        }
+    } else {
+        encode_responses_finish_status(response.finish_reason.as_str())
+    };
     Ok(json!({
         "id": response.id,
         "object": "response",
-        "status": match response.finish_reason.as_str() {
-            FinishReason::LENGTH => "incomplete",
-            FinishReason::ERROR => "failed",
-            _ => "completed",
-        },
+        "status": status,
         "model": response.model,
         "output": output,
         "usage": response.usage.as_ref().map(encode_responses_usage),
     }))
+}
+
+fn encode_responses_finish_status(finish_reason: &str) -> &'static str {
+    match finish_reason {
+        FinishReason::LENGTH => "incomplete",
+        FinishReason::ERROR => "failed",
+        _ => "completed",
+    }
 }
 
 fn append_responses_output_message(
@@ -3314,7 +3368,10 @@ fn encode_chat_stream(events: &[StreamEvent], tracker: &mut ConversionTracker) -
 
 fn encode_responses_stream(events: &[StreamEvent], tracker: &mut ConversionTracker) -> String {
     let mut output = String::new();
-    let mut usage = None;
+    let mut usage = events.iter().rev().find_map(|event| match event {
+        StreamEvent::Usage { usage } => Some(usage.clone()),
+        _ => None,
+    });
     let mut message_id = "msg_alpha".to_owned();
     let mut started_response = false;
     let mut started_tool_calls = BTreeSet::new();

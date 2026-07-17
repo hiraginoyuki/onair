@@ -50,69 +50,246 @@
       "type": "object"
     },
     "expect": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "cache_analysis"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "$ref": "#/$defs/cache_analysis_input"
+          },
+          "expect": {
+            "$ref": "#/$defs/cache_analysis_expectation"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "input": {
+            "$ref": "#/$defs/envelope_input"
+          },
+          "expect": {
+            "$ref": "#/$defs/envelope_expectation"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "envelope_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "envelope"
+      ],
+      "properties": {
+        "envelope": {
+          "$ref": "envelope.schema.json"
+        }
+      }
+    },
+    "cache_analysis_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cache_plan_application"
+      ],
+      "properties": {
+        "cache_plan_application": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_ir",
+            "target_intent",
+            "report"
+          ],
+          "properties": {
+            "request_ir": {
+              "$ref": "#/$defs/request_ir"
+            },
+            "target_intent": {
+              "$ref": "ir.schema.json#/$defs/cache_intent"
+            },
+            "report": {
+              "$ref": "cache-report.schema.json"
+            }
+          }
+        }
+      }
+    },
+    "envelope_expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decode",
+        "encode"
+      ],
+      "properties": {
+        "decode": {
+          "$ref": "#/$defs/decode_expectation"
+        },
+        "encode": {
+          "$ref": "#/$defs/encode_expectation"
+        }
+      }
+    },
+    "decode_expectation": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "fidelity",
-        "diagnostic_codes"
+        "diagnostics",
+        "ir"
       ],
       "properties": {
         "fidelity": {
-          "enum": [
-            "exact",
-            "adapted",
-            "lossy",
-            "unsupported"
-          ]
+          "$ref": "#/$defs/fidelity"
         },
-        "diagnostic_codes": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "string"
-          }
+        "diagnostics": {
+          "$ref": "#/$defs/diagnostics"
         },
-        "exact_replay": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "protocol_headers",
-            "body_base64"
-          ],
-          "properties": {
-            "protocol_headers": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "pattern": "^[^\\r\\n]+$"
-              }
-            },
-            "body_base64": {
-              "type": "string",
-              "contentEncoding": "base64"
-            }
-          }
+        "ir": {
+          "$ref": "ir.schema.json"
+        }
+      }
+    },
+    "encode_expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fidelity",
+        "diagnostics"
+      ],
+      "properties": {
+        "fidelity": {
+          "$ref": "#/$defs/fidelity"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/diagnostics"
+        },
+        "envelope": {
+          "$ref": "envelope.schema.json"
+        },
+        "round_trip_decode": {
+          "$ref": "#/$defs/decode_expectation"
         },
         "cache_report": {
+          "$ref": "cache-report.schema.json"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "fidelity": {
+                "const": "unsupported"
+              }
+            },
+            "required": [
+              "fidelity"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "envelope"
+                  ]
+                },
+                {
+                  "required": [
+                    "cache_report"
+                  ]
+                },
+                {
+                  "required": [
+                    "round_trip_decode"
+                  ]
+                }
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "envelope",
+              "round_trip_decode"
+            ]
+          }
+        }
+      ]
+    },
+    "cache_analysis_expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "analysis"
+      ],
+      "properties": {
+        "analysis": {
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "common_stable_prefix_len",
-            "entries"
+            "fidelity",
+            "diagnostics",
+            "result_ir",
+            "cache_report"
           ],
           "properties": {
-            "common_stable_prefix_len": {
-              "type": "integer",
-              "minimum": 0
+            "fidelity": {
+              "$ref": "#/$defs/fidelity"
             },
-            "entries": {
-              "type": "array",
-              "items": {
-                "$ref": "cache-report.schema.json#/$defs/entry"
-              }
+            "diagnostics": {
+              "$ref": "#/$defs/diagnostics"
+            },
+            "result_ir": {
+              "$ref": "#/$defs/request_ir"
+            },
+            "cache_report": {
+              "$ref": "cache-report.schema.json"
             }
           }
         }
+      }
+    },
+    "request_ir": {
+      "allOf": [
+        {
+          "$ref": "ir.schema.json"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "request"
+            }
+          }
+        }
+      ]
+    },
+    "fidelity": {
+      "enum": [
+        "exact",
+        "adapted",
+        "lossy",
+        "unsupported"
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "diagnostic.schema.json"
       }
     }
   }

@@ -1,16 +1,159 @@
 {
-  "protocol_version": "0.1.0",
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "request",
+        "payload": {
+          "extensions": [],
+          "generation": {
+            "max_output_tokens": 24,
+            "stop_sequences": []
+          },
+          "instructions": [],
+          "messages": [
+            {
+              "content": [
+                {
+                  "extension": {
+                    "issuing_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+                    "namespace": "anthropic.messages.unknown_content_block",
+                    "payload": {
+                      "kind": "json",
+                      "value": {
+                        "synthetic": true,
+                        "type": "future_block"
+                      }
+                    },
+                    "source_location": {
+                      "kind": "json_pointer",
+                      "pointer": "/messages/0/content/0"
+                    }
+                  },
+                  "type": "opaque"
+                }
+              ],
+              "extensions": [],
+              "role": "user"
+            }
+          ],
+          "model": "synthetic-model",
+          "stream": false,
+          "tools": []
+        },
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "cache_report": {
+        "entries": [
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            }
+          }
+        ],
+        "protocol_version": "0.1.0"
+      },
+      "diagnostics": [
+        {
+          "code": "forward_compatible_unknown",
+          "location": {
+            "kind": "json_pointer",
+            "pointer": "/messages/0/content/0"
+          },
+          "severity": "warning"
+        }
+      ],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "eyJtYXhfY29tcGxldGlvbl90b2tlbnMiOjI0LCJtZXNzYWdlcyI6W3siY29udGVudCI6IiIsInJvbGUiOiJ1c2VyIn1dLCJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCJ9",
+        "body_kind": "json",
+        "profile_id": "openai.chat-completions.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "content-type: application/json"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 200
+      },
+      "fidelity": "lossy",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "request",
+          "payload": {
+            "extensions": [],
+            "generation": {
+              "max_output_tokens": 24,
+              "stop_sequences": []
+            },
+            "instructions": [],
+            "messages": [
+              {
+                "content": [
+                  {
+                    "text": "",
+                    "type": "text"
+                  }
+                ],
+                "extensions": [],
+                "role": "user"
+              }
+            ],
+            "model": "synthetic-model",
+            "stream": false,
+            "tools": []
+          },
+          "profile_id": "openai.chat-completions.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  },
   "id": "anthropic.messages.unknown-lossy",
-  "title": "Synthetic unknown Messages content block is contained",
-  "synthetic": true,
-  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
-  "target_profile": "openai.chat-completions.alpha-0.1.0",
-  "kind": "cross_profile_conversion",
   "input": {
     "envelope": {
-      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
-      "status": 200,
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1heF90b2tlbnMiOjI0LCJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoiZnV0dXJlX2Jsb2NrIiwic3ludGhldGljIjp0cnVlfV19XX0=",
       "body_kind": "json",
+      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "content-type: application/json"
@@ -19,13 +162,14 @@
           "raw_line": "anthropic-version: 2023-06-01"
         }
       ],
-      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1heF90b2tlbnMiOjI0LCJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjpbeyJ0eXBlIjoiZnV0dXJlX2Jsb2NrIiwic3ludGhldGljIjp0cnVlfV19XX0="
+      "protocol_version": "0.1.0",
+      "status": 200
     }
   },
-  "expect": {
-    "fidelity": "lossy",
-    "diagnostic_codes": [
-      "forward_compatible_unknown"
-    ]
-  }
+  "kind": "cross_profile_conversion",
+  "protocol_version": "0.1.0",
+  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "openai.chat-completions.alpha-0.1.0",
+  "title": "Synthetic unknown Messages content block is contained"
 }

@@ -224,6 +224,66 @@ A conforming implementation must:
 5. never claim unmodified raw replay after a semantic edit; and
 6. keep committed vectors synthetic.
 
+Every active envelope vector contains one complete wire envelope and two
+independent expectations. `expect.decode` freezes the source fidelity, the
+complete ordered diagnostic sequence, and the decoded profile-scoped IR.
+`expect.encode` freezes target fidelity, complete ordered diagnostics, the
+complete target envelope when encoding is supported, the complete target IR
+obtained by decoding that canonical envelope, and the complete content-free
+cache report when one is produced. Unsupported encoding omits both the target
+envelope and target re-decode rather than supplying placeholders.
+
+Diagnostic expectations contain code, severity, and source location. Human
+messages are deliberately not conformance fields and may improve without a
+contract revision. Diagnostic arrays are ordered and may contain repeated
+codes at distinct or repeated locations; implementations must not compare them
+as sets.
+
+Cache-analysis vectors contain a complete typed operation rather than an
+informal intent fragment. Their expected analysis includes fidelity,
+diagnostics, resulting request IR, and the full cache report. IR and envelope
+expectations are validated against their normative schemas. The committed
+expected JSON is authoritative; Rust serialization and the fixture-maintenance
+tool are not independent protocol contracts.
+
+The vector manifest must not contain duplicate identifiers or paths. Every
+committed vector document must occur exactly once in the manifest, and every
+active entry must execute through the same conformance runner. A document that
+only validates against JSON Schema but is not executed is not an active
+conformance vector.
+
+The manifest declares the frozen coverage-matrix profiles, payload classes,
+and `all_distinct_pairs` direction rule. Alpha `0.1.0` has three profiles and
+five classes (`request`, `response`, `error`, `stream`, and `cache_report`), so
+the matrix contains thirty directed cells. Active vectors claim cells with an
+explicit `supported` or `unsupported` classification. Every declared cell must
+be claimed exactly once; undeclared, duplicate, or missing cells fail
+conformance.
+
+`supported` means that encoding produces a target envelope. Its fidelity may
+be `Exact`, `Adapted`, or `Lossy`; support does not imply semantic identity.
+`unsupported` requires `Unsupported` fidelity and no target envelope. A
+`cache_report` claim requires request IR and a complete content-free report.
+Same-profile replay vectors and generic pair smoke tests do not satisfy a
+directed matrix cell.
+
+The manifest also declares every typed content-part and stream-event variant.
+Each declared feature has exactly one `source_decode` claim and one
+`cross_profile` claim. A source-decode claim is valid only when the complete
+decoded source IR contains that feature. A cross-profile claim is checked
+against the ordered feature occurrences in the source IR and in the target IR
+obtained by decoding the canonical target envelope.
+
+Cross-profile feature dispositions are `preserved`, `adapted`, `lossy`,
+`unsupported`, or `non_portable`. Preserved occurrences are identical and in
+the same order. Adapted occurrences remain typed but differ in a recorded way.
+Lossy occurrences are changed or absent and require Lossy conversion fidelity.
+Unsupported features produce no target envelope. `non_portable` applies only
+to opaque content or stream events: target IR must not contain the opaque
+material, and the conversion must report its non-portability. Complete source
+and target IR expectations remain normative even when an individual claim
+selects one feature from those ordered documents.
+
 The full alpha gate additionally tests declared codec paths, arbitrary SSE byte
 partitions, all six directed dialect conversions for the typed subset, cache
 reports, and selected OnAir parity. Live provider benchmarks are manual,

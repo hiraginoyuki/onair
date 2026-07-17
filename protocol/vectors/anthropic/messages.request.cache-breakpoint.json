@@ -1,16 +1,273 @@
 {
-  "protocol_version": "0.1.0",
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "request",
+        "payload": {
+          "cache_intent": {
+            "breakpoints": [
+              {
+                "location": {
+                  "kind": "instructions",
+                  "part_index": 0
+                },
+                "ttl": "5m"
+              },
+              {
+                "location": {
+                  "kind": "tool_definition",
+                  "tool_index": 0
+                }
+              }
+            ],
+            "kind": "anthropic"
+          },
+          "extensions": [
+            {
+              "issuing_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+              "namespace": "anthropic.messages.beta_header",
+              "payload": {
+                "kind": "text",
+                "value": "synthetic-beta"
+              },
+              "source_location": {
+                "kind": "header",
+                "name": "anthropic-beta"
+              }
+            }
+          ],
+          "generation": {
+            "max_output_tokens": 24,
+            "stop_sequences": [],
+            "temperature": 0.2,
+            "top_p": 0.9
+          },
+          "instructions": [
+            {
+              "text": "synthetic instruction",
+              "type": "text"
+            }
+          ],
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "synthetic request",
+                  "type": "text"
+                },
+                {
+                  "asset": {
+                    "reference_type": "url",
+                    "value": "https://synthetic.invalid/image.png"
+                  },
+                  "type": "image"
+                }
+              ],
+              "extensions": [],
+              "role": "user"
+            },
+            {
+              "content": [
+                {
+                  "arguments": {
+                    "subject": "alpha"
+                  },
+                  "extensions": [],
+                  "id": "call_synthetic",
+                  "name": "synthetic_lookup",
+                  "type": "tool_call"
+                }
+              ],
+              "extensions": [],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "text": "synthetic result",
+                      "type": "text"
+                    }
+                  ],
+                  "extensions": [],
+                  "is_error": false,
+                  "tool_call_id": "call_synthetic",
+                  "type": "tool_result"
+                }
+              ],
+              "extensions": [],
+              "role": "tool"
+            }
+          ],
+          "model": "synthetic-model",
+          "stream": false,
+          "tools": [
+            {
+              "description": "synthetic tool",
+              "extensions": [],
+              "input_schema": {
+                "type": "object"
+              },
+              "name": "synthetic_lookup"
+            }
+          ]
+        },
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "diagnostics": [],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1heF90b2tlbnMiOjI0LCJzeXN0ZW0iOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6InN5bnRoZXRpYyBpbnN0cnVjdGlvbiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCIsInR0bCI6IjVtIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0Ijoic3ludGhldGljIHJlcXVlc3QifSx7InR5cGUiOiJpbWFnZSIsInNvdXJjZSI6eyJ0eXBlIjoidXJsIiwidXJsIjoiaHR0cHM6Ly9zeW50aGV0aWMuaW52YWxpZC9pbWFnZS5wbmcifX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfc3ludGhldGljIiwibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJpbnB1dCI6eyJzdWJqZWN0IjoiYWxwaGEifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJjYWxsX3N5bnRoZXRpYyIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVzdWx0In1dfV0sInRvb2xzIjpbeyJuYW1lIjoic3ludGhldGljX2xvb2t1cCIsImRlc2NyaXB0aW9uIjoic3ludGhldGljIHRvb2wiLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCJ9LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJ0ZW1wZXJhdHVyZSI6MC4yLCJ0b3BfcCI6MC45LCJzdHJlYW0iOmZhbHNlfQ==",
+        "body_kind": "json",
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "Content-Type: application/json"
+          },
+          {
+            "raw_line": "Anthropic-Version: 2023-06-01"
+          },
+          {
+            "raw_line": "anthropic-beta: synthetic-beta"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 200
+      },
+      "fidelity": "exact",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "request",
+          "payload": {
+            "cache_intent": {
+              "breakpoints": [
+                {
+                  "location": {
+                    "kind": "instructions",
+                    "part_index": 0
+                  },
+                  "ttl": "5m"
+                },
+                {
+                  "location": {
+                    "kind": "tool_definition",
+                    "tool_index": 0
+                  }
+                }
+              ],
+              "kind": "anthropic"
+            },
+            "extensions": [
+              {
+                "issuing_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+                "namespace": "anthropic.messages.beta_header",
+                "payload": {
+                  "kind": "text",
+                  "value": "synthetic-beta"
+                },
+                "source_location": {
+                  "kind": "header",
+                  "name": "anthropic-beta"
+                }
+              }
+            ],
+            "generation": {
+              "max_output_tokens": 24,
+              "stop_sequences": [],
+              "temperature": 0.2,
+              "top_p": 0.9
+            },
+            "instructions": [
+              {
+                "text": "synthetic instruction",
+                "type": "text"
+              }
+            ],
+            "messages": [
+              {
+                "content": [
+                  {
+                    "text": "synthetic request",
+                    "type": "text"
+                  },
+                  {
+                    "asset": {
+                      "reference_type": "url",
+                      "value": "https://synthetic.invalid/image.png"
+                    },
+                    "type": "image"
+                  }
+                ],
+                "extensions": [],
+                "role": "user"
+              },
+              {
+                "content": [
+                  {
+                    "arguments": {
+                      "subject": "alpha"
+                    },
+                    "extensions": [],
+                    "id": "call_synthetic",
+                    "name": "synthetic_lookup",
+                    "type": "tool_call"
+                  }
+                ],
+                "extensions": [],
+                "role": "assistant"
+              },
+              {
+                "content": [
+                  {
+                    "content": [
+                      {
+                        "text": "synthetic result",
+                        "type": "text"
+                      }
+                    ],
+                    "extensions": [],
+                    "is_error": false,
+                    "tool_call_id": "call_synthetic",
+                    "type": "tool_result"
+                  }
+                ],
+                "extensions": [],
+                "role": "tool"
+              }
+            ],
+            "model": "synthetic-model",
+            "stream": false,
+            "tools": [
+              {
+                "description": "synthetic tool",
+                "extensions": [],
+                "input_schema": {
+                  "type": "object"
+                },
+                "name": "synthetic_lookup"
+              }
+            ]
+          },
+          "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  },
   "id": "anthropic.messages.request.cache-breakpoint",
-  "title": "Synthetic Messages request with ordered cache breakpoints",
-  "synthetic": true,
-  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
-  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
-  "kind": "exact_replay",
   "input": {
     "envelope": {
-      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
-      "status": 200,
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1heF90b2tlbnMiOjI0LCJzeXN0ZW0iOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6InN5bnRoZXRpYyBpbnN0cnVjdGlvbiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCIsInR0bCI6IjVtIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0Ijoic3ludGhldGljIHJlcXVlc3QifSx7InR5cGUiOiJpbWFnZSIsInNvdXJjZSI6eyJ0eXBlIjoidXJsIiwidXJsIjoiaHR0cHM6Ly9zeW50aGV0aWMuaW52YWxpZC9pbWFnZS5wbmcifX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfc3ludGhldGljIiwibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJpbnB1dCI6eyJzdWJqZWN0IjoiYWxwaGEifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJjYWxsX3N5bnRoZXRpYyIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVzdWx0In1dfV0sInRvb2xzIjpbeyJuYW1lIjoic3ludGhldGljX2xvb2t1cCIsImRlc2NyaXB0aW9uIjoic3ludGhldGljIHRvb2wiLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCJ9LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJ0ZW1wZXJhdHVyZSI6MC4yLCJ0b3BfcCI6MC45LCJzdHJlYW0iOmZhbHNlfQ==",
       "body_kind": "json",
+      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "Content-Type: application/json"
@@ -22,19 +279,14 @@
           "raw_line": "anthropic-beta: synthetic-beta"
         }
       ],
-      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1heF90b2tlbnMiOjI0LCJzeXN0ZW0iOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6InN5bnRoZXRpYyBpbnN0cnVjdGlvbiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCIsInR0bCI6IjVtIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0Ijoic3ludGhldGljIHJlcXVlc3QifSx7InR5cGUiOiJpbWFnZSIsInNvdXJjZSI6eyJ0eXBlIjoidXJsIiwidXJsIjoiaHR0cHM6Ly9zeW50aGV0aWMuaW52YWxpZC9pbWFnZS5wbmcifX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfc3ludGhldGljIiwibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJpbnB1dCI6eyJzdWJqZWN0IjoiYWxwaGEifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJjYWxsX3N5bnRoZXRpYyIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVzdWx0In1dfV0sInRvb2xzIjpbeyJuYW1lIjoic3ludGhldGljX2xvb2t1cCIsImRlc2NyaXB0aW9uIjoic3ludGhldGljIHRvb2wiLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCJ9LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJ0ZW1wZXJhdHVyZSI6MC4yLCJ0b3BfcCI6MC45LCJzdHJlYW0iOmZhbHNlfQ=="
+      "protocol_version": "0.1.0",
+      "status": 200
     }
   },
-  "expect": {
-    "fidelity": "exact",
-    "diagnostic_codes": [],
-    "exact_replay": {
-      "protocol_headers": [
-        "Content-Type: application/json",
-        "Anthropic-Version: 2023-06-01",
-        "anthropic-beta: synthetic-beta"
-      ],
-      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1heF90b2tlbnMiOjI0LCJzeXN0ZW0iOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6InN5bnRoZXRpYyBpbnN0cnVjdGlvbiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCIsInR0bCI6IjVtIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0Ijoic3ludGhldGljIHJlcXVlc3QifSx7InR5cGUiOiJpbWFnZSIsInNvdXJjZSI6eyJ0eXBlIjoidXJsIiwidXJsIjoiaHR0cHM6Ly9zeW50aGV0aWMuaW52YWxpZC9pbWFnZS5wbmcifX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfc3ludGhldGljIiwibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJpbnB1dCI6eyJzdWJqZWN0IjoiYWxwaGEifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJjYWxsX3N5bnRoZXRpYyIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVzdWx0In1dfV0sInRvb2xzIjpbeyJuYW1lIjoic3ludGhldGljX2xvb2t1cCIsImRlc2NyaXB0aW9uIjoic3ludGhldGljIHRvb2wiLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCJ9LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJ0ZW1wZXJhdHVyZSI6MC4yLCJ0b3BfcCI6MC45LCJzdHJlYW0iOmZhbHNlfQ=="
-    }
-  }
+  "kind": "exact_replay",
+  "protocol_version": "0.1.0",
+  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "title": "Synthetic Messages request with ordered cache breakpoints"
 }

@@ -1,26 +1,132 @@
 {
-  "protocol_version": "0.1.0",
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "response",
+        "payload": {
+          "extensions": [],
+          "finish_reason": "tool_calls",
+          "id": "chatcmpl_synthetic",
+          "model": "synthetic-model",
+          "output": [
+            {
+              "content": [
+                {
+                  "text": "synthetic reply",
+                  "type": "text"
+                },
+                {
+                  "arguments": {
+                    "subject": "alpha"
+                  },
+                  "extensions": [],
+                  "id": "call_synthetic",
+                  "name": "synthetic_lookup",
+                  "type": "tool_call"
+                }
+              ],
+              "extensions": [],
+              "role": "assistant"
+            }
+          ],
+          "usage": {
+            "cache_read_tokens": 3,
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "reasoning_tokens": 2
+          }
+        },
+        "profile_id": "openai.chat-completions.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "diagnostics": [],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "eyJpZCI6ImNoYXRjbXBsX3N5bnRoZXRpYyIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwib2JqZWN0IjoicmVzcG9uc2UiLCJvdXRwdXQiOlt7ImNvbnRlbnQiOlt7InRleHQiOiJzeW50aGV0aWMgcmVwbHkiLCJ0eXBlIjoib3V0cHV0X3RleHQifV0sImlkIjoibXNnXzAiLCJyb2xlIjoiYXNzaXN0YW50Iiwic3RhdHVzIjoiY29tcGxldGVkIiwidHlwZSI6Im1lc3NhZ2UifSx7ImFyZ3VtZW50cyI6IntcInN1YmplY3RcIjpcImFscGhhXCJ9IiwiY2FsbF9pZCI6ImNhbGxfc3ludGhldGljIiwiaWQiOiJjYWxsX3N5bnRoZXRpYyIsIm5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwic3RhdHVzIjoiY29tcGxldGVkIiwidHlwZSI6ImZ1bmN0aW9uX2NhbGwifV0sInN0YXR1cyI6ImNvbXBsZXRlZCIsInVzYWdlIjp7ImlucHV0X3Rva2VucyI6MTEsImlucHV0X3Rva2Vuc19kZXRhaWxzIjp7ImNhY2hlZF90b2tlbnMiOjN9LCJvdXRwdXRfdG9rZW5zIjo3LCJvdXRwdXRfdG9rZW5zX2RldGFpbHMiOnsicmVhc29uaW5nX3Rva2VucyI6Mn0sInRvdGFsX3Rva2VucyI6MTh9fQ==",
+        "body_kind": "json",
+        "profile_id": "openai.responses.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "content-type: application/json"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 200
+      },
+      "fidelity": "exact",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "response",
+          "payload": {
+            "extensions": [],
+            "finish_reason": "stop",
+            "id": "chatcmpl_synthetic",
+            "model": "synthetic-model",
+            "output": [
+              {
+                "content": [
+                  {
+                    "text": "synthetic reply",
+                    "type": "text"
+                  }
+                ],
+                "extensions": [],
+                "role": "assistant"
+              },
+              {
+                "content": [
+                  {
+                    "arguments": {
+                      "subject": "alpha"
+                    },
+                    "extensions": [],
+                    "id": "call_synthetic",
+                    "name": "synthetic_lookup",
+                    "type": "tool_call"
+                  }
+                ],
+                "extensions": [],
+                "role": "assistant"
+              }
+            ],
+            "usage": {
+              "cache_read_tokens": 3,
+              "input_tokens": 11,
+              "output_tokens": 7,
+              "reasoning_tokens": 2
+            }
+          },
+          "profile_id": "openai.responses.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  },
   "id": "openai.chat.response.text-tool",
-  "title": "Chat buffered response with text, tool call, and usage converts to Responses",
-  "synthetic": true,
-  "source_profile": "openai.chat-completions.alpha-0.1.0",
-  "target_profile": "openai.responses.alpha-0.1.0",
-  "kind": "cross_profile_conversion",
   "input": {
     "envelope": {
-      "profile_id": "openai.chat-completions.alpha-0.1.0",
-      "status": 200,
+      "body_base64": "eyJpZCI6ImNoYXRjbXBsX3N5bnRoZXRpYyIsIm9iamVjdCI6ImNoYXQuY29tcGxldGlvbiIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwiY2hvaWNlcyI6W3siaW5kZXgiOjAsIm1lc3NhZ2UiOnsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVwbHkiLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfc3ludGhldGljIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJhcmd1bWVudHMiOiJ7XCJzdWJqZWN0XCI6XCJhbHBoYVwifSJ9fV19LCJmaW5pc2hfcmVhc29uIjoidG9vbF9jYWxscyJ9XSwidXNhZ2UiOnsicHJvbXB0X3Rva2VucyI6MTEsInByb21wdF90b2tlbnNfZGV0YWlscyI6eyJjYWNoZWRfdG9rZW5zIjozfSwiY29tcGxldGlvbl90b2tlbnMiOjcsImNvbXBsZXRpb25fdG9rZW5zX2RldGFpbHMiOnsicmVhc29uaW5nX3Rva2VucyI6Mn0sInRvdGFsX3Rva2VucyI6MTh9fQ==",
       "body_kind": "json",
+      "profile_id": "openai.chat-completions.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "content-type: application/json"
         }
       ],
-      "body_base64": "eyJpZCI6ImNoYXRjbXBsX3N5bnRoZXRpYyIsIm9iamVjdCI6ImNoYXQuY29tcGxldGlvbiIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwiY2hvaWNlcyI6W3siaW5kZXgiOjAsIm1lc3NhZ2UiOnsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVwbHkiLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfc3ludGhldGljIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJhcmd1bWVudHMiOiJ7XCJzdWJqZWN0XCI6XCJhbHBoYVwifSJ9fV19LCJmaW5pc2hfcmVhc29uIjoidG9vbF9jYWxscyJ9XSwidXNhZ2UiOnsicHJvbXB0X3Rva2VucyI6MTEsInByb21wdF90b2tlbnNfZGV0YWlscyI6eyJjYWNoZWRfdG9rZW5zIjozfSwiY29tcGxldGlvbl90b2tlbnMiOjcsImNvbXBsZXRpb25fdG9rZW5zX2RldGFpbHMiOnsicmVhc29uaW5nX3Rva2VucyI6Mn0sInRvdGFsX3Rva2VucyI6MTh9fQ=="
+      "protocol_version": "0.1.0",
+      "status": 200
     }
   },
-  "expect": {
-    "fidelity": "exact",
-    "diagnostic_codes": []
-  }
+  "kind": "cross_profile_conversion",
+  "protocol_version": "0.1.0",
+  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "openai.responses.alpha-0.1.0",
+  "title": "Chat buffered response with text, tool call, and usage converts to Responses"
 }

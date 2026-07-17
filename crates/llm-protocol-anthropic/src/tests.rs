@@ -95,18 +95,21 @@ fn active_anthropic_vectors_run_through_the_shared_ir_boundary() {
         };
         assert_eq!(
             serde_json::to_value(encoded.fidelity).unwrap(),
-            vector["expect"]["fidelity"],
+            vector["expect"]["encode"]["fidelity"],
             "vector {vector_id}"
         );
         assert_eq!(
             diagnostic_codes(&encoded),
-            vector["expect"]["diagnostic_codes"]
+            vector["expect"]["encode"]["diagnostics"]
                 .as_array()
                 .unwrap()
-                .to_vec(),
+                .iter()
+                .map(|diagnostic| diagnostic["code"].clone())
+                .collect::<Vec<_>>(),
             "vector {vector_id}"
         );
-        if let Some(expect_replay) = vector["expect"].get("exact_replay") {
+        if vector["kind"] == "exact_replay" {
+            let expected_envelope = &vector["expect"]["encode"]["envelope"];
             let output = encoded.output.expect("replay output");
             assert_eq!(
                 output
@@ -115,17 +118,17 @@ fn active_anthropic_vectors_run_through_the_shared_ir_boundary() {
                     .iter()
                     .map(|header| header.raw_line.clone())
                     .collect::<Vec<_>>(),
-                expect_replay["protocol_headers"]
+                expected_envelope["protocol_headers"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .map(|value| value.as_str().unwrap().to_owned())
+                    .map(|value| value["raw_line"].as_str().unwrap().to_owned())
                     .collect::<Vec<_>>(),
                 "vector {vector_id}"
             );
             assert_eq!(
                 encode_base64(&output.wire.body),
-                expect_replay["body_base64"].as_str().unwrap(),
+                expected_envelope["body_base64"].as_str().unwrap(),
                 "vector {vector_id}"
             );
         }
@@ -153,15 +156,17 @@ fn active_openai_to_messages_vectors_use_the_messages_target_codec() {
         let encoded = encode_decoded(&decoded, &profile_id(&vector["target_profile"])).unwrap();
         assert_eq!(
             serde_json::to_value(encoded.fidelity).unwrap(),
-            vector["expect"]["fidelity"],
+            vector["expect"]["encode"]["fidelity"],
             "vector {vector_id}"
         );
         assert_eq!(
             diagnostic_codes(&encoded),
-            vector["expect"]["diagnostic_codes"]
+            vector["expect"]["encode"]["diagnostics"]
                 .as_array()
                 .unwrap()
-                .to_vec(),
+                .iter()
+                .map(|diagnostic| diagnostic["code"].clone())
+                .collect::<Vec<_>>(),
             "vector {vector_id}"
         );
     }
@@ -500,6 +505,9 @@ fn version_mismatch_and_unknown_sse_events_do_not_gain_portable_semantics() {
             .iter()
             .map(|diagnostic| diagnostic.code)
             .collect::<Vec<_>>(),
-        vec![DiagnosticCode::ForwardCompatibleUnknown]
+        vec![
+            DiagnosticCode::SemanticChange,
+            DiagnosticCode::ForwardCompatibleUnknown,
+        ]
     );
 }

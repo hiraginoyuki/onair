@@ -1,26 +1,196 @@
 {
-  "protocol_version": "0.1.0",
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "stream",
+        "payload": [
+          {
+            "type": "request_started"
+          },
+          {
+            "message_id": "chatcmpl_synthetic",
+            "type": "message_started"
+          },
+          {
+            "message_id": "chatcmpl_synthetic",
+            "part_index": 0,
+            "part_type": "text",
+            "type": "output_part_started"
+          },
+          {
+            "text": "synthetic ",
+            "type": "text_delta"
+          },
+          {
+            "message_id": "chatcmpl_synthetic",
+            "part_index": 0,
+            "part_type": "tool_call",
+            "type": "output_part_started"
+          },
+          {
+            "arguments_delta": "{\"subject\":",
+            "call_id": "call_synthetic",
+            "name": "synthetic_lookup",
+            "type": "tool_call_delta"
+          },
+          {
+            "arguments_delta": "\"alpha\"}",
+            "call_id": "call_0",
+            "type": "tool_call_delta"
+          },
+          {
+            "message_id": "chatcmpl_synthetic",
+            "part_index": 0,
+            "type": "output_part_ended"
+          },
+          {
+            "message_id": "chatcmpl_synthetic",
+            "part_index": 0,
+            "type": "output_part_ended"
+          },
+          {
+            "finish_reason": "tool_calls",
+            "type": "terminal"
+          },
+          {
+            "type": "usage",
+            "usage": {
+              "input_tokens": 11,
+              "output_tokens": 7
+            }
+          }
+        ],
+        "profile_id": "openai.chat-completions.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "diagnostics": [
+        {
+          "code": "semantic_change",
+          "location": null,
+          "severity": "info"
+        }
+      ],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "ZXZlbnQ6IG1lc3NhZ2Vfc3RhcnQKZGF0YTogeyJtZXNzYWdlIjp7ImNvbnRlbnQiOltdLCJpZCI6ImNoYXRjbXBsX3N5bnRoZXRpYyIsIm1vZGVsIjoiYWxwaGEiLCJyb2xlIjoiYXNzaXN0YW50Iiwic3RvcF9yZWFzb24iOm51bGwsInR5cGUiOiJtZXNzYWdlIiwidXNhZ2UiOnsiaW5wdXRfdG9rZW5zIjowLCJvdXRwdXRfdG9rZW5zIjowfX0sInR5cGUiOiJtZXNzYWdlX3N0YXJ0In0KCmV2ZW50OiBjb250ZW50X2Jsb2NrX3N0YXJ0CmRhdGE6IHsiY29udGVudF9ibG9jayI6eyJ0ZXh0IjoiIiwidHlwZSI6InRleHQifSwiaW5kZXgiOjAsInR5cGUiOiJjb250ZW50X2Jsb2NrX3N0YXJ0In0KCmV2ZW50OiBjb250ZW50X2Jsb2NrX2RlbHRhCmRhdGE6IHsiZGVsdGEiOnsidGV4dCI6InN5bnRoZXRpYyAiLCJ0eXBlIjoidGV4dF9kZWx0YSJ9LCJpbmRleCI6MCwidHlwZSI6ImNvbnRlbnRfYmxvY2tfZGVsdGEifQoKZXZlbnQ6IGNvbnRlbnRfYmxvY2tfc3RhcnQKZGF0YTogeyJjb250ZW50X2Jsb2NrIjp7ImlkIjoiY2FsbF8wIiwiaW5wdXQiOnt9LCJuYW1lIjoiIiwidHlwZSI6InRvb2xfdXNlIn0sImluZGV4IjowLCJ0eXBlIjoiY29udGVudF9ibG9ja19zdGFydCJ9CgpldmVudDogY29udGVudF9ibG9ja19zdGFydApkYXRhOiB7ImNvbnRlbnRfYmxvY2siOnsiaWQiOiJjYWxsX3N5bnRoZXRpYyIsImlucHV0Ijp7fSwibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJ0eXBlIjoidG9vbF91c2UifSwiaW5kZXgiOjAsInR5cGUiOiJjb250ZW50X2Jsb2NrX3N0YXJ0In0KCmV2ZW50OiBjb250ZW50X2Jsb2NrX2RlbHRhCmRhdGE6IHsiZGVsdGEiOnsicGFydGlhbF9qc29uIjoie1wic3ViamVjdFwiOiIsInR5cGUiOiJpbnB1dF9qc29uX2RlbHRhIn0sImluZGV4IjowLCJ0eXBlIjoiY29udGVudF9ibG9ja19kZWx0YSJ9CgpldmVudDogY29udGVudF9ibG9ja19zdGFydApkYXRhOiB7ImNvbnRlbnRfYmxvY2siOnsiaWQiOiJjYWxsXzAiLCJpbnB1dCI6e30sIm5hbWUiOiIiLCJ0eXBlIjoidG9vbF91c2UifSwiaW5kZXgiOjEsInR5cGUiOiJjb250ZW50X2Jsb2NrX3N0YXJ0In0KCmV2ZW50OiBjb250ZW50X2Jsb2NrX2RlbHRhCmRhdGE6IHsiZGVsdGEiOnsicGFydGlhbF9qc29uIjoiXCJhbHBoYVwifSIsInR5cGUiOiJpbnB1dF9qc29uX2RlbHRhIn0sImluZGV4IjoxLCJ0eXBlIjoiY29udGVudF9ibG9ja19kZWx0YSJ9CgpldmVudDogY29udGVudF9ibG9ja19zdG9wCmRhdGE6IHsiaW5kZXgiOjAsInR5cGUiOiJjb250ZW50X2Jsb2NrX3N0b3AifQoKZXZlbnQ6IGNvbnRlbnRfYmxvY2tfc3RvcApkYXRhOiB7ImluZGV4IjowLCJ0eXBlIjoiY29udGVudF9ibG9ja19zdG9wIn0KCmV2ZW50OiBtZXNzYWdlX2RlbHRhCmRhdGE6IHsiZGVsdGEiOnsic3RvcF9yZWFzb24iOiJ0b29sX3VzZSJ9LCJ0eXBlIjoibWVzc2FnZV9kZWx0YSIsInVzYWdlIjp7ImNhY2hlX2NyZWF0aW9uX2lucHV0X3Rva2VucyI6bnVsbCwiY2FjaGVfcmVhZF9pbnB1dF90b2tlbnMiOm51bGwsImlucHV0X3Rva2VucyI6MTEsIm91dHB1dF90b2tlbnMiOjd9fQoKZXZlbnQ6IG1lc3NhZ2Vfc3RvcApkYXRhOiB7InR5cGUiOiJtZXNzYWdlX3N0b3AifQoK",
+        "body_kind": "sse",
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "content-type: text/event-stream"
+          },
+          {
+            "raw_line": "anthropic-version: 2023-06-01"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 200
+      },
+      "fidelity": "adapted",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "stream",
+          "payload": [
+            {
+              "type": "request_started"
+            },
+            {
+              "message_id": "chatcmpl_synthetic",
+              "type": "message_started"
+            },
+            {
+              "message_id": "chatcmpl_synthetic",
+              "part_index": 0,
+              "part_type": "text",
+              "type": "output_part_started"
+            },
+            {
+              "text": "synthetic ",
+              "type": "text_delta"
+            },
+            {
+              "message_id": "chatcmpl_synthetic",
+              "part_index": 0,
+              "part_type": "tool_call",
+              "type": "output_part_started"
+            },
+            {
+              "message_id": "chatcmpl_synthetic",
+              "part_index": 0,
+              "part_type": "tool_call",
+              "type": "output_part_started"
+            },
+            {
+              "arguments_delta": "{\"subject\":",
+              "call_id": "call_synthetic",
+              "name": "synthetic_lookup",
+              "type": "tool_call_delta"
+            },
+            {
+              "message_id": "chatcmpl_synthetic",
+              "part_index": 1,
+              "part_type": "tool_call",
+              "type": "output_part_started"
+            },
+            {
+              "arguments_delta": "\"alpha\"}",
+              "call_id": "call_0",
+              "name": "",
+              "type": "tool_call_delta"
+            },
+            {
+              "message_id": "chatcmpl_synthetic",
+              "part_index": 0,
+              "type": "output_part_ended"
+            },
+            {
+              "type": "usage",
+              "usage": {
+                "input_tokens": 11,
+                "output_tokens": 7
+              }
+            },
+            {
+              "message_id": "chatcmpl_synthetic",
+              "part_index": 1,
+              "type": "output_part_ended"
+            },
+            {
+              "finish_reason": "tool_calls",
+              "type": "terminal"
+            }
+          ],
+          "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  },
   "id": "openai.chat.stream.to-messages",
-  "title": "Synthetic Chat stream encoded through the shared IR to Messages",
-  "synthetic": true,
-  "source_profile": "openai.chat-completions.alpha-0.1.0",
-  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
-  "kind": "cross_profile_conversion",
   "input": {
     "envelope": {
-      "profile_id": "openai.chat-completions.alpha-0.1.0",
-      "status": 200,
+      "body_base64": "ZGF0YTogeyJpZCI6ImNoYXRjbXBsX3N5bnRoZXRpYyIsIm9iamVjdCI6ImNoYXQuY29tcGxldGlvbi5jaHVuayIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwiY2hvaWNlcyI6W3siaW5kZXgiOjAsImRlbHRhIjp7InJvbGUiOiJhc3Npc3RhbnQifSwiZmluaXNoX3JlYXNvbiI6bnVsbH1dfQoKZGF0YTogeyJpZCI6ImNoYXRjbXBsX3N5bnRoZXRpYyIsIm9iamVjdCI6ImNoYXQuY29tcGxldGlvbi5jaHVuayIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwiY2hvaWNlcyI6W3siaW5kZXgiOjAsImRlbHRhIjp7ImNvbnRlbnQiOiJzeW50aGV0aWMgIn0sImZpbmlzaF9yZWFzb24iOm51bGx9XX0KCmRhdGE6IHsiaWQiOiJjaGF0Y21wbF9zeW50aGV0aWMiLCJvYmplY3QiOiJjaGF0LmNvbXBsZXRpb24uY2h1bmsiLCJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsImNob2ljZXMiOlt7ImluZGV4IjowLCJkZWx0YSI6eyJ0b29sX2NhbGxzIjpbeyJpbmRleCI6MCwiaWQiOiJjYWxsX3N5bnRoZXRpYyIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwiYXJndW1lbnRzIjoie1wic3ViamVjdFwiOiJ9fV19LCJmaW5pc2hfcmVhc29uIjpudWxsfV19CgpkYXRhOiB7ImlkIjoiY2hhdGNtcGxfc3ludGhldGljIiwib2JqZWN0IjoiY2hhdC5jb21wbGV0aW9uLmNodW5rIiwibW9kZWwiOiJzeW50aGV0aWMtbW9kZWwiLCJjaG9pY2VzIjpbeyJpbmRleCI6MCwiZGVsdGEiOnsidG9vbF9jYWxscyI6W3siaW5kZXgiOjAsImZ1bmN0aW9uIjp7ImFyZ3VtZW50cyI6IlwiYWxwaGFcIn0ifX1dfSwiZmluaXNoX3JlYXNvbiI6InRvb2xfY2FsbHMifV19CgpkYXRhOiB7ImlkIjoiY2hhdGNtcGxfc3ludGhldGljIiwib2JqZWN0IjoiY2hhdC5jb21wbGV0aW9uLmNodW5rIiwiY2hvaWNlcyI6W10sInVzYWdlIjp7InByb21wdF90b2tlbnMiOjExLCJjb21wbGV0aW9uX3Rva2VucyI6NywidG90YWxfdG9rZW5zIjoxOH19CgpkYXRhOiBbRE9ORV0KCg==",
       "body_kind": "sse",
+      "profile_id": "openai.chat-completions.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "content-type: text/event-stream"
         }
       ],
-      "body_base64": "ZGF0YTogeyJpZCI6ImNoYXRjbXBsX3N5bnRoZXRpYyIsIm9iamVjdCI6ImNoYXQuY29tcGxldGlvbi5jaHVuayIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwiY2hvaWNlcyI6W3siaW5kZXgiOjAsImRlbHRhIjp7InJvbGUiOiJhc3Npc3RhbnQifSwiZmluaXNoX3JlYXNvbiI6bnVsbH1dfQoKZGF0YTogeyJpZCI6ImNoYXRjbXBsX3N5bnRoZXRpYyIsIm9iamVjdCI6ImNoYXQuY29tcGxldGlvbi5jaHVuayIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwiY2hvaWNlcyI6W3siaW5kZXgiOjAsImRlbHRhIjp7ImNvbnRlbnQiOiJzeW50aGV0aWMgIn0sImZpbmlzaF9yZWFzb24iOm51bGx9XX0KCmRhdGE6IHsiaWQiOiJjaGF0Y21wbF9zeW50aGV0aWMiLCJvYmplY3QiOiJjaGF0LmNvbXBsZXRpb24uY2h1bmsiLCJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsImNob2ljZXMiOlt7ImluZGV4IjowLCJkZWx0YSI6eyJ0b29sX2NhbGxzIjpbeyJpbmRleCI6MCwiaWQiOiJjYWxsX3N5bnRoZXRpYyIsInR5cGUiOiJmdW5jdGlvbiIsImZ1bmN0aW9uIjp7Im5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwiYXJndW1lbnRzIjoie1wic3ViamVjdFwiOiJ9fV19LCJmaW5pc2hfcmVhc29uIjpudWxsfV19CgpkYXRhOiB7ImlkIjoiY2hhdGNtcGxfc3ludGhldGljIiwib2JqZWN0IjoiY2hhdC5jb21wbGV0aW9uLmNodW5rIiwibW9kZWwiOiJzeW50aGV0aWMtbW9kZWwiLCJjaG9pY2VzIjpbeyJpbmRleCI6MCwiZGVsdGEiOnsidG9vbF9jYWxscyI6W3siaW5kZXgiOjAsImZ1bmN0aW9uIjp7ImFyZ3VtZW50cyI6IlwiYWxwaGFcIn0ifX1dfSwiZmluaXNoX3JlYXNvbiI6InRvb2xfY2FsbHMifV19CgpkYXRhOiB7ImlkIjoiY2hhdGNtcGxfc3ludGhldGljIiwib2JqZWN0IjoiY2hhdC5jb21wbGV0aW9uLmNodW5rIiwiY2hvaWNlcyI6W10sInVzYWdlIjp7InByb21wdF90b2tlbnMiOjExLCJjb21wbGV0aW9uX3Rva2VucyI6NywidG90YWxfdG9rZW5zIjoxOH19CgpkYXRhOiBbRE9ORV0KCg=="
+      "protocol_version": "0.1.0",
+      "status": 200
     }
   },
-  "expect": {
-    "fidelity": "exact",
-    "diagnostic_codes": []
-  }
+  "kind": "cross_profile_conversion",
+  "protocol_version": "0.1.0",
+  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "title": "Synthetic Chat stream encoded through the shared IR to Messages"
 }

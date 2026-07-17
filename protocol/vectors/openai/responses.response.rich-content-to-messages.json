@@ -1,0 +1,160 @@
+{
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "response",
+        "payload": {
+          "extensions": [],
+          "finish_reason": "stop",
+          "id": "resp_rich_synthetic",
+          "model": "synthetic-model",
+          "output": [
+            {
+              "content": [
+                {
+                  "summary": "synthetic reasoning",
+                  "type": "reasoning"
+                }
+              ],
+              "extensions": [],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "text": "synthetic answer",
+                  "type": "text"
+                },
+                {
+                  "extensions": [],
+                  "reference": {
+                    "title": "Synthetic source",
+                    "type": "url_citation",
+                    "url": "https://synthetic.invalid/source"
+                  },
+                  "type": "citation"
+                },
+                {
+                  "extensions": [],
+                  "text": "synthetic refusal",
+                  "type": "refusal"
+                }
+              ],
+              "extensions": [],
+              "role": "assistant"
+            }
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "output_tokens": 3
+          }
+        },
+        "profile_id": "openai.responses.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "diagnostics": [
+        {
+          "code": "semantic_change",
+          "location": {
+            "kind": "json_pointer",
+            "pointer": "/messages/1/content/1"
+          },
+          "severity": "warning"
+        },
+        {
+          "code": "semantic_change",
+          "location": {
+            "kind": "json_pointer",
+            "pointer": "/messages/1/content/2"
+          },
+          "severity": "warning"
+        }
+      ],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "eyJjb250ZW50IjpbeyJ0aGlua2luZyI6InN5bnRoZXRpYyByZWFzb25pbmciLCJ0eXBlIjoidGhpbmtpbmcifSx7InRleHQiOiJzeW50aGV0aWMgYW5zd2VyIiwidHlwZSI6InRleHQifSx7InRleHQiOiIiLCJ0eXBlIjoidGV4dCJ9LHsidGV4dCI6InN5bnRoZXRpYyByZWZ1c2FsIiwidHlwZSI6InRleHQifV0sImlkIjoicmVzcF9yaWNoX3N5bnRoZXRpYyIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwicm9sZSI6ImFzc2lzdGFudCIsInN0b3BfcmVhc29uIjoiZW5kX3R1cm4iLCJ0eXBlIjoibWVzc2FnZSIsInVzYWdlIjp7ImNhY2hlX2NyZWF0aW9uX2lucHV0X3Rva2VucyI6bnVsbCwiY2FjaGVfcmVhZF9pbnB1dF90b2tlbnMiOm51bGwsImlucHV0X3Rva2VucyI6NCwib3V0cHV0X3Rva2VucyI6M319",
+        "body_kind": "json",
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "content-type: application/json"
+          },
+          {
+            "raw_line": "anthropic-version: 2023-06-01"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 200
+      },
+      "fidelity": "lossy",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "response",
+          "payload": {
+            "extensions": [],
+            "finish_reason": "stop",
+            "id": "resp_rich_synthetic",
+            "model": "synthetic-model",
+            "output": [
+              {
+                "content": [
+                  {
+                    "summary": "synthetic reasoning",
+                    "type": "reasoning"
+                  },
+                  {
+                    "text": "synthetic answer",
+                    "type": "text"
+                  },
+                  {
+                    "text": "",
+                    "type": "text"
+                  },
+                  {
+                    "text": "synthetic refusal",
+                    "type": "text"
+                  }
+                ],
+                "extensions": [],
+                "role": "assistant"
+              }
+            ],
+            "usage": {
+              "input_tokens": 4,
+              "output_tokens": 3
+            }
+          },
+          "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  },
+  "id": "openai.responses.response.rich-content-to-messages",
+  "input": {
+    "envelope": {
+      "body_base64": "eyJpZCI6InJlc3BfcmljaF9zeW50aGV0aWMiLCJvYmplY3QiOiJyZXNwb25zZSIsInN0YXR1cyI6ImNvbXBsZXRlZCIsIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwib3V0cHV0IjpbeyJpZCI6InJlYXNvbmluZ19zeW50aGV0aWMiLCJ0eXBlIjoicmVhc29uaW5nIiwic3VtbWFyeSI6W3sidHlwZSI6InN1bW1hcnlfdGV4dCIsInRleHQiOiJzeW50aGV0aWMgcmVhc29uaW5nIn1dfSx7ImlkIjoibWVzc2FnZV9zeW50aGV0aWMiLCJ0eXBlIjoibWVzc2FnZSIsInN0YXR1cyI6ImNvbXBsZXRlZCIsInJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoib3V0cHV0X3RleHQiLCJ0ZXh0Ijoic3ludGhldGljIGFuc3dlciIsImFubm90YXRpb25zIjpbeyJ0eXBlIjoidXJsX2NpdGF0aW9uIiwidXJsIjoiaHR0cHM6Ly9zeW50aGV0aWMuaW52YWxpZC9zb3VyY2UiLCJ0aXRsZSI6IlN5bnRoZXRpYyBzb3VyY2UifV19LHsidHlwZSI6InJlZnVzYWwiLCJyZWZ1c2FsIjoic3ludGhldGljIHJlZnVzYWwifV19XSwidXNhZ2UiOnsiaW5wdXRfdG9rZW5zIjo0LCJvdXRwdXRfdG9rZW5zIjozfX0=",
+      "body_kind": "json",
+      "profile_id": "openai.responses.alpha-0.1.0",
+      "protocol_headers": [
+        {
+          "raw_line": "content-type: application/json"
+        }
+      ],
+      "protocol_version": "0.1.0",
+      "status": 200
+    }
+  },
+  "kind": "cross_profile_conversion",
+  "protocol_version": "0.1.0",
+  "source_profile": "openai.responses.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "title": "Synthetic Responses reasoning citation and refusal response encoded to Messages"
+}

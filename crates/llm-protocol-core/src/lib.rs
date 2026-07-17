@@ -460,12 +460,16 @@ pub struct ContinuationHandle {
 }
 
 impl ContinuationHandle {
+    pub fn is_issued_by(&self, profile: &ProfileId) -> bool {
+        self.issuing_profile == *profile && self.extension.issuing_profile == *profile
+    }
+
     pub fn portability_to(&self, target_profile: &ProfileId) -> Option<Diagnostic> {
-        (self.issuing_profile != *target_profile).then(|| {
+        (!self.is_issued_by(target_profile)).then(|| {
             Diagnostic::warning(
                 DiagnosticCode::NonPortableContinuationHandle,
                 Some(self.extension.source_location.clone()),
-                "provider continuation handles are valid only for their issuing profile",
+                "provider continuation handles require consistent issuing-profile metadata and are valid only for that profile",
             )
         })
     }
@@ -599,6 +603,7 @@ pub enum OutputSchemaEnforcement {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CacheIntent {
+    #[serde(rename = "openai")]
     OpenAi(OpenAiCacheIntent),
     Anthropic(AnthropicCacheIntent),
 }
@@ -987,14 +992,31 @@ mod tests {
     fn compile_protocol_schema(schema_path: &str) -> jsonschema::Validator {
         const CACHE_REPORT_SCHEMA_ID: &str =
             "https://onair.dev/llm-protocol-alpha/0.1.0/cache-report.schema.json";
+        const DIAGNOSTIC_SCHEMA_ID: &str =
+            "https://onair.dev/llm-protocol-alpha/0.1.0/diagnostic.schema.json";
+        const ENVELOPE_SCHEMA_ID: &str =
+            "https://onair.dev/llm-protocol-alpha/0.1.0/envelope.schema.json";
+        const IR_SCHEMA_ID: &str = "https://onair.dev/llm-protocol-alpha/0.1.0/ir.schema.json";
 
         let schema = read_protocol_json(schema_path);
         let cache_report_schema = read_protocol_json("schemas/cache-report.schema.json");
+        let diagnostic_schema = read_protocol_json("schemas/diagnostic.schema.json");
+        let envelope_schema = read_protocol_json("schemas/envelope.schema.json");
+        let ir_schema = read_protocol_json("schemas/ir.schema.json");
         jsonschema::options()
             .with_resource(
                 CACHE_REPORT_SCHEMA_ID,
                 jsonschema::Resource::from_contents(cache_report_schema),
             )
+            .with_resource(
+                DIAGNOSTIC_SCHEMA_ID,
+                jsonschema::Resource::from_contents(diagnostic_schema),
+            )
+            .with_resource(
+                ENVELOPE_SCHEMA_ID,
+                jsonschema::Resource::from_contents(envelope_schema),
+            )
+            .with_resource(IR_SCHEMA_ID, jsonschema::Resource::from_contents(ir_schema))
             .build(&schema)
             .unwrap_or_else(|error| panic!("compile schema {schema_path}: {error}"))
     }
@@ -1025,6 +1047,21 @@ mod tests {
         assert_eq!(
             result,
             Err(ProfileError::DuplicateId(profile_id("openai.chat.test")))
+        );
+    }
+
+    #[test]
+    fn openai_cache_intent_uses_the_normative_provider_spelling() {
+        let intent = CacheIntent::OpenAi(OpenAiCacheIntent {
+            request_cache_key: Some("synthetic-cache-key".to_owned()),
+            retention: Some("24h".to_owned()),
+        });
+        let encoded = serde_json::to_value(&intent).unwrap();
+
+        assert_eq!(encoded["kind"], "openai");
+        assert_eq!(
+            serde_json::from_value::<CacheIntent>(encoded).unwrap(),
+            intent
         );
     }
 
@@ -1086,6 +1123,18 @@ mod tests {
             handle.portability_to(&target).unwrap().code,
             DiagnosticCode::NonPortableContinuationHandle
         );
+        assert!(handle.is_issued_by(&handle.issuing_profile));
+
+        let mut contradictory = handle.clone();
+        contradictory.extension.issuing_profile = target;
+        assert!(!contradictory.is_issued_by(&contradictory.issuing_profile));
+        assert_eq!(
+            contradictory
+                .portability_to(&contradictory.issuing_profile)
+                .unwrap()
+                .code,
+            DiagnosticCode::NonPortableContinuationHandle
+        );
     }
 
     #[test]
@@ -1126,6 +1175,34 @@ mod tests {
     }
 
     #[test]
+    fn ir_stream_event_schema_rejects_incomplete_and_unknown_shapes() {
+        for event in [
+            serde_json::json!({"type": "text_delta"}),
+            serde_json::json!({"type": "usage", "usage": "not-an-object"}),
+            serde_json::json!({"type": "terminal", "finish_reason": "stop", "extra": true}),
+            serde_json::json!({
+                "type": "error",
+                "error": {
+                    "category": "not-a-category",
+                    "code": "synthetic_error",
+                    "message": "synthetic failure"
+                }
+            }),
+        ] {
+            let document = serde_json::json!({
+                "protocol_version": PROTOCOL_VERSION,
+                "profile_id": OPENAI_RESPONSES_PROFILE,
+                "kind": "stream",
+                "payload": [event]
+            });
+            assert!(
+                !validation_errors("schemas/ir.schema.json", &document).is_empty(),
+                "malformed stream event unexpectedly passed the normative schema"
+            );
+        }
+    }
+
+    #[test]
     fn committed_protocol_json_is_well_formed_and_uses_alpha_version() {
         const JSON_ARTIFACTS: &[&[u8]] = &[
             include_bytes!("../../../protocol/profiles/registry.json"),
@@ -1133,6 +1210,7 @@ mod tests {
             include_bytes!("../../../protocol/schemas/envelope.schema.json"),
             include_bytes!("../../../protocol/schemas/ir.schema.json"),
             include_bytes!("../../../protocol/schemas/cache-report.schema.json"),
+            include_bytes!("../../../protocol/schemas/diagnostic.schema.json"),
             include_bytes!("../../../protocol/schemas/vector.schema.json"),
             include_bytes!("../../../protocol/schemas/vector-manifest.schema.json"),
             include_bytes!("../../../protocol/vectors/manifest.json"),
@@ -1190,6 +1268,7 @@ mod tests {
             "schemas/envelope.schema.json",
             "schemas/ir.schema.json",
             "schemas/cache-report.schema.json",
+            "schemas/diagnostic.schema.json",
             "schemas/vector.schema.json",
             "schemas/vector-manifest.schema.json",
         ] {
@@ -1281,14 +1360,14 @@ mod tests {
                         .expect("active vector has a target profile")
                 )
             );
-            assert!(
-                document["expect"]["fidelity"]
-                    .as_str()
-                    .is_some_and(|fidelity| {
-                        matches!(fidelity, "exact" | "adapted" | "lossy" | "unsupported")
-                    })
-            );
-            assert!(document["expect"]["diagnostic_codes"].as_array().is_some());
+            if document["kind"] == "cache_analysis" {
+                assert!(document["expect"]["analysis"]["result_ir"].is_object());
+                assert!(document["expect"]["analysis"]["diagnostics"].is_array());
+            } else {
+                assert!(document["expect"]["decode"]["ir"].is_object());
+                assert!(document["expect"]["decode"]["diagnostics"].is_array());
+                assert!(document["expect"]["encode"]["diagnostics"].is_array());
+            }
             assert_cache_report_is_content_free(&document);
         }
     }

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onair.dev/llm-protocol-alpha/0.1.0/diagnostic.schema.json",
+  "title": "LLM Protocol Alpha Diagnostic Expectation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "code",
+    "severity",
+    "location"
+  ],
+  "properties": {
+    "code": {
+      "enum": [
+        "cache_plan_applied",
+        "forward_compatible_unknown",
+        "non_portable_cache_intent",
+        "non_portable_continuation_handle",
+        "non_portable_opaque_extension",
+        "unsupported_feature",
+        "semantic_change"
+      ]
+    },
+    "severity": {
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ]
+    },
+    "location": {
+      "oneOf": [
+        {
+          "$ref": "ir.schema.json#/$defs/source_location"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

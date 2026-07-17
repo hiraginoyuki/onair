@@ -755,7 +755,17 @@
       ],
       "properties": {
         "category": {
-          "type": "string"
+          "enum": [
+            "invalid_request",
+            "authentication",
+            "permission",
+            "not_found",
+            "rate_limit",
+            "conflict",
+            "server",
+            "transport",
+            "unknown"
+          ]
         },
         "code": {
           "type": "string"
@@ -785,29 +795,306 @@
       }
     },
     "stream_event": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/request_started_event"
+        },
+        {
+          "$ref": "#/$defs/message_started_event"
+        },
+        {
+          "$ref": "#/$defs/output_part_started_event"
+        },
+        {
+          "$ref": "#/$defs/output_part_ended_event"
+        },
+        {
+          "$ref": "#/$defs/text_delta_event"
+        },
+        {
+          "$ref": "#/$defs/reasoning_delta_event"
+        },
+        {
+          "$ref": "#/$defs/refusal_stream_event"
+        },
+        {
+          "$ref": "#/$defs/citation_stream_event"
+        },
+        {
+          "$ref": "#/$defs/tool_call_delta_event"
+        },
+        {
+          "$ref": "#/$defs/usage_event"
+        },
+        {
+          "$ref": "#/$defs/terminal_event"
+        },
+        {
+          "$ref": "#/$defs/error_event"
+        },
+        {
+          "$ref": "#/$defs/opaque_stream_event"
+        }
+      ]
+    },
+    "request_started_event": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "type"
       ],
       "properties": {
         "type": {
-          "enum": [
-            "request_started",
-            "message_started",
-            "output_part_started",
-            "output_part_ended",
-            "text_delta",
-            "reasoning_delta",
-            "refusal_part",
-            "citation_part",
-            "tool_call_delta",
-            "usage",
-            "terminal",
-            "error",
-            "opaque"
+          "const": "request_started"
+        }
+      }
+    },
+    "message_started_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "message_started"
+        },
+        "message_id": {
+          "type": [
+            "string",
+            "null"
           ]
         }
       }
+    },
+    "output_part_started_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "part_index",
+        "part_type"
+      ],
+      "properties": {
+        "type": {
+          "const": "output_part_started"
+        },
+        "message_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "part_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "part_type": {
+          "$ref": "#/$defs/output_part_type"
+        }
+      }
+    },
+    "output_part_ended_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "part_index"
+      ],
+      "properties": {
+        "type": {
+          "const": "output_part_ended"
+        },
+        "message_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "part_index": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "text_delta_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "text_delta"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "reasoning_delta_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "reasoning_delta"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "refusal_stream_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "refusal_part"
+        },
+        "text": {
+          "type": "string"
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/opaque_extension"
+          }
+        }
+      }
+    },
+    "citation_stream_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "reference"
+      ],
+      "properties": {
+        "type": {
+          "const": "citation_part"
+        },
+        "reference": {
+          "type": "object"
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/opaque_extension"
+          }
+        }
+      }
+    },
+    "tool_call_delta_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "call_id",
+        "arguments_delta"
+      ],
+      "properties": {
+        "type": {
+          "const": "tool_call_delta"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "arguments_delta": {
+          "type": "string"
+        }
+      }
+    },
+    "usage_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "usage"
+      ],
+      "properties": {
+        "type": {
+          "const": "usage"
+        },
+        "usage": {
+          "$ref": "#/$defs/usage"
+        }
+      }
+    },
+    "terminal_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "finish_reason"
+      ],
+      "properties": {
+        "type": {
+          "const": "terminal"
+        },
+        "finish_reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "error_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "error"
+      ],
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      }
+    },
+    "opaque_stream_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "extension"
+      ],
+      "properties": {
+        "type": {
+          "const": "opaque"
+        },
+        "extension": {
+          "$ref": "#/$defs/opaque_extension"
+        }
+      }
+    },
+    "output_part_type": {
+      "enum": [
+        "text",
+        "image",
+        "document",
+        "tool_call",
+        "tool_result",
+        "reasoning",
+        "citation",
+        "refusal"
+      ]
     },
     "stream": {
       "type": "array",

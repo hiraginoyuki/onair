@@ -1,26 +1,294 @@
 {
-  "protocol_version": "0.1.0",
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "request",
+        "payload": {
+          "extensions": [],
+          "generation": {
+            "max_output_tokens": 24,
+            "stop_sequences": []
+          },
+          "instructions": [],
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "synthetic request",
+                  "type": "text"
+                }
+              ],
+              "extensions": [],
+              "role": "user"
+            },
+            {
+              "content": [
+                {
+                  "arguments": {
+                    "subject": "alpha"
+                  },
+                  "extensions": [],
+                  "id": "call_synthetic",
+                  "name": "synthetic_lookup",
+                  "type": "tool_call"
+                }
+              ],
+              "extensions": [],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "text": "synthetic result",
+                      "type": "text"
+                    }
+                  ],
+                  "extensions": [],
+                  "is_error": false,
+                  "tool_call_id": "call_synthetic",
+                  "type": "tool_result"
+                }
+              ],
+              "extensions": [],
+              "role": "tool"
+            }
+          ],
+          "model": "synthetic-model",
+          "stream": false,
+          "tools": []
+        },
+        "profile_id": "openai.responses.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "cache_report": {
+        "entries": [
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 1
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 1
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 1,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 1,
+                "part_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 2
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 2
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 2,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 2,
+                "part_index": 0
+              }
+            }
+          }
+        ],
+        "protocol_version": "0.1.0"
+      },
+      "diagnostics": [],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "eyJtYXhfdG9rZW5zIjoyNCwibWVzc2FnZXMiOlt7ImNvbnRlbnQiOlt7InRleHQiOiJzeW50aGV0aWMgcmVxdWVzdCIsInR5cGUiOiJ0ZXh0In1dLCJyb2xlIjoidXNlciJ9LHsiY29udGVudCI6W3siaWQiOiJjYWxsX3N5bnRoZXRpYyIsImlucHV0Ijp7InN1YmplY3QiOiJhbHBoYSJ9LCJuYW1lIjoic3ludGhldGljX2xvb2t1cCIsInR5cGUiOiJ0b29sX3VzZSJ9XSwicm9sZSI6ImFzc2lzdGFudCJ9LHsiY29udGVudCI6W3siY29udGVudCI6InN5bnRoZXRpYyByZXN1bHQiLCJpc19lcnJvciI6ZmFsc2UsInRvb2xfdXNlX2lkIjoiY2FsbF9zeW50aGV0aWMiLCJ0eXBlIjoidG9vbF9yZXN1bHQifV0sInJvbGUiOiJ1c2VyIn1dLCJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCJ9",
+        "body_kind": "json",
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "content-type: application/json"
+          },
+          {
+            "raw_line": "anthropic-version: 2023-06-01"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 200
+      },
+      "fidelity": "exact",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "request",
+          "payload": {
+            "extensions": [],
+            "generation": {
+              "max_output_tokens": 24,
+              "stop_sequences": []
+            },
+            "instructions": [],
+            "messages": [
+              {
+                "content": [
+                  {
+                    "text": "synthetic request",
+                    "type": "text"
+                  }
+                ],
+                "extensions": [],
+                "role": "user"
+              },
+              {
+                "content": [
+                  {
+                    "arguments": {
+                      "subject": "alpha"
+                    },
+                    "extensions": [],
+                    "id": "call_synthetic",
+                    "name": "synthetic_lookup",
+                    "type": "tool_call"
+                  }
+                ],
+                "extensions": [],
+                "role": "assistant"
+              },
+              {
+                "content": [
+                  {
+                    "content": [
+                      {
+                        "text": "synthetic result",
+                        "type": "text"
+                      }
+                    ],
+                    "extensions": [],
+                    "is_error": false,
+                    "tool_call_id": "call_synthetic",
+                    "type": "tool_result"
+                  }
+                ],
+                "extensions": [],
+                "role": "tool"
+              }
+            ],
+            "model": "synthetic-model",
+            "stream": false,
+            "tools": []
+          },
+          "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  },
   "id": "openai.responses.request.to-messages",
-  "title": "Synthetic Responses request encoded through the shared IR to Messages",
-  "synthetic": true,
-  "source_profile": "openai.responses.alpha-0.1.0",
-  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
-  "kind": "cross_profile_conversion",
   "input": {
     "envelope": {
-      "profile_id": "openai.responses.alpha-0.1.0",
-      "status": 200,
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsImlucHV0IjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6InN5bnRoZXRpYyByZXF1ZXN0In1dfSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsIiwiY2FsbF9pZCI6ImNhbGxfc3ludGhldGljIiwibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJhcmd1bWVudHMiOiJ7XCJzdWJqZWN0XCI6XCJhbHBoYVwifSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGxfb3V0cHV0IiwiY2FsbF9pZCI6ImNhbGxfc3ludGhldGljIiwib3V0cHV0Ijoic3ludGhldGljIHJlc3VsdCJ9XSwibWF4X291dHB1dF90b2tlbnMiOjI0fQ==",
       "body_kind": "json",
+      "profile_id": "openai.responses.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "content-type: application/json"
         }
       ],
-      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsImlucHV0IjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6InN5bnRoZXRpYyByZXF1ZXN0In1dfSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsIiwiY2FsbF9pZCI6ImNhbGxfc3ludGhldGljIiwibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJhcmd1bWVudHMiOiJ7XCJzdWJqZWN0XCI6XCJhbHBoYVwifSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGxfb3V0cHV0IiwiY2FsbF9pZCI6ImNhbGxfc3ludGhldGljIiwib3V0cHV0Ijoic3ludGhldGljIHJlc3VsdCJ9XSwibWF4X291dHB1dF90b2tlbnMiOjI0fQ=="
+      "protocol_version": "0.1.0",
+      "status": 200
     }
   },
-  "expect": {
-    "fidelity": "exact",
-    "diagnostic_codes": []
-  }
+  "kind": "cross_profile_conversion",
+  "protocol_version": "0.1.0",
+  "source_profile": "openai.responses.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "title": "Synthetic Responses request encoded through the shared IR to Messages"
 }

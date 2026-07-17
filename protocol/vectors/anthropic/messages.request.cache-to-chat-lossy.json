@@ -7,9 +7,22 @@
         "kind": "request",
         "payload": {
           "cache_intent": {
-            "kind": "openai",
-            "request_cache_key": "synthetic-cache",
-            "retention": "24h"
+            "breakpoints": [
+              {
+                "location": {
+                  "kind": "instructions",
+                  "part_index": 0
+                },
+                "ttl": "5m"
+              },
+              {
+                "location": {
+                  "kind": "tool_definition",
+                  "tool_index": 0
+                }
+              }
+            ],
+            "kind": "anthropic"
           },
           "extensions": [],
           "generation": {
@@ -18,13 +31,25 @@
             "temperature": 0.2,
             "top_p": 0.9
           },
-          "instructions": [],
+          "instructions": [
+            {
+              "text": "synthetic instruction",
+              "type": "text"
+            }
+          ],
           "messages": [
             {
               "content": [
                 {
                   "text": "synthetic request",
                   "type": "text"
+                },
+                {
+                  "asset": {
+                    "reference_type": "url",
+                    "value": "https://synthetic.invalid/image.png"
+                  },
+                  "type": "image"
                 }
               ],
               "extensions": [],
@@ -32,10 +57,6 @@
             },
             {
               "content": [
-                {
-                  "text": "",
-                  "type": "text"
-                },
                 {
                   "arguments": {
                     "subject": "alpha"
@@ -69,13 +90,6 @@
             }
           ],
           "model": "synthetic-model",
-          "output_schema": {
-            "enforcement": "required",
-            "name": "synthetic_output",
-            "schema": {
-              "type": "object"
-            }
-          },
           "stream": false,
           "tools": [
             {
@@ -84,12 +98,11 @@
               "input_schema": {
                 "type": "object"
               },
-              "name": "synthetic_lookup",
-              "strict": true
+              "name": "synthetic_lookup"
             }
           ]
         },
-        "profile_id": "openai.chat-completions.alpha-0.1.0",
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
         "protocol_version": "0.1.0"
       }
     },
@@ -99,6 +112,24 @@
           {
             "reason": "unchanged",
             "source": {
+              "kind": "instruction",
+              "location": {
+                "kind": "instructions",
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "instruction",
+              "location": {
+                "kind": "instructions",
+                "part_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
               "kind": "message",
               "location": {
                 "kind": "message",
@@ -137,6 +168,46 @@
           {
             "reason": "unchanged",
             "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 1
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 1
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "asset",
+              "location": {
+                "kind": "asset",
+                "message_index": 0,
+                "part_index": 1
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "asset",
+              "location": {
+                "kind": "asset",
+                "message_index": 0,
+                "part_index": 1
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
               "kind": "message",
               "location": {
                 "kind": "message",
@@ -169,26 +240,6 @@
                 "kind": "message_part",
                 "message_index": 1,
                 "part_index": 0
-              }
-            }
-          },
-          {
-            "reason": "unchanged",
-            "source": {
-              "kind": "content_part",
-              "location": {
-                "kind": "message_part",
-                "message_index": 1,
-                "part_index": 1
-              }
-            },
-            "status": "preserved",
-            "target": {
-              "kind": "content_part",
-              "location": {
-                "kind": "message_part",
-                "message_index": 1,
-                "part_index": 1
               }
             }
           },
@@ -249,23 +300,7 @@
             }
           },
           {
-            "reason": "unchanged",
-            "source": {
-              "kind": "output_schema",
-              "location": {
-                "kind": "output_schema"
-              }
-            },
-            "status": "preserved",
-            "target": {
-              "kind": "output_schema",
-              "location": {
-                "kind": "output_schema"
-              }
-            }
-          },
-          {
-            "reason": "unchanged",
+            "reason": "provider_semantics_differ",
             "source": {
               "kind": "cache_directive",
               "location": {
@@ -273,17 +308,11 @@
                 "kind": "cache_directive"
               }
             },
-            "status": "preserved",
-            "target": {
-              "kind": "cache_directive",
-              "location": {
-                "directive_index": 0,
-                "kind": "cache_directive"
-              }
-            }
+            "status": "non_portable",
+            "target": null
           },
           {
-            "reason": "unchanged",
+            "reason": "provider_semantics_differ",
             "source": {
               "kind": "cache_directive",
               "location": {
@@ -291,24 +320,32 @@
                 "kind": "cache_directive"
               }
             },
-            "status": "preserved",
-            "target": {
-              "kind": "cache_directive",
-              "location": {
-                "directive_index": 1,
-                "kind": "cache_directive"
-              }
-            }
+            "status": "non_portable",
+            "target": null
           }
         ],
         "protocol_version": "0.1.0"
       },
-      "diagnostics": [],
+      "diagnostics": [
+        {
+          "code": "non_portable_cache_intent",
+          "location": null,
+          "severity": "warning"
+        },
+        {
+          "code": "semantic_change",
+          "location": {
+            "kind": "json_pointer",
+            "pointer": "/instructions"
+          },
+          "severity": "info"
+        }
+      ],
       "envelope": {
         "adapter_headers": {},
-        "body_base64": "eyJpbnB1dCI6W3siY29udGVudCI6W3sidGV4dCI6InN5bnRoZXRpYyByZXF1ZXN0IiwidHlwZSI6ImlucHV0X3RleHQifV0sInJvbGUiOiJ1c2VyIn0seyJhcmd1bWVudHMiOiJ7XCJzdWJqZWN0XCI6XCJhbHBoYVwifSIsImNhbGxfaWQiOiJjYWxsX3N5bnRoZXRpYyIsIm5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwidHlwZSI6ImZ1bmN0aW9uX2NhbGwifSx7ImNhbGxfaWQiOiJjYWxsX3N5bnRoZXRpYyIsIm91dHB1dCI6InN5bnRoZXRpYyByZXN1bHQiLCJ0eXBlIjoiZnVuY3Rpb25fY2FsbF9vdXRwdXQifV0sIm1heF9vdXRwdXRfdG9rZW5zIjoyNCwibW9kZWwiOiJzeW50aGV0aWMtbW9kZWwiLCJwcm9tcHRfY2FjaGVfa2V5Ijoic3ludGhldGljLWNhY2hlIiwicHJvbXB0X2NhY2hlX3JldGVudGlvbiI6IjI0aCIsInRlbXBlcmF0dXJlIjowLjIsInRleHQiOnsiZm9ybWF0Ijp7ImRlc2NyaXB0aW9uIjpudWxsLCJuYW1lIjoic3ludGhldGljX291dHB1dCIsInNjaGVtYSI6eyJ0eXBlIjoib2JqZWN0In0sInN0cmljdCI6dHJ1ZSwidHlwZSI6Impzb25fc2NoZW1hIn19LCJ0b29scyI6W3siZGVzY3JpcHRpb24iOiJzeW50aGV0aWMgdG9vbCIsIm5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0In0sInN0cmljdCI6dHJ1ZSwidHlwZSI6ImZ1bmN0aW9uIn1dLCJ0b3BfcCI6MC45fQ==",
+        "body_base64": "eyJtYXhfY29tcGxldGlvbl90b2tlbnMiOjI0LCJtZXNzYWdlcyI6W3siY29udGVudCI6InN5bnRoZXRpYyBpbnN0cnVjdGlvbiIsInJvbGUiOiJzeXN0ZW0ifSx7ImNvbnRlbnQiOlt7InRleHQiOiJzeW50aGV0aWMgcmVxdWVzdCIsInR5cGUiOiJ0ZXh0In0seyJpbWFnZV91cmwiOnsidXJsIjoiaHR0cHM6Ly9zeW50aGV0aWMuaW52YWxpZC9pbWFnZS5wbmcifSwidHlwZSI6ImltYWdlX3VybCJ9XSwicm9sZSI6InVzZXIifSx7ImNvbnRlbnQiOiIiLCJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siZnVuY3Rpb24iOnsiYXJndW1lbnRzIjoie1wic3ViamVjdFwiOlwiYWxwaGFcIn0iLCJuYW1lIjoic3ludGhldGljX2xvb2t1cCJ9LCJpZCI6ImNhbGxfc3ludGhldGljIiwidHlwZSI6ImZ1bmN0aW9uIn1dfSx7ImNvbnRlbnQiOiJzeW50aGV0aWMgcmVzdWx0Iiwicm9sZSI6InRvb2wiLCJ0b29sX2NhbGxfaWQiOiJjYWxsX3N5bnRoZXRpYyJ9XSwibW9kZWwiOiJzeW50aGV0aWMtbW9kZWwiLCJ0ZW1wZXJhdHVyZSI6MC4yLCJ0b29scyI6W3siZnVuY3Rpb24iOnsiZGVzY3JpcHRpb24iOiJzeW50aGV0aWMgdG9vbCIsIm5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0In0sInN0cmljdCI6bnVsbH0sInR5cGUiOiJmdW5jdGlvbiJ9XSwidG9wX3AiOjAuOX0=",
         "body_kind": "json",
-        "profile_id": "openai.responses.alpha-0.1.0",
+        "profile_id": "openai.chat-completions.alpha-0.1.0",
         "protocol_headers": [
           {
             "raw_line": "content-type: application/json"
@@ -317,18 +354,13 @@
         "protocol_version": "0.1.0",
         "status": 200
       },
-      "fidelity": "exact",
+      "fidelity": "lossy",
       "round_trip_decode": {
         "diagnostics": [],
         "fidelity": "exact",
         "ir": {
           "kind": "request",
           "payload": {
-            "cache_intent": {
-              "kind": "openai",
-              "request_cache_key": "synthetic-cache",
-              "retention": "24h"
-            },
             "extensions": [],
             "generation": {
               "max_output_tokens": 24,
@@ -341,8 +373,25 @@
               {
                 "content": [
                   {
+                    "text": "synthetic instruction",
+                    "type": "text"
+                  }
+                ],
+                "extensions": [],
+                "role": "system"
+              },
+              {
+                "content": [
+                  {
                     "text": "synthetic request",
                     "type": "text"
+                  },
+                  {
+                    "asset": {
+                      "reference_type": "url",
+                      "value": "https://synthetic.invalid/image.png"
+                    },
+                    "type": "image"
                   }
                 ],
                 "extensions": [],
@@ -350,6 +399,10 @@
               },
               {
                 "content": [
+                  {
+                    "text": "",
+                    "type": "text"
+                  },
                   {
                     "arguments": {
                       "subject": "alpha"
@@ -383,13 +436,6 @@
               }
             ],
             "model": "synthetic-model",
-            "output_schema": {
-              "enforcement": "required",
-              "name": "synthetic_output",
-              "schema": {
-                "type": "object"
-              }
-            },
             "stream": false,
             "tools": [
               {
@@ -398,26 +444,28 @@
                 "input_schema": {
                   "type": "object"
                 },
-                "name": "synthetic_lookup",
-                "strict": true
+                "name": "synthetic_lookup"
               }
             ]
           },
-          "profile_id": "openai.responses.alpha-0.1.0",
+          "profile_id": "openai.chat-completions.alpha-0.1.0",
           "protocol_version": "0.1.0"
         }
       }
     }
   },
-  "id": "openai.chat.request.text-tool",
+  "id": "anthropic.messages.request.cache-to-chat-lossy",
   "input": {
     "envelope": {
-      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVxdWVzdCJ9LHsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiIiLCJ0b29sX2NhbGxzIjpbeyJpZCI6ImNhbGxfc3ludGhldGljIiwidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJhcmd1bWVudHMiOiJ7XCJzdWJqZWN0XCI6XCJhbHBoYVwifSJ9fV19LHsicm9sZSI6InRvb2wiLCJ0b29sX2NhbGxfaWQiOiJjYWxsX3N5bnRoZXRpYyIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVzdWx0In1dLCJ0b29scyI6W3sidHlwZSI6ImZ1bmN0aW9uIiwiZnVuY3Rpb24iOnsibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJkZXNjcmlwdGlvbiI6InN5bnRoZXRpYyB0b29sIiwicGFyYW1ldGVycyI6eyJ0eXBlIjoib2JqZWN0In0sInN0cmljdCI6dHJ1ZX19XSwidGVtcGVyYXR1cmUiOjAuMiwidG9wX3AiOjAuOSwibWF4X2NvbXBsZXRpb25fdG9rZW5zIjoyNCwicHJvbXB0X2NhY2hlX2tleSI6InN5bnRoZXRpYy1jYWNoZSIsInByb21wdF9jYWNoZV9yZXRlbnRpb24iOiIyNGgiLCJyZXNwb25zZV9mb3JtYXQiOnsidHlwZSI6Impzb25fc2NoZW1hIiwianNvbl9zY2hlbWEiOnsibmFtZSI6InN5bnRoZXRpY19vdXRwdXQiLCJzY2hlbWEiOnsidHlwZSI6Im9iamVjdCJ9LCJzdHJpY3QiOnRydWV9fX0=",
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1heF90b2tlbnMiOjI0LCJzeXN0ZW0iOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6InN5bnRoZXRpYyBpbnN0cnVjdGlvbiIsImNhY2hlX2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCIsInR0bCI6IjVtIn19XSwibWVzc2FnZXMiOlt7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRleHQiLCJ0ZXh0Ijoic3ludGhldGljIHJlcXVlc3QifSx7InR5cGUiOiJpbWFnZSIsInNvdXJjZSI6eyJ0eXBlIjoidXJsIiwidXJsIjoiaHR0cHM6Ly9zeW50aGV0aWMuaW52YWxpZC9pbWFnZS5wbmcifX1dfSx7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidG9vbF91c2UiLCJpZCI6ImNhbGxfc3ludGhldGljIiwibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJpbnB1dCI6eyJzdWJqZWN0IjoiYWxwaGEifX1dfSx7InJvbGUiOiJ1c2VyIiwiY29udGVudCI6W3sidHlwZSI6InRvb2xfcmVzdWx0IiwidG9vbF91c2VfaWQiOiJjYWxsX3N5bnRoZXRpYyIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVzdWx0In1dfV0sInRvb2xzIjpbeyJuYW1lIjoic3ludGhldGljX2xvb2t1cCIsImRlc2NyaXB0aW9uIjoic3ludGhldGljIHRvb2wiLCJpbnB1dF9zY2hlbWEiOnsidHlwZSI6Im9iamVjdCJ9LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVyYWwifX1dLCJ0ZW1wZXJhdHVyZSI6MC4yLCJ0b3BfcCI6MC45LCJzdHJlYW0iOmZhbHNlfQ==",
       "body_kind": "json",
-      "profile_id": "openai.chat-completions.alpha-0.1.0",
+      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "Content-Type: application/json"
+        },
+        {
+          "raw_line": "Anthropic-Version: 2023-06-01"
         }
       ],
       "protocol_version": "0.1.0",
@@ -426,8 +474,8 @@
   },
   "kind": "cross_profile_conversion",
   "protocol_version": "0.1.0",
-  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
   "synthetic": true,
-  "target_profile": "openai.responses.alpha-0.1.0",
-  "title": "Chat request with text, tool history, cache intent, and JSON Schema output converts to Responses"
+  "target_profile": "openai.chat-completions.alpha-0.1.0",
+  "title": "Anthropic cache breakpoints remain non-portable when converting to Chat Completions"
 }

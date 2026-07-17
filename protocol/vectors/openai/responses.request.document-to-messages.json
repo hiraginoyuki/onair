@@ -6,23 +6,9 @@
       "ir": {
         "kind": "request",
         "payload": {
-          "extensions": [
-            {
-              "issuing_profile": "openai.chat-completions.alpha-0.1.0",
-              "namespace": "openai.chat.request.unknown_field",
-              "payload": {
-                "kind": "json",
-                "value": {
-                  "enabled": true
-                }
-              },
-              "source_location": {
-                "kind": "json_pointer",
-                "pointer": "/future_synthetic_option"
-              }
-            }
-          ],
+          "extensions": [],
           "generation": {
+            "max_output_tokens": 24,
             "stop_sequences": []
           },
           "instructions": [],
@@ -30,8 +16,12 @@
             {
               "content": [
                 {
-                  "text": "synthetic request",
-                  "type": "text"
+                  "asset": {
+                    "name": "synthetic.txt",
+                    "reference_type": "provider_file",
+                    "value": "file_synthetic"
+                  },
+                  "type": "document"
                 }
               ],
               "extensions": [],
@@ -42,7 +32,7 @@
           "stream": false,
           "tools": []
         },
-        "profile_id": "openai.chat-completions.alpha-0.1.0",
+        "profile_id": "openai.responses.alpha-0.1.0",
         "protocol_version": "0.1.0"
       }
     },
@@ -86,34 +76,48 @@
                 "part_index": 0
               }
             }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "asset",
+              "location": {
+                "kind": "asset",
+                "message_index": 0,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "asset",
+              "location": {
+                "kind": "asset",
+                "message_index": 0,
+                "part_index": 0
+              }
+            }
           }
         ],
         "protocol_version": "0.1.0"
       },
-      "diagnostics": [
-        {
-          "code": "forward_compatible_unknown",
-          "location": {
-            "kind": "json_pointer",
-            "pointer": "/future_synthetic_option"
-          },
-          "severity": "warning"
-        }
-      ],
+      "diagnostics": [],
       "envelope": {
         "adapter_headers": {},
-        "body_base64": "eyJpbnB1dCI6W3siY29udGVudCI6W3sidGV4dCI6InN5bnRoZXRpYyByZXF1ZXN0IiwidHlwZSI6ImlucHV0X3RleHQifV0sInJvbGUiOiJ1c2VyIn1dLCJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCJ9",
+        "body_base64": "eyJtYXhfdG9rZW5zIjoyNCwibWVzc2FnZXMiOlt7ImNvbnRlbnQiOlt7InNvdXJjZSI6eyJmaWxlX2lkIjoiZmlsZV9zeW50aGV0aWMiLCJ0eXBlIjoiZmlsZSJ9LCJ0aXRsZSI6InN5bnRoZXRpYy50eHQiLCJ0eXBlIjoiZG9jdW1lbnQifV0sInJvbGUiOiJ1c2VyIn1dLCJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCJ9",
         "body_kind": "json",
-        "profile_id": "openai.responses.alpha-0.1.0",
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
         "protocol_headers": [
           {
             "raw_line": "content-type: application/json"
+          },
+          {
+            "raw_line": "anthropic-version: 2023-06-01"
           }
         ],
         "protocol_version": "0.1.0",
         "status": 200
       },
-      "fidelity": "lossy",
+      "fidelity": "exact",
       "round_trip_decode": {
         "diagnostics": [],
         "fidelity": "exact",
@@ -122,6 +126,7 @@
           "payload": {
             "extensions": [],
             "generation": {
+              "max_output_tokens": 24,
               "stop_sequences": []
             },
             "instructions": [],
@@ -129,8 +134,12 @@
               {
                 "content": [
                   {
-                    "text": "synthetic request",
-                    "type": "text"
+                    "asset": {
+                      "name": "synthetic.txt",
+                      "reference_type": "provider_file",
+                      "value": "file_synthetic"
+                    },
+                    "type": "document"
                   }
                 ],
                 "extensions": [],
@@ -141,18 +150,18 @@
             "stream": false,
             "tools": []
           },
-          "profile_id": "openai.responses.alpha-0.1.0",
+          "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
           "protocol_version": "0.1.0"
         }
       }
     }
   },
-  "id": "openai.chat.request.unknown-lossy",
+  "id": "openai.responses.request.document-to-messages",
   "input": {
     "envelope": {
-      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJzeW50aGV0aWMgcmVxdWVzdCJ9XSwiZnV0dXJlX3N5bnRoZXRpY19vcHRpb24iOnsiZW5hYmxlZCI6dHJ1ZX19",
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsImlucHV0IjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF9maWxlIiwiZmlsZV9pZCI6ImZpbGVfc3ludGhldGljIiwiZmlsZW5hbWUiOiJzeW50aGV0aWMudHh0In1dfV0sIm1heF9vdXRwdXRfdG9rZW5zIjoyNH0=",
       "body_kind": "json",
-      "profile_id": "openai.chat-completions.alpha-0.1.0",
+      "profile_id": "openai.responses.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "content-type: application/json"
@@ -164,8 +173,8 @@
   },
   "kind": "cross_profile_conversion",
   "protocol_version": "0.1.0",
-  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "source_profile": "openai.responses.alpha-0.1.0",
   "synthetic": true,
-  "target_profile": "openai.responses.alpha-0.1.0",
-  "title": "Unknown Chat request material is retained for replay and diagnosed for Responses encoding"
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "title": "Synthetic Responses document request encoded through the shared IR to Messages"
 }

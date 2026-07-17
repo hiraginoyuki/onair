@@ -1,16 +1,103 @@
 {
-  "protocol_version": "0.1.0",
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "response",
+        "payload": {
+          "extensions": [
+            {
+              "issuing_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+              "namespace": "anthropic.messages.beta_header",
+              "payload": {
+                "kind": "text",
+                "value": "synthetic-beta"
+              },
+              "source_location": {
+                "kind": "header",
+                "name": "anthropic-beta"
+              }
+            }
+          ],
+          "finish_reason": "stop",
+          "id": "synthetic-1",
+          "output": [
+            {
+              "content": [],
+              "extensions": [],
+              "role": "assistant"
+            }
+          ]
+        },
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "diagnostics": [],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "eyJpZCI6InN5bnRoZXRpYy0xIiwidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W119",
+        "body_kind": "json",
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "Content-Type: application/json"
+          },
+          {
+            "raw_line": "Anthropic-Version: 2023-06-01"
+          },
+          {
+            "raw_line": "Anthropic-Beta: synthetic-beta"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 200
+      },
+      "fidelity": "exact",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "response",
+          "payload": {
+            "extensions": [
+              {
+                "issuing_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+                "namespace": "anthropic.messages.beta_header",
+                "payload": {
+                  "kind": "text",
+                  "value": "synthetic-beta"
+                },
+                "source_location": {
+                  "kind": "header",
+                  "name": "anthropic-beta"
+                }
+              }
+            ],
+            "finish_reason": "stop",
+            "id": "synthetic-1",
+            "output": [
+              {
+                "content": [],
+                "extensions": [],
+                "role": "assistant"
+              }
+            ]
+          },
+          "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  },
   "id": "anthropic.messages.replay.unmodified",
-  "title": "Synthetic Messages JSON exact replay with pinned and beta headers",
-  "synthetic": true,
-  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
-  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
-  "kind": "exact_replay",
   "input": {
     "envelope": {
-      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
-      "status": 200,
+      "body_base64": "eyJpZCI6InN5bnRoZXRpYy0xIiwidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W119",
       "body_kind": "json",
+      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "Content-Type: application/json"
@@ -22,19 +109,14 @@
           "raw_line": "Anthropic-Beta: synthetic-beta"
         }
       ],
-      "body_base64": "eyJpZCI6InN5bnRoZXRpYy0xIiwidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W119"
+      "protocol_version": "0.1.0",
+      "status": 200
     }
   },
-  "expect": {
-    "fidelity": "exact",
-    "diagnostic_codes": [],
-    "exact_replay": {
-      "protocol_headers": [
-        "Content-Type: application/json",
-        "Anthropic-Version: 2023-06-01",
-        "Anthropic-Beta: synthetic-beta"
-      ],
-      "body_base64": "eyJpZCI6InN5bnRoZXRpYy0xIiwidHlwZSI6Im1lc3NhZ2UiLCJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W119"
-    }
-  }
+  "kind": "exact_replay",
+  "protocol_version": "0.1.0",
+  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "title": "Synthetic Messages JSON exact replay with pinned and beta headers"
 }

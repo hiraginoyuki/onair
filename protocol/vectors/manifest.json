@@ -1,6 +1,50 @@
 {
   "$schema": "../schemas/vector-manifest.schema.json",
   "protocol_version": "0.1.0",
+  "coverage_matrix": {
+    "profiles": [
+      "openai.chat-completions.alpha-0.1.0",
+      "openai.responses.alpha-0.1.0",
+      "anthropic.messages.2023-06-01.alpha-0.1.0"
+    ],
+    "payload_classes": [
+      "request",
+      "response",
+      "error",
+      "stream",
+      "cache_report"
+    ],
+    "directions": "all_distinct_pairs"
+  },
+  "feature_matrix": {
+    "content_parts": [
+      "text",
+      "image",
+      "document",
+      "tool_call",
+      "tool_result",
+      "reasoning",
+      "citation",
+      "refusal",
+      "opaque"
+    ],
+    "stream_events": [
+      "request_started",
+      "message_started",
+      "output_part_started",
+      "output_part_ended",
+      "text_delta",
+      "reasoning_delta",
+      "refusal_part",
+      "citation_part",
+      "tool_call_delta",
+      "usage",
+      "terminal",
+      "error",
+      "opaque"
+    ],
+    "opaque_policy": "same_profile_only"
+  },
   "vectors": [
     {
       "id": "core.exact-replay.chat-json",
@@ -24,43 +68,93 @@
       "id": "openai.chat.request.text-tool",
       "path": "openai/chat.request.text-tool.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "request",
+          "support": "supported"
+        },
+        {
+          "payload_class": "cache_report",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "openai.responses.request.text-tool",
       "path": "openai/responses.request.text-tool.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "request",
+          "support": "supported"
+        },
+        {
+          "payload_class": "cache_report",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "openai.chat.response.text-tool",
       "path": "openai/chat.response.text-tool.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "response",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "openai.responses.response.text-tool",
       "path": "openai/responses.response.text-tool.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "response",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "openai.chat.error.cross-profile",
       "path": "openai/chat.error.cross-profile.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "error",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "openai.chat.stream.text-tool",
       "path": "openai/chat.stream.text-tool.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "stream",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "openai.responses.stream.text-tool",
       "path": "openai/responses.stream.text-tool.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "stream",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "openai.chat.replay.unmodified",
@@ -90,19 +184,37 @@
       "id": "anthropic.messages.response.text-tool",
       "path": "anthropic/messages.response.text-tool.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "response",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "anthropic.messages.error.cross-profile",
       "path": "anthropic/messages.error.cross-profile.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "error",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "anthropic.messages.stream.text-tool",
       "path": "anthropic/messages.stream.text-tool.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "stream",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "anthropic.messages.replay.unmodified",
@@ -117,10 +229,42 @@
       "status": "active"
     },
     {
+      "id": "anthropic.messages.stream.opaque-to-responses",
+      "path": "anthropic/messages.stream.opaque-to-responses.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "feature_coverage": [
+        {
+          "domain": "stream_event",
+          "feature": "opaque",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "opaque",
+          "stage": "cross_profile",
+          "disposition": "non_portable"
+        }
+      ]
+    },
+    {
       "id": "anthropic.messages.unknown-lossy",
       "path": "anthropic/messages.unknown-lossy.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "feature_coverage": [
+        {
+          "domain": "content_part",
+          "feature": "opaque",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "content_part",
+          "feature": "opaque",
+          "stage": "cross_profile",
+          "disposition": "non_portable"
+        }
+      ]
     },
     {
       "id": "openai.chat.request.to-messages",
@@ -132,31 +276,447 @@
       "id": "openai.responses.request.to-messages",
       "path": "openai/responses.request.to-messages.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "feature_coverage": [
+        {
+          "domain": "content_part",
+          "feature": "text",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "content_part",
+          "feature": "text",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        },
+        {
+          "domain": "content_part",
+          "feature": "tool_call",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "content_part",
+          "feature": "tool_call",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        },
+        {
+          "domain": "content_part",
+          "feature": "tool_result",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "content_part",
+          "feature": "tool_result",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        }
+      ]
+    },
+    {
+      "id": "openai.responses.request.document-to-messages",
+      "path": "openai/responses.request.document-to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "feature_coverage": [
+        {
+          "domain": "content_part",
+          "feature": "document",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "content_part",
+          "feature": "document",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        }
+      ]
     },
     {
       "id": "openai.chat.stream.to-messages",
       "path": "openai/chat.stream.to-messages.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "stream",
+          "support": "supported"
+        }
+      ],
+      "feature_coverage": [
+        {
+          "domain": "stream_event",
+          "feature": "request_started",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "request_started",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "message_started",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "message_started",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "output_part_started",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "output_part_started",
+          "stage": "cross_profile",
+          "disposition": "adapted"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "output_part_ended",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "output_part_ended",
+          "stage": "cross_profile",
+          "disposition": "adapted"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "text_delta",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "text_delta",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "tool_call_delta",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "tool_call_delta",
+          "stage": "cross_profile",
+          "disposition": "adapted"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "usage",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "usage",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "terminal",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "terminal",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        }
+      ]
     },
     {
       "id": "openai.responses.stream.to-messages",
       "path": "openai/responses.stream.to-messages.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "stream",
+          "support": "supported"
+        }
+      ]
+    },
+    {
+      "id": "openai.responses.stream.rich-parts-to-messages",
+      "path": "openai/responses.stream.rich-parts-to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "feature_coverage": [
+        {
+          "domain": "stream_event",
+          "feature": "reasoning_delta",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "reasoning_delta",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "refusal_part",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "refusal_part",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "citation_part",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "citation_part",
+          "stage": "cross_profile",
+          "disposition": "lossy"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "error",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "stream_event",
+          "feature": "error",
+          "stage": "cross_profile",
+          "disposition": "lossy"
+        }
+      ]
     },
     {
       "id": "openai.chat.request.cache-to-messages-lossy",
       "path": "openai/chat.request.cache-to-messages-lossy.json",
       "kind": "cross_profile_conversion",
-      "status": "active"
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "request",
+          "support": "supported"
+        },
+        {
+          "payload_class": "cache_report",
+          "support": "supported"
+        }
+      ]
     },
     {
       "id": "openai.responses.request.continuation-to-messages-unsupported",
       "path": "openai/responses.request.continuation-to-messages-unsupported.json",
       "kind": "unsupported",
       "status": "active"
+    },
+    {
+      "id": "openai.chat.response.to-messages",
+      "path": "openai/chat.response.to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "response",
+          "support": "supported"
+        }
+      ]
+    },
+    {
+      "id": "openai.chat.error.to-messages",
+      "path": "openai/chat.error.to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "error",
+          "support": "supported"
+        }
+      ]
+    },
+    {
+      "id": "openai.responses.error.to-chat",
+      "path": "openai/responses.error.to-chat.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "error",
+          "support": "supported"
+        }
+      ]
+    },
+    {
+      "id": "openai.responses.error.to-messages",
+      "path": "openai/responses.error.to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "error",
+          "support": "supported"
+        }
+      ]
+    },
+    {
+      "id": "openai.responses.response.to-messages",
+      "path": "openai/responses.response.to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "response",
+          "support": "supported"
+        }
+      ]
+    },
+    {
+      "id": "openai.responses.response.rich-content-to-messages",
+      "path": "openai/responses.response.rich-content-to-messages.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "feature_coverage": [
+        {
+          "domain": "content_part",
+          "feature": "reasoning",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "content_part",
+          "feature": "reasoning",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        },
+        {
+          "domain": "content_part",
+          "feature": "citation",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "content_part",
+          "feature": "citation",
+          "stage": "cross_profile",
+          "disposition": "lossy"
+        },
+        {
+          "domain": "content_part",
+          "feature": "refusal",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "content_part",
+          "feature": "refusal",
+          "stage": "cross_profile",
+          "disposition": "lossy"
+        }
+      ]
+    },
+    {
+      "id": "openai.responses.request.cache-to-messages-lossy",
+      "path": "openai/responses.request.cache-to-messages-lossy.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "request",
+          "support": "supported"
+        },
+        {
+          "payload_class": "cache_report",
+          "support": "supported"
+        }
+      ]
+    },
+    {
+      "id": "anthropic.messages.request.cache-to-chat-lossy",
+      "path": "anthropic/messages.request.cache-to-chat-lossy.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "request",
+          "support": "supported"
+        },
+        {
+          "payload_class": "cache_report",
+          "support": "supported"
+        }
+      ]
+    },
+    {
+      "id": "anthropic.messages.request.cache-to-responses-lossy",
+      "path": "anthropic/messages.request.cache-to-responses-lossy.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "request",
+          "support": "supported"
+        },
+        {
+          "payload_class": "cache_report",
+          "support": "supported"
+        }
+      ],
+      "feature_coverage": [
+        {
+          "domain": "content_part",
+          "feature": "image",
+          "stage": "source_decode"
+        },
+        {
+          "domain": "content_part",
+          "feature": "image",
+          "stage": "cross_profile",
+          "disposition": "preserved"
+        }
+      ]
+    },
+    {
+      "id": "anthropic.messages.error.to-chat",
+      "path": "anthropic/messages.error.to-chat.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "error",
+          "support": "supported"
+        }
+      ]
+    },
+    {
+      "id": "anthropic.messages.response.to-responses",
+      "path": "anthropic/messages.response.to-responses.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "response",
+          "support": "supported"
+        }
+      ]
+    },
+    {
+      "id": "anthropic.messages.stream.to-chat",
+      "path": "anthropic/messages.stream.to-chat.json",
+      "kind": "cross_profile_conversion",
+      "status": "active",
+      "coverage": [
+        {
+          "payload_class": "stream",
+          "support": "supported"
+        }
+      ]
     }
   ]
 }

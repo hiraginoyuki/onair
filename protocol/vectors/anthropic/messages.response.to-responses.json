@@ -7,8 +7,8 @@
         "kind": "response",
         "payload": {
           "extensions": [],
-          "finish_reason": "stop",
-          "id": "resp_synthetic",
+          "finish_reason": "tool_calls",
+          "id": "msg_synthetic",
           "model": "synthetic-model",
           "output": [
             {
@@ -16,13 +16,7 @@
                 {
                   "text": "synthetic reply",
                   "type": "text"
-                }
-              ],
-              "extensions": [],
-              "role": "assistant"
-            },
-            {
-              "content": [
+                },
                 {
                   "arguments": {
                     "subject": "alpha"
@@ -40,11 +34,10 @@
           "usage": {
             "cache_read_tokens": 3,
             "input_tokens": 11,
-            "output_tokens": 7,
-            "reasoning_tokens": 2
+            "output_tokens": 7
           }
         },
-        "profile_id": "openai.responses.alpha-0.1.0",
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
         "protocol_version": "0.1.0"
       }
     },
@@ -52,9 +45,9 @@
       "diagnostics": [],
       "envelope": {
         "adapter_headers": {},
-        "body_base64": "eyJjaG9pY2VzIjpbeyJmaW5pc2hfcmVhc29uIjoidG9vbF9jYWxscyIsImluZGV4IjowLCJtZXNzYWdlIjp7ImNvbnRlbnQiOiJzeW50aGV0aWMgcmVwbHkiLCJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siZnVuY3Rpb24iOnsiYXJndW1lbnRzIjoie1wic3ViamVjdFwiOlwiYWxwaGFcIn0iLCJuYW1lIjoic3ludGhldGljX2xvb2t1cCJ9LCJpZCI6ImNhbGxfc3ludGhldGljIiwidHlwZSI6ImZ1bmN0aW9uIn1dfX1dLCJpZCI6InJlc3Bfc3ludGhldGljIiwibW9kZWwiOiJzeW50aGV0aWMtbW9kZWwiLCJvYmplY3QiOiJjaGF0LmNvbXBsZXRpb24iLCJ1c2FnZSI6eyJjb21wbGV0aW9uX3Rva2VucyI6NywiY29tcGxldGlvbl90b2tlbnNfZGV0YWlscyI6eyJyZWFzb25pbmdfdG9rZW5zIjoyfSwicHJvbXB0X3Rva2VucyI6MTEsInByb21wdF90b2tlbnNfZGV0YWlscyI6eyJjYWNoZWRfdG9rZW5zIjozfSwidG90YWxfdG9rZW5zIjoxOH19",
+        "body_base64": "eyJpZCI6Im1zZ19zeW50aGV0aWMiLCJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm9iamVjdCI6InJlc3BvbnNlIiwib3V0cHV0IjpbeyJjb250ZW50IjpbeyJ0ZXh0Ijoic3ludGhldGljIHJlcGx5IiwidHlwZSI6Im91dHB1dF90ZXh0In1dLCJpZCI6Im1zZ18wIiwicm9sZSI6ImFzc2lzdGFudCIsInN0YXR1cyI6ImNvbXBsZXRlZCIsInR5cGUiOiJtZXNzYWdlIn0seyJhcmd1bWVudHMiOiJ7XCJzdWJqZWN0XCI6XCJhbHBoYVwifSIsImNhbGxfaWQiOiJjYWxsX3N5bnRoZXRpYyIsImlkIjoiY2FsbF9zeW50aGV0aWMiLCJuYW1lIjoic3ludGhldGljX2xvb2t1cCIsInN0YXR1cyI6ImNvbXBsZXRlZCIsInR5cGUiOiJmdW5jdGlvbl9jYWxsIn1dLCJzdGF0dXMiOiJjb21wbGV0ZWQiLCJ1c2FnZSI6eyJpbnB1dF90b2tlbnMiOjExLCJpbnB1dF90b2tlbnNfZGV0YWlscyI6eyJjYWNoZWRfdG9rZW5zIjozfSwib3V0cHV0X3Rva2VucyI6Nywib3V0cHV0X3Rva2Vuc19kZXRhaWxzIjp7InJlYXNvbmluZ190b2tlbnMiOm51bGx9LCJ0b3RhbF90b2tlbnMiOjE4fX0=",
         "body_kind": "json",
-        "profile_id": "openai.chat-completions.alpha-0.1.0",
+        "profile_id": "openai.responses.alpha-0.1.0",
         "protocol_headers": [
           {
             "raw_line": "content-type: application/json"
@@ -71,8 +64,8 @@
           "kind": "response",
           "payload": {
             "extensions": [],
-            "finish_reason": "tool_calls",
-            "id": "resp_synthetic",
+            "finish_reason": "stop",
+            "id": "msg_synthetic",
             "model": "synthetic-model",
             "output": [
               {
@@ -80,7 +73,13 @@
                   {
                     "text": "synthetic reply",
                     "type": "text"
-                  },
+                  }
+                ],
+                "extensions": [],
+                "role": "assistant"
+              },
+              {
+                "content": [
                   {
                     "arguments": {
                       "subject": "alpha"
@@ -98,25 +97,27 @@
             "usage": {
               "cache_read_tokens": 3,
               "input_tokens": 11,
-              "output_tokens": 7,
-              "reasoning_tokens": 2
+              "output_tokens": 7
             }
           },
-          "profile_id": "openai.chat-completions.alpha-0.1.0",
+          "profile_id": "openai.responses.alpha-0.1.0",
           "protocol_version": "0.1.0"
         }
       }
     }
   },
-  "id": "openai.responses.response.text-tool",
+  "id": "anthropic.messages.response.to-responses",
   "input": {
     "envelope": {
-      "body_base64": "eyJpZCI6InJlc3Bfc3ludGhldGljIiwib2JqZWN0IjoicmVzcG9uc2UiLCJzdGF0dXMiOiJjb21wbGV0ZWQiLCJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm91dHB1dCI6W3siaWQiOiJtc2dfc3ludGhldGljIiwidHlwZSI6Im1lc3NhZ2UiLCJzdGF0dXMiOiJjb21wbGV0ZWQiLCJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6Im91dHB1dF90ZXh0IiwidGV4dCI6InN5bnRoZXRpYyByZXBseSIsImFubm90YXRpb25zIjpbXX1dfSx7ImlkIjoiY2FsbF9zeW50aGV0aWMiLCJ0eXBlIjoiZnVuY3Rpb25fY2FsbCIsInN0YXR1cyI6ImNvbXBsZXRlZCIsImNhbGxfaWQiOiJjYWxsX3N5bnRoZXRpYyIsIm5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwiYXJndW1lbnRzIjoie1wic3ViamVjdFwiOlwiYWxwaGFcIn0ifV0sInVzYWdlIjp7ImlucHV0X3Rva2VucyI6MTEsImlucHV0X3Rva2Vuc19kZXRhaWxzIjp7ImNhY2hlZF90b2tlbnMiOjN9LCJvdXRwdXRfdG9rZW5zIjo3LCJvdXRwdXRfdG9rZW5zX2RldGFpbHMiOnsicmVhc29uaW5nX3Rva2VucyI6Mn0sInRvdGFsX3Rva2VucyI6MTh9fQ==",
+      "body_base64": "eyJpZCI6Im1zZ19zeW50aGV0aWMiLCJ0eXBlIjoibWVzc2FnZSIsInJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoidGV4dCIsInRleHQiOiJzeW50aGV0aWMgcmVwbHkifSx7InR5cGUiOiJ0b29sX3VzZSIsImlkIjoiY2FsbF9zeW50aGV0aWMiLCJuYW1lIjoic3ludGhldGljX2xvb2t1cCIsImlucHV0Ijp7InN1YmplY3QiOiJhbHBoYSJ9fV0sIm1vZGVsIjoic3ludGhldGljLW1vZGVsIiwic3RvcF9yZWFzb24iOiJ0b29sX3VzZSIsInVzYWdlIjp7ImlucHV0X3Rva2VucyI6MTEsIm91dHB1dF90b2tlbnMiOjcsImNhY2hlX3JlYWRfaW5wdXRfdG9rZW5zIjozfX0=",
       "body_kind": "json",
-      "profile_id": "openai.responses.alpha-0.1.0",
+      "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "content-type: application/json"
+        },
+        {
+          "raw_line": "anthropic-version: 2023-06-01"
         }
       ],
       "protocol_version": "0.1.0",
@@ -125,8 +126,8 @@
   },
   "kind": "cross_profile_conversion",
   "protocol_version": "0.1.0",
-  "source_profile": "openai.responses.alpha-0.1.0",
+  "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
   "synthetic": true,
-  "target_profile": "openai.chat-completions.alpha-0.1.0",
-  "title": "Responses buffered response with text, tool call, and usage converts to Chat"
+  "target_profile": "openai.responses.alpha-0.1.0",
+  "title": "Anthropic Messages buffered response converts to Responses"
 }

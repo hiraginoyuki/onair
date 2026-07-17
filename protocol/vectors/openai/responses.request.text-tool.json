@@ -1,26 +1,413 @@
 {
-  "protocol_version": "0.1.0",
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "request",
+        "payload": {
+          "cache_intent": {
+            "kind": "openai",
+            "request_cache_key": "synthetic-cache",
+            "retention": "24h"
+          },
+          "extensions": [],
+          "generation": {
+            "max_output_tokens": 24,
+            "stop_sequences": [],
+            "temperature": 0.2,
+            "top_p": 0.9
+          },
+          "instructions": [],
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "synthetic request",
+                  "type": "text"
+                }
+              ],
+              "extensions": [],
+              "role": "user"
+            },
+            {
+              "content": [
+                {
+                  "arguments": {
+                    "subject": "alpha"
+                  },
+                  "extensions": [],
+                  "id": "call_synthetic",
+                  "name": "synthetic_lookup",
+                  "type": "tool_call"
+                }
+              ],
+              "extensions": [],
+              "role": "assistant"
+            },
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "text": "synthetic result",
+                      "type": "text"
+                    }
+                  ],
+                  "extensions": [],
+                  "is_error": false,
+                  "tool_call_id": "call_synthetic",
+                  "type": "tool_result"
+                }
+              ],
+              "extensions": [],
+              "role": "tool"
+            }
+          ],
+          "model": "synthetic-model",
+          "output_schema": {
+            "enforcement": "required",
+            "name": "synthetic_output",
+            "schema": {
+              "type": "object"
+            }
+          },
+          "stream": false,
+          "tools": [
+            {
+              "description": "synthetic tool",
+              "extensions": [],
+              "input_schema": {
+                "type": "object"
+              },
+              "name": "synthetic_lookup",
+              "strict": true
+            }
+          ]
+        },
+        "profile_id": "openai.responses.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "cache_report": {
+        "entries": [
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 1
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 1
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 1,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 1,
+                "part_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 2
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 2
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 2,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 2,
+                "part_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "tool_definition",
+              "location": {
+                "kind": "tool_definition",
+                "tool_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "tool_definition",
+              "location": {
+                "kind": "tool_definition",
+                "tool_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "output_schema",
+              "location": {
+                "kind": "output_schema"
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "output_schema",
+              "location": {
+                "kind": "output_schema"
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "cache_directive",
+              "location": {
+                "directive_index": 0,
+                "kind": "cache_directive"
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "cache_directive",
+              "location": {
+                "directive_index": 0,
+                "kind": "cache_directive"
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "cache_directive",
+              "location": {
+                "directive_index": 1,
+                "kind": "cache_directive"
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "cache_directive",
+              "location": {
+                "directive_index": 1,
+                "kind": "cache_directive"
+              }
+            }
+          }
+        ],
+        "protocol_version": "0.1.0"
+      },
+      "diagnostics": [],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "eyJtYXhfY29tcGxldGlvbl90b2tlbnMiOjI0LCJtZXNzYWdlcyI6W3siY29udGVudCI6InN5bnRoZXRpYyByZXF1ZXN0Iiwicm9sZSI6InVzZXIifSx7ImNvbnRlbnQiOiIiLCJyb2xlIjoiYXNzaXN0YW50IiwidG9vbF9jYWxscyI6W3siZnVuY3Rpb24iOnsiYXJndW1lbnRzIjoie1wic3ViamVjdFwiOlwiYWxwaGFcIn0iLCJuYW1lIjoic3ludGhldGljX2xvb2t1cCJ9LCJpZCI6ImNhbGxfc3ludGhldGljIiwidHlwZSI6ImZ1bmN0aW9uIn1dfSx7ImNvbnRlbnQiOiJzeW50aGV0aWMgcmVzdWx0Iiwicm9sZSI6InRvb2wiLCJ0b29sX2NhbGxfaWQiOiJjYWxsX3N5bnRoZXRpYyJ9XSwibW9kZWwiOiJzeW50aGV0aWMtbW9kZWwiLCJwcm9tcHRfY2FjaGVfa2V5Ijoic3ludGhldGljLWNhY2hlIiwicHJvbXB0X2NhY2hlX3JldGVudGlvbiI6IjI0aCIsInJlc3BvbnNlX2Zvcm1hdCI6eyJqc29uX3NjaGVtYSI6eyJkZXNjcmlwdGlvbiI6bnVsbCwibmFtZSI6InN5bnRoZXRpY19vdXRwdXQiLCJzY2hlbWEiOnsidHlwZSI6Im9iamVjdCJ9LCJzdHJpY3QiOnRydWV9LCJ0eXBlIjoianNvbl9zY2hlbWEifSwidGVtcGVyYXR1cmUiOjAuMiwidG9vbHMiOlt7ImZ1bmN0aW9uIjp7ImRlc2NyaXB0aW9uIjoic3ludGhldGljIHRvb2wiLCJuYW1lIjoic3ludGhldGljX2xvb2t1cCIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCJ9LCJzdHJpY3QiOnRydWV9LCJ0eXBlIjoiZnVuY3Rpb24ifV0sInRvcF9wIjowLjl9",
+        "body_kind": "json",
+        "profile_id": "openai.chat-completions.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "content-type: application/json"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 200
+      },
+      "fidelity": "exact",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "request",
+          "payload": {
+            "cache_intent": {
+              "kind": "openai",
+              "request_cache_key": "synthetic-cache",
+              "retention": "24h"
+            },
+            "extensions": [],
+            "generation": {
+              "max_output_tokens": 24,
+              "stop_sequences": [],
+              "temperature": 0.2,
+              "top_p": 0.9
+            },
+            "instructions": [],
+            "messages": [
+              {
+                "content": [
+                  {
+                    "text": "synthetic request",
+                    "type": "text"
+                  }
+                ],
+                "extensions": [],
+                "role": "user"
+              },
+              {
+                "content": [
+                  {
+                    "text": "",
+                    "type": "text"
+                  },
+                  {
+                    "arguments": {
+                      "subject": "alpha"
+                    },
+                    "extensions": [],
+                    "id": "call_synthetic",
+                    "name": "synthetic_lookup",
+                    "type": "tool_call"
+                  }
+                ],
+                "extensions": [],
+                "role": "assistant"
+              },
+              {
+                "content": [
+                  {
+                    "content": [
+                      {
+                        "text": "synthetic result",
+                        "type": "text"
+                      }
+                    ],
+                    "extensions": [],
+                    "is_error": false,
+                    "tool_call_id": "call_synthetic",
+                    "type": "tool_result"
+                  }
+                ],
+                "extensions": [],
+                "role": "tool"
+              }
+            ],
+            "model": "synthetic-model",
+            "output_schema": {
+              "enforcement": "required",
+              "name": "synthetic_output",
+              "schema": {
+                "type": "object"
+              }
+            },
+            "stream": false,
+            "tools": [
+              {
+                "description": "synthetic tool",
+                "extensions": [],
+                "input_schema": {
+                  "type": "object"
+                },
+                "name": "synthetic_lookup",
+                "strict": true
+              }
+            ]
+          },
+          "profile_id": "openai.chat-completions.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  },
   "id": "openai.responses.request.text-tool",
-  "title": "Responses request with text, tool history, cache intent, and JSON Schema output converts to Chat",
-  "synthetic": true,
-  "source_profile": "openai.responses.alpha-0.1.0",
-  "target_profile": "openai.chat-completions.alpha-0.1.0",
-  "kind": "cross_profile_conversion",
   "input": {
     "envelope": {
-      "profile_id": "openai.responses.alpha-0.1.0",
-      "status": 200,
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsImlucHV0IjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6InN5bnRoZXRpYyByZXF1ZXN0In1dfSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsIiwiY2FsbF9pZCI6ImNhbGxfc3ludGhldGljIiwibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJhcmd1bWVudHMiOiJ7XCJzdWJqZWN0XCI6XCJhbHBoYVwifSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGxfb3V0cHV0IiwiY2FsbF9pZCI6ImNhbGxfc3ludGhldGljIiwib3V0cHV0Ijoic3ludGhldGljIHJlc3VsdCJ9XSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsIm5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwiZGVzY3JpcHRpb24iOiJzeW50aGV0aWMgdG9vbCIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCJ9LCJzdHJpY3QiOnRydWV9XSwidGVtcGVyYXR1cmUiOjAuMiwidG9wX3AiOjAuOSwibWF4X291dHB1dF90b2tlbnMiOjI0LCJwcm9tcHRfY2FjaGVfa2V5Ijoic3ludGhldGljLWNhY2hlIiwicHJvbXB0X2NhY2hlX3JldGVudGlvbiI6IjI0aCIsInRleHQiOnsiZm9ybWF0Ijp7InR5cGUiOiJqc29uX3NjaGVtYSIsIm5hbWUiOiJzeW50aGV0aWNfb3V0cHV0Iiwic2NoZW1hIjp7InR5cGUiOiJvYmplY3QifSwic3RyaWN0Ijp0cnVlfX19",
       "body_kind": "json",
+      "profile_id": "openai.responses.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "Content-Type: application/json"
         }
       ],
-      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsImlucHV0IjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOlt7InR5cGUiOiJpbnB1dF90ZXh0IiwidGV4dCI6InN5bnRoZXRpYyByZXF1ZXN0In1dfSx7InR5cGUiOiJmdW5jdGlvbl9jYWxsIiwiY2FsbF9pZCI6ImNhbGxfc3ludGhldGljIiwibmFtZSI6InN5bnRoZXRpY19sb29rdXAiLCJhcmd1bWVudHMiOiJ7XCJzdWJqZWN0XCI6XCJhbHBoYVwifSJ9LHsidHlwZSI6ImZ1bmN0aW9uX2NhbGxfb3V0cHV0IiwiY2FsbF9pZCI6ImNhbGxfc3ludGhldGljIiwib3V0cHV0Ijoic3ludGhldGljIHJlc3VsdCJ9XSwidG9vbHMiOlt7InR5cGUiOiJmdW5jdGlvbiIsIm5hbWUiOiJzeW50aGV0aWNfbG9va3VwIiwiZGVzY3JpcHRpb24iOiJzeW50aGV0aWMgdG9vbCIsInBhcmFtZXRlcnMiOnsidHlwZSI6Im9iamVjdCJ9LCJzdHJpY3QiOnRydWV9XSwidGVtcGVyYXR1cmUiOjAuMiwidG9wX3AiOjAuOSwibWF4X291dHB1dF90b2tlbnMiOjI0LCJwcm9tcHRfY2FjaGVfa2V5Ijoic3ludGhldGljLWNhY2hlIiwicHJvbXB0X2NhY2hlX3JldGVudGlvbiI6IjI0aCIsInRleHQiOnsiZm9ybWF0Ijp7InR5cGUiOiJqc29uX3NjaGVtYSIsIm5hbWUiOiJzeW50aGV0aWNfb3V0cHV0Iiwic2NoZW1hIjp7InR5cGUiOiJvYmplY3QifSwic3RyaWN0Ijp0cnVlfX19"
+      "protocol_version": "0.1.0",
+      "status": 200
     }
   },
-  "expect": {
-    "fidelity": "exact",
-    "diagnostic_codes": []
-  }
+  "kind": "cross_profile_conversion",
+  "protocol_version": "0.1.0",
+  "source_profile": "openai.responses.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "openai.chat-completions.alpha-0.1.0",
+  "title": "Responses request with text, tool history, cache intent, and JSON Schema output converts to Chat"
 }

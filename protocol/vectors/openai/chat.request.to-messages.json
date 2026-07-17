@@ -1,28 +1,214 @@
 {
-  "protocol_version": "0.1.0",
+  "expect": {
+    "decode": {
+      "diagnostics": [],
+      "fidelity": "exact",
+      "ir": {
+        "kind": "request",
+        "payload": {
+          "extensions": [],
+          "generation": {
+            "max_output_tokens": 24,
+            "stop_sequences": []
+          },
+          "instructions": [],
+          "messages": [
+            {
+              "content": [
+                {
+                  "text": "synthetic instruction",
+                  "type": "text"
+                }
+              ],
+              "extensions": [],
+              "role": "system"
+            },
+            {
+              "content": [
+                {
+                  "text": "synthetic request",
+                  "type": "text"
+                }
+              ],
+              "extensions": [],
+              "role": "user"
+            }
+          ],
+          "model": "synthetic-model",
+          "stream": false,
+          "tools": []
+        },
+        "profile_id": "openai.chat-completions.alpha-0.1.0",
+        "protocol_version": "0.1.0"
+      }
+    },
+    "encode": {
+      "cache_report": {
+        "entries": [
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 0,
+                "part_index": 0
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 1
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "message",
+              "location": {
+                "kind": "message",
+                "message_index": 1
+              }
+            }
+          },
+          {
+            "reason": "unchanged",
+            "source": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 1,
+                "part_index": 0
+              }
+            },
+            "status": "preserved",
+            "target": {
+              "kind": "content_part",
+              "location": {
+                "kind": "message_part",
+                "message_index": 1,
+                "part_index": 0
+              }
+            }
+          }
+        ],
+        "protocol_version": "0.1.0"
+      },
+      "diagnostics": [
+        {
+          "code": "semantic_change",
+          "location": {
+            "kind": "json_pointer",
+            "pointer": "/messages/0"
+          },
+          "severity": "info"
+        }
+      ],
+      "envelope": {
+        "adapter_headers": {},
+        "body_base64": "eyJtYXhfdG9rZW5zIjoyNCwibWVzc2FnZXMiOlt7ImNvbnRlbnQiOlt7InRleHQiOiJzeW50aGV0aWMgcmVxdWVzdCIsInR5cGUiOiJ0ZXh0In1dLCJyb2xlIjoidXNlciJ9XSwibW9kZWwiOiJzeW50aGV0aWMtbW9kZWwiLCJzeXN0ZW0iOlt7InRleHQiOiJzeW50aGV0aWMgaW5zdHJ1Y3Rpb24iLCJ0eXBlIjoidGV4dCJ9XX0=",
+        "body_kind": "json",
+        "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+        "protocol_headers": [
+          {
+            "raw_line": "content-type: application/json"
+          },
+          {
+            "raw_line": "anthropic-version: 2023-06-01"
+          }
+        ],
+        "protocol_version": "0.1.0",
+        "status": 200
+      },
+      "fidelity": "adapted",
+      "round_trip_decode": {
+        "diagnostics": [],
+        "fidelity": "exact",
+        "ir": {
+          "kind": "request",
+          "payload": {
+            "extensions": [],
+            "generation": {
+              "max_output_tokens": 24,
+              "stop_sequences": []
+            },
+            "instructions": [
+              {
+                "text": "synthetic instruction",
+                "type": "text"
+              }
+            ],
+            "messages": [
+              {
+                "content": [
+                  {
+                    "text": "synthetic request",
+                    "type": "text"
+                  }
+                ],
+                "extensions": [],
+                "role": "user"
+              }
+            ],
+            "model": "synthetic-model",
+            "stream": false,
+            "tools": []
+          },
+          "profile_id": "anthropic.messages.2023-06-01.alpha-0.1.0",
+          "protocol_version": "0.1.0"
+        }
+      }
+    }
+  },
   "id": "openai.chat.request.to-messages",
-  "title": "Synthetic Chat request encoded through the shared IR to Messages",
-  "synthetic": true,
-  "source_profile": "openai.chat-completions.alpha-0.1.0",
-  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
-  "kind": "cross_profile_conversion",
   "input": {
     "envelope": {
-      "profile_id": "openai.chat-completions.alpha-0.1.0",
-      "status": 200,
+      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6InN5bnRoZXRpYyBpbnN0cnVjdGlvbiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50Ijoic3ludGhldGljIHJlcXVlc3QifV0sIm1heF9jb21wbGV0aW9uX3Rva2VucyI6MjR9",
       "body_kind": "json",
+      "profile_id": "openai.chat-completions.alpha-0.1.0",
       "protocol_headers": [
         {
           "raw_line": "content-type: application/json"
         }
       ],
-      "body_base64": "eyJtb2RlbCI6InN5bnRoZXRpYy1tb2RlbCIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoic3lzdGVtIiwiY29udGVudCI6InN5bnRoZXRpYyBpbnN0cnVjdGlvbiJ9LHsicm9sZSI6InVzZXIiLCJjb250ZW50Ijoic3ludGhldGljIHJlcXVlc3QifV0sIm1heF9jb21wbGV0aW9uX3Rva2VucyI6MjR9"
+      "protocol_version": "0.1.0",
+      "status": 200
     }
   },
-  "expect": {
-    "fidelity": "adapted",
-    "diagnostic_codes": [
-      "semantic_change"
-    ]
-  }
+  "kind": "cross_profile_conversion",
+  "protocol_version": "0.1.0",
+  "source_profile": "openai.chat-completions.alpha-0.1.0",
+  "synthetic": true,
+  "target_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
+  "title": "Synthetic Chat request encoded through the shared IR to Messages"
 }

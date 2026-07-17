@@ -13,10 +13,10 @@ use llm_protocol_core::{
     CanonicalEnvelope, ContentPart, ConversationRole, ConversionResult, DecodedEnvelope,
     Diagnostic, DiagnosticCode, DiagnosticSeverity, EnvelopeError, ErrorCategory, Fidelity,
     FinishReason, GenerationControls, Message, OPENAI_CHAT_COMPLETIONS_PROFILE,
-    OPENAI_RESPONSES_PROFILE, OpaqueExtension, OpaquePayload, OutputPartType, ProfileId,
-    ProtocolBodyKind, ProtocolError, ProtocolHeaderLine, ProtocolPayload, ProtocolRequest,
-    ProtocolResponse, ReplayEnvelope, RetainedWire, SourceLocation, SseFrame, SseFramer,
-    SseFramingError, StreamEvent, ToolDefinition, Usage,
+    OPENAI_RESPONSES_PROFILE, OpaqueExtension, OpaquePayload, OutputPartType, PROTOCOL_VERSION,
+    ProfileId, ProtocolBodyKind, ProtocolError, ProtocolHeaderLine, ProtocolPayload,
+    ProtocolRequest, ProtocolResponse, ReplayEnvelope, RetainedWire, SourceLocation, SseFrame,
+    SseFramer, SseFramingError, StreamEvent, ToolDefinition, Usage,
 };
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -174,6 +174,12 @@ pub fn wire_envelope_from_json(value: &Value) -> Result<WireEnvelope, CodecError
     let object = value
         .as_object()
         .ok_or_else(|| CodecError::InvalidEnvelope("envelope must be an object".to_owned()))?;
+    let protocol_version = required_str(object, "protocol_version")?;
+    if protocol_version != PROTOCOL_VERSION {
+        return Err(CodecError::InvalidEnvelope(format!(
+            "unsupported protocol_version {protocol_version}"
+        )));
+    }
     let profile_id = profile_id_field(object, "profile_id")?;
     let status = required_u16(object, "status")?;
     let body_kind = match required_str(object, "body_kind")? {
@@ -227,6 +233,7 @@ pub fn wire_envelope_from_json(value: &Value) -> Result<WireEnvelope, CodecError
 
 pub fn wire_envelope_to_json(wire: &WireEnvelope) -> Value {
     json!({
+        "protocol_version": PROTOCOL_VERSION,
         "profile_id": wire.profile_id,
         "status": wire.status,
         "body_kind": match wire.body_kind {
@@ -1042,7 +1049,16 @@ fn encode_value(
             result
         }
         ProtocolPayload::Error(error) => encode_error(error, &mut tracker),
-        ProtocolPayload::Stream(events) => Value::String(encode_stream(events, &mut tracker)),
+        ProtocolPayload::Stream(events) => {
+            if source_profile != target_profile {
+                tracker.adapted(
+                    DiagnosticCode::SemanticChange,
+                    None,
+                    "stream lifecycle frames were adapted to Anthropic Messages",
+                );
+            }
+            Value::String(encode_stream(events, &mut tracker))
+        }
     };
     if tracker.fidelity == Fidelity::Unsupported {
         return Ok(ConversionResult::unsupported(tracker.diagnostics));
@@ -1656,10 +1672,25 @@ fn encode_error(error: &ProtocolError, tracker: &mut ConversionTracker) -> Value
         tracker,
         "unknown error fields cannot be canonically represented",
     );
+    let target_type = encode_error_type(error.category);
+    if error.code != target_type {
+        tracker.lossy(
+            DiagnosticCode::SemanticChange,
+            None,
+            "the source error code was replaced by the Anthropic category type",
+        );
+    }
+    if error.param.is_some() {
+        tracker.lossy(
+            DiagnosticCode::SemanticChange,
+            None,
+            "the source error parameter cannot be represented by Anthropic Messages",
+        );
+    }
     json!({
         "type": "error",
         "error": {
-            "type": encode_error_type(error.category),
+            "type": target_type,
             "message": error.message,
         }
     })
@@ -1870,7 +1901,10 @@ fn encode_stream(events: &[StreamEvent], tracker: &mut ConversionTracker) -> Str
     let mut message_started = false;
     let mut part_indices = BTreeMap::new();
     let mut next_part_index = 0_usize;
-    let mut usage = None;
+    let mut usage = events.iter().rev().find_map(|event| match event {
+        StreamEvent::Usage { usage } => Some(usage.clone()),
+        _ => None,
+    });
     let mut saw_terminal = false;
     for event in events {
         match event {

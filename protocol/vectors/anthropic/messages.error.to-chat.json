@@ -22,7 +22,7 @@
         "adapter_headers": {},
         "body_base64": "eyJlcnJvciI6eyJjb2RlIjoicmF0ZV9saW1pdF9lcnJvciIsIm1lc3NhZ2UiOiJzeW50aGV0aWMgcmF0ZSBsaW1pdCIsInBhcmFtIjpudWxsLCJ0eXBlIjoicmF0ZV9saW1pdF9lcnJvciJ9fQ==",
         "body_kind": "json",
-        "profile_id": "openai.responses.alpha-0.1.0",
+        "profile_id": "openai.chat-completions.alpha-0.1.0",
         "protocol_headers": [
           {
             "raw_line": "content-type: application/json"
@@ -47,13 +47,13 @@
             "message": "synthetic rate limit",
             "retry_after_ms": 2000
           },
-          "profile_id": "openai.responses.alpha-0.1.0",
+          "profile_id": "openai.chat-completions.alpha-0.1.0",
           "protocol_version": "0.1.0"
         }
       }
     }
   },
-  "id": "anthropic.messages.error.cross-profile",
+  "id": "anthropic.messages.error.to-chat",
   "input": {
     "envelope": {
       "body_base64": "eyJ0eXBlIjoiZXJyb3IiLCJlcnJvciI6eyJ0eXBlIjoicmF0ZV9saW1pdF9lcnJvciIsIm1lc3NhZ2UiOiJzeW50aGV0aWMgcmF0ZSBsaW1pdCJ9fQ==",
@@ -78,6 +78,6 @@
   "protocol_version": "0.1.0",
   "source_profile": "anthropic.messages.2023-06-01.alpha-0.1.0",
   "synthetic": true,
-  "target_profile": "openai.responses.alpha-0.1.0",
-  "title": "Synthetic Messages rate limit error"
+  "target_profile": "openai.chat-completions.alpha-0.1.0",
+  "title": "Anthropic Messages protocol error converts to Chat Completions"
 }
