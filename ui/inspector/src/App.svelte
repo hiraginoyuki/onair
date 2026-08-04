@@ -79,6 +79,7 @@
   let widths: Widths = loadWidths();
   let viewportTop = 0;
   let viewportHeight = 480;
+  let viewportLeft = 0;
   let tableWrap: HTMLElement | undefined;
   let source: EventSource | undefined;
   let resizeStart: { key: ColumnKey; x: number; width: number; pointerId: number; element: HTMLElement } | undefined;
@@ -120,7 +121,9 @@
     const resize = () => {
       viewportHeight = Math.max(260, tableWrap?.clientHeight ?? window.innerHeight - 168);
     };
+    const tableResizeObserver = new ResizeObserver(resize);
     resize();
+    if (tableWrap) tableResizeObserver.observe(tableWrap);
     window.addEventListener("resize", resize);
     window.addEventListener("hashchange", handleHashChange);
     connect();
@@ -128,6 +131,7 @@
     operatorTimer = window.setInterval(() => void refreshRuntime(), 15_000);
     if (selectedId) void loadSelectedById(selectedId, false);
     return () => {
+      tableResizeObserver.disconnect();
       window.removeEventListener("resize", resize);
       window.removeEventListener("hashchange", handleHashChange);
       window.clearInterval(operatorTimer);
@@ -1039,19 +1043,11 @@
 
   <section class="workspace">
     <div
-      class="table-wrap"
-      bind:this={tableWrap}
-      on:scroll={(event) => {
-        const target = event.currentTarget as HTMLElement;
-        viewportTop = target.scrollTop;
-        viewportHeight = target.clientHeight;
-      }}
+      class="table-panel"
+      style={`--column-template: ${columnTemplate(widths)}; --table-min-width: ${tableMinimumWidth(widths)}px`}
     >
-      <table
-        aria-label="Inspector requests"
-        aria-busy={!streamReady}
-        style={`--column-template: ${columnTemplate(widths)}; --table-min-width: ${tableMinimumWidth(widths)}px`}
-      >
+      <div class="table-header-viewport">
+        <table class="table-header" style={`transform: translateX(${-viewportLeft}px)`}>
         <thead>
           <tr>
             {#each columns as column}
@@ -1092,6 +1088,19 @@
             {/each}
           </tr>
         </thead>
+        </table>
+      </div>
+      <div
+        class="table-wrap"
+        bind:this={tableWrap}
+        on:scroll={(event) => {
+          const target = event.currentTarget as HTMLElement;
+          viewportTop = target.scrollTop;
+          viewportHeight = target.clientHeight;
+          viewportLeft = target.scrollLeft;
+        }}
+      >
+        <table aria-label="Inspector requests" aria-busy={!streamReady}>
         <tbody style={`height: ${filtered.length * ROW_HEIGHT}px`}>
           <tr class="spacer" aria-hidden="true" style={`height: ${visibleStart * ROW_HEIGHT}px`}>
             <td colspan={columns.length}></td>
@@ -1124,12 +1133,13 @@
             </tr>
           {/each}
         </tbody>
-      </table>
-      {#if filtered.length === 0}
-        <div class="empty-state">
-          {#if !streamReady}Waiting for inspector stream…{:else if filter.trim()}No records match the current filter.{:else}No retained records.{/if}
-        </div>
-      {/if}
+        </table>
+        {#if filtered.length === 0}
+          <div class="empty-state">
+            {#if !streamReady}Waiting for inspector stream…{:else if filter.trim()}No records match the current filter.{:else}No retained records.{/if}
+          </div>
+        {/if}
+      </div>
     </div>
 
     <aside class="detail-pane" aria-label="Selected request details">
