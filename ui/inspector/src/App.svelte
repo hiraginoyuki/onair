@@ -503,6 +503,11 @@
         detailError = "";
       } else if (selectedId && !selectedRecord && !detailLoading) {
         void loadSelectedById(selectedId, false);
+      } else if (!selectedId && records.size) {
+        const newest = [...records.values()].reduce((current, candidate) =>
+          candidate.record.started_at_unix_ms > current.record.started_at_unix_ms ? candidate : current
+        );
+        select(newest.record, false);
       }
     }
     if (event.kind === "record_upsert") {
@@ -1009,7 +1014,7 @@
     <div class="title-group">
       <div class="eyebrow">operator surface · v2</div>
       <h1>onair inspector</h1>
-      <p class:offline={!connected} class:warning={malformedStream}>
+      <p class:offline={!connected} class:warning={malformedStream} aria-live="polite">
         <span class:online={connected} class="status-dot"></span>
         {malformedStream ? "stream warning" : connected ? "connected" : "reconnecting"}
       </p>
@@ -1019,7 +1024,14 @@
         <span class="sr-only">Filter records</span>
         <input aria-label="filter records" placeholder="filter records" value={filter} on:input={updateFilter} />
       </label>
-      <button type="button" class:active={paused} aria-pressed={paused} on:click={togglePause}>{paused ? "resume" : "pause"}</button>
+      <button
+        type="button"
+        class="pause-action"
+        class:active={paused}
+        aria-label={paused ? "Resume live updates" : "Pause live updates"}
+        aria-pressed={paused}
+        on:click={togglePause}
+      >{paused ? "resume" : "pause"}</button>
       <button type="button" on:click={refreshInspector}>refresh</button>
       <button type="button" on:click={resetWidths}>reset widths</button>
     </div>
@@ -1030,12 +1042,11 @@
     <span><strong>{retainedCount === undefined ? "—" : retainedCount.toLocaleString()}</strong> retained</span>
     <span><strong>{pending.length.toLocaleString()}</strong> paused pending</span>
     <span class:status-live={connected} class:status-offline={!connected}>{connected ? "live" : "reconnecting"}</span>
-    {#if recoveryNotice}<span class="status-recovery">{recoveryNotice}</span>{/if}
+    {#if recoveryNotice}<span class="status-recovery" role="status">{recoveryNotice}</span>{/if}
   </section>
 
-  {#if recoveryNotice || actionNotice || droppedPending}
+  {#if actionNotice || droppedPending}
     <div class="notices" aria-live="polite">
-      {#if recoveryNotice}<div class="notice notice-warning">{recoveryNotice}</div>{/if}
       {#if actionNotice}<div class="notice notice-info">{actionNotice}</div>{/if}
       {#if droppedPending}<div class="notice notice-warning">pending buffer capped at {PENDING_LIMIT}; oldest updates dropped</div>{/if}
     </div>
@@ -1053,6 +1064,7 @@
             {#each columns as column}
               <th
                 class:right={column.align === "right"}
+                class:resizable={column.minWidth < column.maxWidth}
                 aria-sort={sortKey === column.key ? (sortDescending ? "descending" : "ascending") : "none"}
               >
                 <button
@@ -1063,27 +1075,29 @@
                 >
                   {column.label}{sortKey === column.key ? (sortDescending ? " ↓" : " ↑") : ""}
                 </button>
-                <button
-                  type="button"
-                  class="resize"
-                  aria-label={`Resize ${column.label}`}
-                  aria-keyshortcuts="ArrowLeft ArrowRight Enter"
-                  title={`Resize ${column.label}; double-click to reset`}
-                  on:pointerdown={(event) => startResize(event, column.key)}
-                  on:keydown={(event) => {
-                    if (event.key === "ArrowLeft") {
-                      event.preventDefault();
-                      adjustWidth(column.key, -8);
-                    } else if (event.key === "ArrowRight") {
-                      event.preventDefault();
-                      adjustWidth(column.key, 8);
-                    } else if (event.key === "Enter") {
-                      event.preventDefault();
-                      resetColumn(column.key);
-                    }
-                  }}
-                  on:dblclick={() => resetColumn(column.key)}
-                ></button>
+                {#if column.minWidth < column.maxWidth}
+                  <button
+                    type="button"
+                    class="resize"
+                    aria-label={`Resize ${column.label}`}
+                    aria-keyshortcuts="ArrowLeft ArrowRight Enter"
+                    title={`Resize ${column.label}; double-click to reset`}
+                    on:pointerdown={(event) => startResize(event, column.key)}
+                    on:keydown={(event) => {
+                      if (event.key === "ArrowLeft") {
+                        event.preventDefault();
+                        adjustWidth(column.key, -8);
+                      } else if (event.key === "ArrowRight") {
+                        event.preventDefault();
+                        adjustWidth(column.key, 8);
+                      } else if (event.key === "Enter") {
+                        event.preventDefault();
+                        resetColumn(column.key);
+                      }
+                    }}
+                    on:dblclick={() => resetColumn(column.key)}
+                  ></button>
+                {/if}
               </th>
             {/each}
           </tr>
@@ -1247,7 +1261,13 @@
                       <strong>#{attempt.attempt} {attempt.backend || "unknown"}</strong>
                       <span class="attempt-summary">{attempt.outcome} · status {attempt.status} · {formatMs(attempt.elapsed_us)}</span>
                     </div>
-                    <button type="button" class="compact-action" on:click={() => toggleAttempt(attempt, index)}>
+                    <button
+                      type="button"
+                      class="compact-action"
+                      aria-expanded={isAttemptExpanded(attempt, index)}
+                      aria-controls={`attempt-details-${index}`}
+                      on:click={() => toggleAttempt(attempt, index)}
+                    >
                       {isAttemptExpanded(attempt, index) ? "hide details" : "details"}
                     </button>
                   </div>
@@ -1262,7 +1282,7 @@
                     {/each}
                   </div>
                   {#if isAttemptExpanded(attempt, index)}
-                    <div class="attempt-details">
+                    <div class="attempt-details" id={`attempt-details-${index}`}>
                       <dl class="kv">
                         {#each attemptDetails(attempt) as pair}
                           <dt>{pair[0]}</dt><dd class="break">{pair[1]}</dd>
