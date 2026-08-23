@@ -937,7 +937,10 @@
                   aria-label={`Sort by ${column.label}`}
                   on:click={() => sort(column.key)}
                 >
-                  {column.label}{sortKey === column.key ? (sortDescending ? " ↓" : " ↑") : ""}
+                  <span class="sort-label">{column.label}</span>
+                  {#if sortKey === column.key}
+                    <span class="sort-indicator" aria-hidden="true">{sortDescending ? "↓" : "↑"}</span>
+                  {/if}
                 </button>
                 {#if column.minWidth < column.maxWidth}
                   <button
