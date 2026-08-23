@@ -10,6 +10,7 @@ type DetailHandler = () => DetailResponse | Promise<DetailResponse>;
 
 type BrowserDiagnostics = {
   consoleErrors: string[];
+  httpErrors: string[];
   pageErrors: string[];
   unexpectedRequests: string[];
 };
@@ -210,7 +211,7 @@ export class InspectorHarness {
       const recordId = decodeURIComponent(url.pathname.slice(prefix.length));
       const response = await this.detailHandlers.get(recordId)?.();
       await route.fulfill({
-        status: response?.status ?? 404,
+        status: response ? (response.status ?? 200) : 404,
         contentType: "application/json",
         body: JSON.stringify(response?.json ?? { error: "not retained" })
       });
@@ -230,11 +231,17 @@ export const test = base.extend<Fixtures>({
   inspector: async ({ page }, use) => {
     const diagnostics: BrowserDiagnostics = {
       consoleErrors: [],
+      httpErrors: [],
       pageErrors: [],
       unexpectedRequests: []
     };
     page.on("console", (message) => {
       if (message.type() === "error") diagnostics.consoleErrors.push(message.text());
+    });
+    page.on("response", (response) => {
+      if (response.status() >= 400) {
+        diagnostics.httpErrors.push(`${response.status()} ${response.url()}`);
+      }
     });
     page.on("pageerror", (error) => diagnostics.pageErrors.push(error.message));
 
@@ -243,6 +250,7 @@ export const test = base.extend<Fixtures>({
     await use(inspector);
 
     expect.soft(diagnostics.consoleErrors, "browser console errors").toEqual([]);
+    expect.soft(diagnostics.httpErrors, "unexpected HTTP errors").toEqual([]);
     expect.soft(diagnostics.pageErrors, "uncaught page errors").toEqual([]);
     expect.soft(diagnostics.unexpectedRequests, "unexpected or external requests").toEqual([]);
   }

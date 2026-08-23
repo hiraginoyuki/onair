@@ -15,6 +15,7 @@
     shouldFlushCoalesced
   } from "./lib/records";
   import type { RecordMap } from "./lib/records";
+  import { deriveStreamPresentation, streamStripLabel } from "./lib/presentation";
   import { StreamSupervisor } from "./lib/stream";
   import type { ConnectionState, StreamEventSource } from "./lib/stream";
   import { decodeStreamEvent, decodeVersionedRecord } from "./lib/wire";
@@ -78,8 +79,8 @@
   let paused = false;
   let connectionState: ConnectionState = "connecting";
   let malformedStream = false;
+  let resettingProjection = false;
   let pausedUpdateCount = 0;
-  let recoveryNotice = "";
   let actionNotice = "";
   let retainedCount: number | undefined;
   let lastSequence = 0;
@@ -102,15 +103,13 @@
   $: selectedItem = selectionItem(selection);
   $: detailLoading = selection.kind === "loading";
   $: detailError = selection.kind === "error" ? selection.message : "";
-  $: connected = connectionState === "live";
-  $: recovering = connectionState === "recovering";
-  $: connectionLabel =
-    connectionState === "live"
-      ? "connected"
-      : connectionState === "failed"
-        ? "failed"
-        : connectionState;
-  $: streamLabel = `stream ${connectionState}`;
+  $: streamPresentation = deriveStreamPresentation({
+    connectionState,
+    paused,
+    resetting: resettingProjection,
+    warning: malformedStream
+  });
+  $: streamStatusLabel = streamStripLabel(streamPresentation);
   $: filtered = Array.from(displayRecords.values())
     .map((entry) => entry.record)
     .filter((record) => matchesFilter(record, filterNeedle))
@@ -161,21 +160,9 @@
       onMalformed: () => {
         console.warn("inspector stream warning: malformed event ignored");
         malformedStream = true;
-        showNotice("stream warning: malformed event ignored", false);
       },
       onApplied: () => {
         malformedStream = false;
-      },
-      onRecovering: () => {
-        recoveryNotice = "stream recovering";
-        showNotice("stream recovery: event processing failed", false);
-      },
-      onRecovered: () => {
-        recoveryNotice = "";
-      },
-      onRefreshRequired: () => {
-        recoveryNotice = "stream error: refresh required";
-        showNotice("stream error: refresh required", true);
       }
     });
     streamSupervisor.start();
@@ -248,6 +235,7 @@
     nextSelectionRequest();
     lastSequence = 0;
     streamReady = false;
+    resettingProjection = false;
     liveRecords = new Map();
     retargetUnresolvedSelectionForEpoch();
     if (!paused) {
@@ -261,6 +249,7 @@
     projectionEpoch += 1;
     nextSelectionRequest();
     streamReady = false;
+    resettingProjection = true;
     retargetUnresolvedSelectionForEpoch();
   }
 
@@ -280,8 +269,6 @@
     if (event.kind === "reset") {
       beginResetProjection();
       resetTableViewport();
-      recoveryNotice = `stream reset: ${event.reason.replaceAll("_", " ")}`;
-      showNotice("stream reset; snapshot reloaded", false);
       void refreshRuntime();
     }
     const result = applyEvent(liveRecords, event);
@@ -292,7 +279,7 @@
 
     if (event.kind === "snapshot") {
       streamReady = true;
-      recoveryNotice = "";
+      resettingProjection = false;
       resetTableViewport();
       const recordId = selectionRecordId(selection);
       const canonical = recordId ? liveRecords.get(recordId) : undefined;
@@ -449,7 +436,7 @@
   function refreshInspector() {
     showNotice("refreshing inspector");
     malformedStream = false;
-    recoveryNotice = "";
+    resettingProjection = false;
     streamSupervisor?.manualRefresh();
     void refreshRuntime();
   }
@@ -871,9 +858,20 @@
     <div class="title-group">
       <div class="eyebrow">operator surface · v2</div>
       <h1>onair inspector</h1>
-      <p class:offline={!connected || recovering} class:warning={malformedStream} aria-live="polite">
-        <span class:online={connected && !recovering} class="status-dot"></span>
-        {malformedStream ? "stream warning" : connectionLabel}
+      <p
+        class={`stream-indicator stream-${streamPresentation.tone}`}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-state={streamPresentation.state}
+      >
+        <span
+          class:online={streamPresentation.tone === "good"}
+          class:failed={streamPresentation.tone === "error"}
+          class="status-dot"
+          aria-hidden="true"
+        ></span>
+        {streamPresentation.label}
       </p>
     </div>
     <div class="actions">
@@ -901,8 +899,11 @@
     {#if paused && pausedUpdateCount > 0}
       <span><strong>{pausedUpdateCount.toLocaleString()}</strong> {pausedUpdateCount === 1 ? "update" : "updates"} while paused</span>
     {/if}
-    <span class:status-live={connected} class:status-offline={!connected}>{streamLabel}</span>
-    {#if recoveryNotice}<span class="status-recovery" role="status">{recoveryNotice}</span>{/if}
+    <span
+      class:status-live={streamPresentation.tone === "good"}
+      class:status-offline={streamPresentation.tone !== "good"}
+      class:status-error={streamPresentation.tone === "error"}
+    >{streamStatusLabel}</span>
   </section>
 
   {#if actionNotice}
