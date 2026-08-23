@@ -111,8 +111,7 @@ export type StreamEvent =
       revision: number;
       reason: "retention_evicted" | "explicit";
     }
-  | { kind: "reset"; stream_seq: number; reason: "resume_unavailable" | "lagged" | "server_restarted" }
-  | { kind: "keepalive"; stream_seq: number };
+  | { kind: "reset"; stream_seq: number; reason: "resume_unavailable" | "lagged" | "server_restarted" };
 
 export type ColumnKey =
   | "time"

@@ -1,7 +1,7 @@
 import type { StreamEvent } from "./types";
 
 export const RECOVERY_DELAY_MS = 250;
-export const PROTOCOL_EVENT_NAMES = ["snapshot", "record_upsert", "record_removed", "reset", "keepalive"] as const;
+export const PROTOCOL_EVENT_NAMES = ["snapshot", "record_upsert", "record_removed", "reset"] as const;
 
 export type ConnectionState =
   | "connecting"

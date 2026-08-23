@@ -532,7 +532,6 @@ fn event_sequence(event: &InspectorStreamEvent) -> Option<u64> {
         InspectorStreamEvent::Snapshot { stream_seq, .. }
         | InspectorStreamEvent::RecordUpsert { stream_seq, .. }
         | InspectorStreamEvent::RecordRemoved { stream_seq, .. }
-        | InspectorStreamEvent::Reset { stream_seq, .. }
-        | InspectorStreamEvent::Keepalive { stream_seq } => *stream_seq,
+        | InspectorStreamEvent::Reset { stream_seq, .. } => *stream_seq,
     })
 }

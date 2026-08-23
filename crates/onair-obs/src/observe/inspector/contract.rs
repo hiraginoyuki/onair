@@ -31,9 +31,6 @@ pub enum InspectorStreamEvent {
         stream_seq: u64,
         reason: InspectorResetReason,
     },
-    Keepalive {
-        stream_seq: u64,
-    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -93,7 +90,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_all_control_event_shapes() {
+    fn round_trips_all_application_event_shapes() {
         let events = [
             InspectorStreamEvent::Snapshot {
                 stream_seq: 10,
@@ -103,17 +100,23 @@ mod tests {
                     record: test_record("synthetic-1"),
                 }],
             },
-            InspectorStreamEvent::RecordRemoved {
+            InspectorStreamEvent::RecordUpsert {
                 stream_seq: 11,
                 record_id: "synthetic-1".to_owned(),
                 revision: 2,
+                phase: InspectorRecordPhase::Live,
+                record: Box::new(test_record("synthetic-1")),
+            },
+            InspectorStreamEvent::RecordRemoved {
+                stream_seq: 12,
+                record_id: "synthetic-1".to_owned(),
+                revision: 3,
                 reason: InspectorRemovalReason::RetentionEvicted,
             },
             InspectorStreamEvent::Reset {
-                stream_seq: 12,
+                stream_seq: 13,
                 reason: InspectorResetReason::ResumeUnavailable,
             },
-            InspectorStreamEvent::Keepalive { stream_seq: 13 },
         ];
 
         for event in events {
@@ -154,13 +157,6 @@ mod tests {
                     "record_id": "synthetic-1",
                     "revision": 4,
                     "reason": "explicit"
-                }),
-            ),
-            (
-                InspectorStreamEvent::Keepalive { stream_seq: 3 },
-                json!({
-                    "kind": "keepalive",
-                    "stream_seq": 3
                 }),
             ),
         ];

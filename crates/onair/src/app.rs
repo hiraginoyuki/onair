@@ -570,7 +570,6 @@ fn inspector_v2_event_name(event: &InspectorStreamEvent) -> &'static str {
         InspectorStreamEvent::RecordUpsert { .. } => "record_upsert",
         InspectorStreamEvent::RecordRemoved { .. } => "record_removed",
         InspectorStreamEvent::Reset { .. } => "reset",
-        InspectorStreamEvent::Keepalive { .. } => "keepalive",
     }
 }
 
@@ -579,8 +578,7 @@ fn inspector_v2_event_sequence(event: &InspectorStreamEvent) -> u64 {
         InspectorStreamEvent::Snapshot { stream_seq, .. }
         | InspectorStreamEvent::RecordUpsert { stream_seq, .. }
         | InspectorStreamEvent::RecordRemoved { stream_seq, .. }
-        | InspectorStreamEvent::Reset { stream_seq, .. }
-        | InspectorStreamEvent::Keepalive { stream_seq } => *stream_seq,
+        | InspectorStreamEvent::Reset { stream_seq, .. } => *stream_seq,
     }
 }
 

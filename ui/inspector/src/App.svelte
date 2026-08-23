@@ -339,7 +339,7 @@
     if (
       typeof candidate.kind !== "string" ||
       !isSafeInteger(candidate.stream_seq) ||
-      !["snapshot", "record_upsert", "record_removed", "reset", "keepalive"].includes(candidate.kind)
+      !["snapshot", "record_upsert", "record_removed", "reset"].includes(candidate.kind)
     ) {
       return false;
     }
@@ -387,7 +387,7 @@
         (event as { reason?: unknown }).reason as string
       );
     }
-    return true;
+    return false;
   }
 
   function isSafeInteger(value: unknown): value is number {
