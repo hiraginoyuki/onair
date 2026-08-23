@@ -110,6 +110,7 @@
       : connectionState === "failed"
         ? "failed"
         : connectionState;
+  $: streamLabel = `stream ${connectionState}`;
   $: filtered = Array.from(displayRecords.values())
     .map((entry) => entry.record)
     .filter((record) => matchesFilter(record, filterNeedle))
@@ -432,6 +433,7 @@
     if (recordId && (!canonical || (selection.kind === "ready" && selection.detached))) {
       void loadSelectedById(recordId, false, nextSelectionRequest());
     }
+    showNotice("live view resumed");
   }
 
   function updateFilter(event: Event) {
@@ -895,9 +897,11 @@
   <section class="status-strip" aria-label="inspector status">
     <span><strong>{displayRecords.size.toLocaleString()}</strong> loaded</span>
     <span><strong>{retainedCount === undefined ? "—" : retainedCount.toLocaleString()}</strong> retained</span>
-    {#if paused}<span><strong>frozen</strong> table</span>{/if}
-    {#if paused && pausedUpdateCount > 0}<span><strong>{pausedUpdateCount.toLocaleString()}</strong> live updates</span>{/if}
-    <span class:status-live={connected} class:status-offline={!connected}>{connectionState}</span>
+    {#if paused}<span><strong>view frozen</strong></span>{/if}
+    {#if paused && pausedUpdateCount > 0}
+      <span><strong>{pausedUpdateCount.toLocaleString()}</strong> {pausedUpdateCount === 1 ? "update" : "updates"} while paused</span>
+    {/if}
+    <span class:status-live={connected} class:status-offline={!connected}>{streamLabel}</span>
     {#if recoveryNotice}<span class="status-recovery" role="status">{recoveryNotice}</span>{/if}
   </section>
 
@@ -910,6 +914,10 @@
   <section class="workspace">
     <div
       class="table-panel"
+      class:view-frozen={paused}
+      data-view-state={paused ? "frozen" : "live"}
+      aria-label={paused ? "Request table, view frozen" : "Request table"}
+      aria-describedby={paused ? "frozen-view-status" : undefined}
       style={`--column-template: ${columnTemplate(widths)}; --table-min-width: ${tableMinimumWidth(widths)}px`}
     >
       <div class="table-header-viewport">
@@ -959,6 +967,9 @@
         </thead>
         </table>
       </div>
+      {#if paused}
+        <div class="frozen-view-indicator" id="frozen-view-status">view frozen</div>
+      {/if}
       <div
         class="table-wrap"
         bind:this={tableWrap}

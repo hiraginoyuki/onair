@@ -36,13 +36,29 @@ jobs:
           cache: pnpm
           cache-dependency-path: ui/inspector/pnpm-lock.yaml
 
-      - name: build inspector frontend
+      - name: install inspector frontend
         working-directory: ui/inspector
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run check
-          pnpm run test
-          pnpm run build
+        run: pnpm install --frozen-lockfile
+
+      - name: check inspector frontend
+        working-directory: ui/inspector
+        run: pnpm run check
+
+      - name: test inspector frontend
+        working-directory: ui/inspector
+        run: pnpm run test
+
+      - name: build inspector artifact
+        working-directory: ui/inspector
+        run: pnpm run build
+
+      - name: install inspector browser
+        working-directory: ui/inspector
+        run: pnpm exec playwright install --with-deps --only-shell chromium
+
+      - name: test inspector artifact in Chromium
+        working-directory: ui/inspector
+        run: pnpm run test:browser
 
       - uses: Swatinem/rust-cache@v2
         with:

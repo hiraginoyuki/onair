@@ -163,6 +163,7 @@ h3 {
 }
 .status-dot.online { background: var(--good); box-shadow: 0 0 0 3px rgba(114, 211, 155, 0.1); }
 .actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3); flex-wrap: wrap; }
+.pause-action { min-width: 74px; }
 .filter-wrap { display: block; }
 .sr-only {
   position: absolute;
@@ -230,6 +231,23 @@ h3 {
   border-radius: var(--radius-surface);
   background: var(--surface);
   box-shadow: var(--shadow-border);
+}
+.table-panel.view-frozen {
+  box-shadow: var(--shadow-border), inset 0 0 0 1px rgba(240, 190, 114, 0.28);
+}
+.frozen-view-indicator {
+  display: flex;
+  align-items: center;
+  flex: none;
+  min-height: 32px;
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid rgba(240, 190, 114, 0.24);
+  color: var(--warn);
+  background: rgba(75, 54, 31, 0.34);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 .table-header-viewport {
   flex: none;

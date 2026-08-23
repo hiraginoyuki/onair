@@ -1476,6 +1476,10 @@ async fn inspector_routes_serve_their_intended_ui_artifacts() {
         .unwrap_or_default();
     assert!(csp.contains("script-src 'unsafe-inline'"));
     let next_body = to_bytes(next.into_body(), 1024 * 1024).await.unwrap();
+    assert_eq!(
+        next_body.as_ref(),
+        include_bytes!("../../../../ui/inspector/dist/index.html")
+    );
     let next_body = String::from_utf8(next_body.to_vec()).unwrap();
     assert!(next_body.contains("<div id=\"app\"></div>"));
     assert!(next_body.contains("/_onair/inspector-next/events"));

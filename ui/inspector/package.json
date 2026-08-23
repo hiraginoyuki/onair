@@ -8,9 +8,11 @@
     "build": "vite build && node scripts/check-artifact.mjs",
     "check:artifact": "node scripts/check-artifact.mjs",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run --environment node"
+    "test": "vitest run src --environment node",
+    "test:browser": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^24.5.2",
     "@sveltejs/vite-plugin-svelte": "^6.1.0",
     "svelte": "^5.38.7",
