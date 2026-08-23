@@ -1,23 +1,22 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { CLIENT_LIMIT, columns, columnWidth, ROW_HEIGHT } from "./lib/store";
   import {
     applyEvent,
-    CLIENT_LIMIT,
-    columns,
-    columnWidth,
     eventSequence,
-    PENDING_LIMIT,
-    ROW_HEIGHT
-  } from "./lib/store";
-  import { StreamSupervisor } from "./lib/stream";
-  import type { StreamEventSource } from "./lib/stream";
-  import {
+    freezeRecords,
     isSelectionResponseCurrent,
     markSelectionDetached,
     reconcileSelection,
+    saturatingIncrement,
     selectionItem,
-    selectionRecordId
+    selectionRecordId,
+    shouldAcceptEventSequence,
+    shouldFlushCoalesced
   } from "./lib/records";
+  import type { RecordMap } from "./lib/records";
+  import { StreamSupervisor } from "./lib/stream";
+  import type { ConnectionState, StreamEventSource } from "./lib/stream";
   import type {
     ColumnKey,
     InspectorAttempt,
@@ -64,8 +63,10 @@
     { key: "stream_complete_us", label: "stream done" }
   ];
 
-  let records = new Map<string, VersionedRecord>();
-  let pending: StreamEvent[] = [];
+  let liveRecords: RecordMap = new Map();
+  let displayRecords: ReadonlyMap<string, VersionedRecord> = liveRecords;
+  let frozenRecords: ReadonlyMap<string, VersionedRecord> | undefined;
+  let displayEpoch = 0;
   let selection: SelectionState = { kind: "none" };
   let selectionRequestToken = 0;
   let projectionEpoch = 0;
@@ -74,11 +75,9 @@
   let sortKey: ColumnKey = "time";
   let sortDescending = true;
   let paused = false;
-  let connected = false;
-  let recovering = false;
+  let connectionState: ConnectionState = "connecting";
   let malformedStream = false;
-  let droppedPending = false;
-  let pausedNeedsResync = false;
+  let pausedUpdateCount = 0;
   let recoveryNotice = "";
   let actionNotice = "";
   let retainedCount: number | undefined;
@@ -102,7 +101,15 @@
   $: selectedItem = selectionItem(selection);
   $: detailLoading = selection.kind === "loading";
   $: detailError = selection.kind === "error" ? selection.message : "";
-  $: filtered = Array.from(records.values())
+  $: connected = connectionState === "live";
+  $: recovering = connectionState === "recovering";
+  $: connectionLabel =
+    connectionState === "live"
+      ? "connected"
+      : connectionState === "failed"
+        ? "failed"
+        : connectionState;
+  $: filtered = Array.from(displayRecords.values())
     .map((entry) => entry.record)
     .filter((record) => matchesFilter(record, filterNeedle))
     .sort((a, b) => {
@@ -137,7 +144,39 @@
     if (tableWrap) tableResizeObserver.observe(tableWrap);
     window.addEventListener("resize", resize);
     window.addEventListener("hashchange", handleHashChange);
-    connect();
+    streamSupervisor = new StreamSupervisor({
+      createSource: () =>
+        new EventSource(
+          `/_onair/inspector-next/events?snapshot_limit=${CLIENT_LIMIT}`
+        ) as unknown as StreamEventSource,
+      decode: decodeStreamMessage,
+      apply: dispatchEvent,
+      onSourceStart: () => {
+        cancelLiveFlush();
+        beginProjection();
+      },
+      onStateChange: (state) => (connectionState = state),
+      onMalformed: () => {
+        console.warn("inspector stream warning: malformed event ignored");
+        malformedStream = true;
+        showNotice("stream warning: malformed event ignored", false);
+      },
+      onApplied: () => {
+        malformedStream = false;
+      },
+      onRecovering: () => {
+        recoveryNotice = "stream recovering";
+        showNotice("stream recovery: event processing failed", false);
+      },
+      onRecovered: () => {
+        recoveryNotice = "";
+      },
+      onRefreshRequired: () => {
+        recoveryNotice = "stream error: refresh required";
+        showNotice("stream error: refresh required", true);
+      }
+    });
+    streamSupervisor.start();
     void refreshRuntime();
     operatorTimer = window.setInterval(() => void refreshRuntime(), 15_000);
     const initialSelectedId = readHashRecordId();
@@ -183,79 +222,6 @@
       localStorage.setItem(widthKey, JSON.stringify(next));
     } catch {
       // Width persistence is optional and must not interrupt inspection.
-    }
-  }
-
-  function nextSelectionRequest(): number {
-    selectionRequestToken += 1;
-    return selectionRequestToken;
-  }
-
-  function beginProjection() {
-    projectionEpoch += 1;
-    nextSelectionRequest();
-    lastSequence = 0;
-    connected = false;
-    streamReady = false;
-    if (!paused) {
-      records = new Map();
-      selection = markSelectionDetached(selection, records);
-    }
-    const recordId = selectionRecordId(selection);
-    if (recordId && selection.kind !== "ready") {
-      selection = {
-        kind: "loading",
-        recordId,
-        requestToken: selectionRequestToken,
-        epoch: projectionEpoch
-      };
-    }
-  }
-
-  function connect() {
-    cancelLiveFlush();
-    connected = false;
-    streamReady = false;
-    if (!streamSupervisor) {
-      streamSupervisor = new StreamSupervisor({
-        createSource: () => {
-          return new EventSource(
-            `/_onair/inspector-next/events?snapshot_limit=${CLIENT_LIMIT}`
-          ) as unknown as StreamEventSource;
-        },
-        decode: decodeStreamMessage,
-        apply: dispatchEvent,
-        onSourceStart: () => {
-          cancelLiveFlush();
-          beginProjection();
-        },
-        onStateChange: (state) => {
-          connected = state === "live";
-          recovering = state === "recovering";
-        },
-        onMalformed: () => {
-          console.warn("inspector stream warning: malformed event ignored");
-          malformedStream = true;
-          showNotice("stream warning: malformed event ignored", false);
-        },
-        onApplied: () => {
-          malformedStream = false;
-        },
-        onRecovering: () => {
-          recoveryNotice = "stream recovering";
-          showNotice("stream recovery: event processing failed", false);
-        },
-        onRecovered: () => {
-          recoveryNotice = "";
-        },
-        onRefreshRequired: () => {
-          recoveryNotice = "stream error: refresh required";
-          showNotice("stream error: refresh required", true);
-        }
-      });
-      streamSupervisor.start();
-    } else {
-      streamSupervisor.manualRefresh();
     }
   }
 
@@ -474,111 +440,142 @@
     );
   }
 
-  function handleEvent(event: StreamEvent, replay = false, publish = true) {
-    if (!replay && paused && (event.kind === "snapshot" || event.kind === "reset")) {
-      if (event.kind === "reset") {
-        projectionEpoch += 1;
-        nextSelectionRequest();
-      }
-      pausedNeedsResync = true;
-      return;
+  function decodeVersionedRecordInline(input: unknown): VersionedRecord | undefined {
+    if (!input || typeof input !== "object") return undefined;
+    const candidate = input as Record<string, unknown>;
+    const record = normalizeInspectorRecord(candidate.record);
+    if (
+      typeof candidate.record_id !== "string" ||
+      !isSafeInteger(candidate.revision) ||
+      candidate.revision === 0 ||
+      !isInspectorRecord(record) ||
+      record.record_id !== candidate.record_id
+    ) {
+      return undefined;
     }
+    return {
+      record_id: candidate.record_id,
+      revision: candidate.revision,
+      record
+    };
+  }
+
+
+  function nextSelectionRequest(): number {
+    selectionRequestToken += 1;
+    return selectionRequestToken;
+  }
+
+  function retargetUnresolvedSelectionForEpoch() {
+    const recordId = selectionRecordId(selection);
+    if (!recordId || selection.kind === "ready") return;
+    selection = {
+      kind: "loading",
+      recordId,
+      requestToken: selectionRequestToken,
+      epoch: projectionEpoch
+    };
+  }
+
+  function beginProjection() {
+    projectionEpoch += 1;
+    nextSelectionRequest();
+    lastSequence = 0;
+    streamReady = false;
+    liveRecords = new Map();
+    retargetUnresolvedSelectionForEpoch();
+    if (!paused) {
+      displayRecords = liveRecords;
+      displayEpoch = projectionEpoch;
+      selection = markSelectionDetached(selection, displayRecords);
+    }
+  }
+
+  function beginResetProjection() {
+    projectionEpoch += 1;
+    nextSelectionRequest();
+    streamReady = false;
+    retargetUnresolvedSelectionForEpoch();
+  }
+
+  function publishLiveRecords() {
+    liveRecords = new Map(liveRecords);
+    if (paused) return;
+    displayRecords = liveRecords;
+    displayEpoch = projectionEpoch;
+    selection = markSelectionDetached(selection, displayRecords);
+  }
+
+  function handleEvent(event: StreamEvent, publish = true): boolean {
     const sequence = eventSequence(event);
-    if (!replay) {
-      if (event.kind === "snapshot") {
-        if (streamReady && sequence < lastSequence) return;
-        if (!streamReady) lastSequence = sequence;
-      } else if (event.kind === "reset") {
-        lastSequence = sequence;
-      } else if (sequence <= lastSequence) {
-        return;
-      }
-    }
-    const currentSelectionId = selectionRecordId(selection);
-    const previousSelected = currentSelectionId
-      ? records.get(currentSelectionId)
-      : undefined;
-    lastSequence = Math.max(lastSequence, sequence);
+    if (!shouldAcceptEventSequence(lastSequence, streamReady, event)) return false;
+    lastSequence = sequence;
+
     if (event.kind === "reset") {
-      projectionEpoch += 1;
-      nextSelectionRequest();
-      pending = [];
-      droppedPending = false;
-      streamReady = false;
+      beginResetProjection();
       resetTableViewport();
       recoveryNotice = `stream reset: ${event.reason.replaceAll("_", " ")}`;
       showNotice("stream reset; snapshot reloaded", false);
       void refreshRuntime();
     }
-    const result = applyEvent(records, event, paused, pending);
-    if (result.droppedPending) droppedPending = true;
-    if (publish) {
-      pending = [...pending];
-      records = new Map(records);
+    const result = applyEvent(liveRecords, event);
+    if (paused && result.accepted) {
+      pausedUpdateCount = saturatingIncrement(pausedUpdateCount);
     }
+    if (publish && (result.changed || result.reset)) publishLiveRecords();
 
     if (event.kind === "snapshot") {
       streamReady = true;
       recoveryNotice = "";
       resetTableViewport();
       const recordId = selectionRecordId(selection);
-      const canonical = recordId ? records.get(recordId) : undefined;
-      if (recordId) {
+      const canonical = recordId ? liveRecords.get(recordId) : undefined;
+      if (!paused && recordId) {
         selection = reconcileSelection(
           selection,
           recordId,
           canonical,
           projectionEpoch,
-          records
+          displayRecords
         );
         if (!canonical || (selection.kind === "ready" && selection.detached)) {
           void loadSelectedById(recordId, false, nextSelectionRequest());
         }
-      } else if (records.size) {
-        const newest = [...records.values()].reduce((current, candidate) =>
+      } else if (!paused && !recordId && liveRecords.size) {
+        const newest = [...liveRecords.values()].reduce((current, candidate) =>
           candidate.record.started_at_unix_ms > current.record.started_at_unix_ms ? candidate : current
         );
         selectVersioned(newest, false, projectionEpoch, nextSelectionRequest());
       }
     }
-    if (event.kind === "record_upsert") {
+    if (!paused && event.kind === "record_upsert" && result.changed) {
+      const canonical = liveRecords.get(event.record_id);
       const recordId = selectionRecordId(selection);
-      const canonical = records.get(event.record_id);
       if (event.record_id === recordId && canonical) {
         selection = reconcileSelection(
           selection,
           recordId,
           canonical,
           projectionEpoch,
-          records
+          displayRecords
         );
       } else if (!recordId && canonical) {
         selectVersioned(canonical, true, projectionEpoch, nextSelectionRequest());
       }
     }
-    if (
-      event.kind !== "reset" &&
-      currentSelectionId &&
-      !records.has(currentSelectionId) &&
-      previousSelected
-    ) {
-      selection = reconcileSelection(
-        selection,
-        currentSelectionId,
-        previousSelected,
-        projectionEpoch,
-        records
-      );
-    }
-    selection = markSelectionDetached(selection, records);
+    if (!paused && result.changed) selection = markSelectionDetached(selection, displayRecords);
     if (event.kind !== "reset") {
       streamReady = true;
       malformedStream = false;
     }
+    return result.accepted;
   }
 
   function dispatchEvent(event: StreamEvent) {
-    if (event.kind === "record_upsert" && event.phase === "live" && !paused) {
+    if (event.kind === "record_upsert" && event.phase === "live") {
+      if (shouldFlushCoalesced(queuedLiveEvents, event.record_id)) flushLiveEvents();
+      const changed = handleEvent(event, false);
+      if (!changed) return;
       const current = queuedLiveEvents.get(event.record_id);
       if (
         !current ||
@@ -616,18 +613,13 @@
   }
 
   function flushLiveEvents() {
+    clearLiveFlushSchedule();
     if (!queuedLiveEvents.size) return;
-    const events = [...queuedLiveEvents.values()].sort((left, right) => left.stream_seq - right.stream_seq);
     queuedLiveEvents.clear();
-    try {
-      for (const event of events) handleEvent(event, false, false);
-    } finally {
-      pending = [...pending];
-      records = new Map(records);
-    }
+    publishLiveRecords();
   }
 
-  function cancelLiveFlush() {
+  function clearLiveFlushSchedule() {
     if (liveFlushFrame !== undefined) {
       window.cancelAnimationFrame(liveFlushFrame);
       liveFlushFrame = undefined;
@@ -636,30 +628,44 @@
       window.clearTimeout(liveFlushTimer);
       liveFlushTimer = undefined;
     }
+  }
+
+  function cancelLiveFlush() {
+    clearLiveFlushSchedule();
     queuedLiveEvents.clear();
   }
 
   function togglePause() {
-    paused = !paused;
-    if (paused) {
-      // Move already queued live updates into the bounded paused buffer so a
-      // quick pause/resume cannot lose sequence state.
+    if (!paused) {
       flushLiveEvents();
-      cancelLiveFlush();
+      nextSelectionRequest();
+      paused = true;
+      frozenRecords = freezeRecords(liveRecords);
+      displayRecords = frozenRecords;
+      displayEpoch = projectionEpoch;
+      pausedUpdateCount = 0;
       return;
     }
-    if (!paused) {
-      const queued = pending.splice(0);
-      pending = [];
-      const needsResync = droppedPending || pausedNeedsResync;
-      droppedPending = false;
-      pausedNeedsResync = false;
-      cancelLiveFlush();
-      for (const event of queued) handleEvent(event, true);
-      if (needsResync) {
-        connect();
-        void refreshRuntime();
-      }
+
+    flushLiveEvents();
+    paused = false;
+    frozenRecords = undefined;
+    displayRecords = liveRecords;
+    displayEpoch = projectionEpoch;
+    const recordId = selectionRecordId(selection);
+    const canonical = recordId ? liveRecords.get(recordId) : undefined;
+    if (recordId) {
+      selection = reconcileSelection(
+        selection,
+        recordId,
+        canonical,
+        projectionEpoch,
+        displayRecords
+      );
+    }
+    pausedUpdateCount = 0;
+    if (recordId && (!canonical || (selection.kind === "ready" && selection.detached))) {
+      void loadSelectedById(recordId, false, nextSelectionRequest());
     }
   }
 
@@ -675,7 +681,9 @@
 
   function refreshInspector() {
     showNotice("refreshing inspector");
-    connect();
+    malformedStream = false;
+    recoveryNotice = "";
+    streamSupervisor?.manualRefresh();
     void refreshRuntime();
   }
 
@@ -783,15 +791,21 @@
     epoch: number,
     _requestToken: number
   ) {
-    selection = reconcileSelection(selection, item.record_id, item, epoch, records);
+    selection = reconcileSelection(
+      selection,
+      item.record_id,
+      item,
+      epoch,
+      displayRecords
+    );
     expandedAttempts = new Set();
     if (updateHash) history.replaceState(null, "", `#${encodeURIComponent(item.record_id)}`);
   }
 
   function selectDisplayed(recordId: string) {
     const requestToken = nextSelectionRequest();
-    const item = records.get(recordId);
-    if (item) selectVersioned(item, true, projectionEpoch, requestToken);
+    const item = displayRecords.get(recordId);
+    if (item) selectVersioned(item, true, displayEpoch, requestToken);
   }
 
   async function handleHashChange() {
@@ -811,7 +825,9 @@
   ) {
     if (!recordId) return;
     const prior = selection;
-    if (prior.kind !== "ready" || prior.item.record_id !== recordId) {
+    const priorItem =
+      prior.kind === "ready" && prior.item.record_id === recordId ? prior.item : undefined;
+    if (!priorItem) {
       selection = {
         kind: "loading",
         recordId,
@@ -822,11 +838,12 @@
     }
     if (updateHash) history.replaceState(null, "", `#${encodeURIComponent(recordId)}`);
 
-    const displayed = records.get(recordId);
+    const displayed = displayRecords.get(recordId);
     if (displayed) {
-      selectVersioned(displayed, false, projectionEpoch, requestToken);
+      selectVersioned(displayed, false, displayEpoch, requestToken);
       if (selection.kind !== "ready" || !selection.detached) return;
     }
+    if (paused) return;
 
     const requestEpoch = projectionEpoch;
     try {
@@ -835,23 +852,8 @@
         { cache: "no-store" }
       );
       if (!response.ok) throw new Error(`record ${recordId} is not retained`);
-      const value = await response.json();
-      if (!value || typeof value !== "object") {
-        throw new Error(`record ${recordId} has an invalid shape`);
-      }
-      const candidate = value as Record<string, unknown>;
-      const normalizedRecord = normalizeInspectorRecord(candidate.record);
-      const fetched = {
-        record_id: candidate.record_id,
-        revision: candidate.revision,
-        record: normalizedRecord
-      };
-      if (
-        fetched.record_id !== recordId ||
-        !isSafeInteger(fetched.revision) ||
-        fetched.revision === 0 ||
-        !isInspectorRecord(fetched.record)
-      ) {
+      const fetched = decodeVersionedRecordInline(await response.json());
+      if (!fetched || fetched.record_id !== recordId) {
         throw new Error(`record ${recordId} has an invalid shape`);
       }
       if (
@@ -861,7 +863,8 @@
           requestEpoch,
           projectionEpoch,
           recordId,
-          selection
+          selection,
+          paused
         )
       ) {
         return;
@@ -869,16 +872,16 @@
       selection = reconcileSelection(
         selection,
         recordId,
-        fetched as VersionedRecord,
+        fetched,
         requestEpoch,
-        records
+        displayRecords
       );
       selection = reconcileSelection(
         selection,
         recordId,
-        records.get(recordId),
+        liveRecords.get(recordId),
         projectionEpoch,
-        records
+        displayRecords
       );
     } catch (error) {
       if (
@@ -888,14 +891,15 @@
           requestEpoch,
           projectionEpoch,
           recordId,
-          selection
+          selection,
+          paused
         )
       ) {
         return;
       }
       const message = error instanceof Error ? error.message : "record lookup failed";
       if (selection.kind === "ready" && selection.item.record_id === recordId) {
-        selection = markSelectionDetached(selection, records);
+        selection = markSelectionDetached(selection, displayRecords);
         showNotice(message, false);
       } else {
         selection = { kind: "error", recordId, message, epoch: projectionEpoch };
@@ -1102,7 +1106,7 @@
       <h1>onair inspector</h1>
       <p class:offline={!connected || recovering} class:warning={malformedStream} aria-live="polite">
         <span class:online={connected && !recovering} class="status-dot"></span>
-        {recovering ? "recovering" : malformedStream ? "stream warning" : connected ? "connected" : "reconnecting"}
+        {malformedStream ? "stream warning" : connectionLabel}
       </p>
     </div>
     <div class="actions">
@@ -1114,7 +1118,7 @@
         type="button"
         class="pause-action"
         class:active={paused}
-        aria-label={paused ? "Resume live updates" : "Pause live updates"}
+        aria-label={paused ? "Resume table updates" : "Pause table updates"}
         aria-pressed={paused}
         on:click={togglePause}
       >{paused ? "resume" : "pause"}</button>
@@ -1124,17 +1128,17 @@
   </header>
 
   <section class="status-strip" aria-label="inspector status">
-    <span><strong>{records.size.toLocaleString()}</strong> loaded</span>
+    <span><strong>{displayRecords.size.toLocaleString()}</strong> loaded</span>
     <span><strong>{retainedCount === undefined ? "—" : retainedCount.toLocaleString()}</strong> retained</span>
-    <span><strong>{pending.length.toLocaleString()}</strong> paused pending</span>
-    <span class:status-live={connected && !recovering} class:status-offline={!connected || recovering}>{recovering ? "recovering" : connected ? "live" : "reconnecting"}</span>
+    {#if paused}<span><strong>frozen</strong> table</span>{/if}
+    {#if paused && pausedUpdateCount > 0}<span><strong>{pausedUpdateCount.toLocaleString()}</strong> live updates</span>{/if}
+    <span class:status-live={connected} class:status-offline={!connected}>{connectionState}</span>
     {#if recoveryNotice}<span class="status-recovery" role="status">{recoveryNotice}</span>{/if}
   </section>
 
-  {#if actionNotice || droppedPending}
+  {#if actionNotice}
     <div class="notices" aria-live="polite">
-      {#if actionNotice}<div class="notice notice-info">{actionNotice}</div>{/if}
-      {#if droppedPending}<div class="notice notice-warning">pending buffer capped at {PENDING_LIMIT}; oldest updates dropped</div>{/if}
+      <div class="notice notice-info">{actionNotice}</div>
     </div>
   {/if}
 
