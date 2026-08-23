@@ -5,9 +5,10 @@
   "type": "module",
   "packageManager": "pnpm@11.20.0",
   "scripts": {
-    "build": "vite build && pnpm run check:artifact",
+    "build": "vite build && node scripts/check-artifact.mjs",
     "check:artifact": "node scripts/check-artifact.mjs",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run --environment node"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
@@ -15,6 +16,7 @@
     "svelte": "^5.38.7",
     "svelte-check": "^4.3.1",
     "typescript": "^5.9.2",
-    "vite": "^7.1.7"
+    "vite": "^7.1.7",
+    "vitest": "^4.0.0"
   }
 }

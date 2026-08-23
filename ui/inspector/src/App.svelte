@@ -9,6 +9,8 @@
     PENDING_LIMIT,
     ROW_HEIGHT
   } from "./lib/store";
+  import { StreamSupervisor } from "./lib/stream";
+  import type { StreamEventSource } from "./lib/stream";
   import type {
     ColumnKey,
     InspectorAttempt,
@@ -67,6 +69,7 @@
   let sortDescending = true;
   let paused = false;
   let connected = false;
+  let recovering = false;
   let malformedStream = false;
   let droppedPending = false;
   let pausedNeedsResync = false;
@@ -81,7 +84,7 @@
   let viewportHeight = 480;
   let viewportLeft = 0;
   let tableWrap: HTMLElement | undefined;
-  let source: EventSource | undefined;
+  let streamSupervisor: StreamSupervisor | undefined;
   let resizeStart: { key: ColumnKey; x: number; width: number; pointerId: number; element: HTMLElement } | undefined;
   let queuedLiveEvents = new Map<string, Extract<StreamEvent, { kind: "record_upsert" }>>();
   let liveFlushFrame: number | undefined;
@@ -136,7 +139,7 @@
       window.removeEventListener("hashchange", handleHashChange);
       window.clearInterval(operatorTimer);
       window.clearTimeout(noticeTimer);
-      source?.close();
+      streamSupervisor?.dispose();
       stopResize();
       cancelLiveFlush();
       for (const url of downloadUrls) URL.revokeObjectURL(url);
@@ -183,7 +186,6 @@
 
   function connect(resetResume = false) {
     cancelLiveFlush();
-    source?.close();
     connected = false;
     streamReady = false;
     if (resetResume) {
@@ -194,51 +196,57 @@
         // Session persistence is optional.
       }
     }
-    const resume = lastSequence > 0 ? `&last_event_id=${lastSequence}` : "";
-    const nextSource = new EventSource(
-      `/_onair/inspector-next/events?snapshot_limit=${CLIENT_LIMIT}${resume}`
-    );
-    source = nextSource;
-    nextSource.onopen = () => {
-      if (source !== nextSource) return;
-      connected = true;
-    };
-    nextSource.onerror = () => {
-      if (source !== nextSource) return;
-      connected = false;
-    };
-    for (const name of ["snapshot", "record_upsert", "record_removed", "reset", "keepalive"]) {
-      nextSource.addEventListener(name, (message) => {
-        if (source !== nextSource) return;
-        const data = (message as MessageEvent).data;
-        if (name === "keepalive" && data.trim() === "keepalive") {
-          // A named transport heartbeat can carry plain text instead of an
-          // inspector protocol envelope.
-          connected = true;
-          malformedStream = false;
-          return;
-        }
-
-        let event: StreamEvent;
-        try {
-          const parsed: unknown = normalizeStreamEvent(JSON.parse(data));
-          if (!isStreamEvent(parsed)) throw new Error("invalid event envelope");
-          event = parsed;
-        } catch {
+    if (!streamSupervisor) {
+      streamSupervisor = new StreamSupervisor({
+        createSource: () => {
+          const resume = lastSequence > 0 ? `&last_event_id=${lastSequence}` : "";
+          return new EventSource(
+            `/_onair/inspector-next/events?snapshot_limit=${CLIENT_LIMIT}${resume}`
+          ) as unknown as StreamEventSource;
+        },
+        decode: decodeStreamMessage,
+        apply: dispatchEvent,
+        onSourceStart: () => {
+          cancelLiveFlush();
+          connected = false;
+          streamReady = false;
+        },
+        onStateChange: (state) => {
+          connected = state === "live";
+          recovering = state === "recovering";
+        },
+        onMalformed: () => {
+          console.warn("inspector stream warning: malformed event ignored");
           malformedStream = true;
           showNotice("stream warning: malformed event ignored", false);
-          // Leave EventSource open so the browser can perform its normal
-          // Last-Event-ID reconnect if the transport is also unhealthy.
-          return;
-        }
-
-        try {
-          dispatchEvent(event);
-        } catch {
+        },
+        onApplied: () => {
+          malformedStream = false;
+        },
+        onRecovering: () => {
+          recoveryNotice = "stream recovering";
           showNotice("stream recovery: event processing failed", false);
-          nextSource.close();
+        },
+        onRecovered: () => {
+          recoveryNotice = "";
+        },
+        onRefreshRequired: () => {
+          recoveryNotice = "stream error: refresh required";
+          showNotice("stream error: refresh required", true);
         }
       });
+      streamSupervisor.start();
+    } else {
+      streamSupervisor.manualRefresh();
+    }
+  }
+
+  function decodeStreamMessage(data: string): StreamEvent | undefined {
+    try {
+      const parsed: unknown = normalizeStreamEvent(JSON.parse(data));
+      return isStreamEvent(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -1014,9 +1022,9 @@
     <div class="title-group">
       <div class="eyebrow">operator surface · v2</div>
       <h1>onair inspector</h1>
-      <p class:offline={!connected} class:warning={malformedStream} aria-live="polite">
-        <span class:online={connected} class="status-dot"></span>
-        {malformedStream ? "stream warning" : connected ? "connected" : "reconnecting"}
+      <p class:offline={!connected || recovering} class:warning={malformedStream} aria-live="polite">
+        <span class:online={connected && !recovering} class="status-dot"></span>
+        {recovering ? "recovering" : malformedStream ? "stream warning" : connected ? "connected" : "reconnecting"}
       </p>
     </div>
     <div class="actions">
@@ -1041,7 +1049,7 @@
     <span><strong>{records.size.toLocaleString()}</strong> loaded</span>
     <span><strong>{retainedCount === undefined ? "—" : retainedCount.toLocaleString()}</strong> retained</span>
     <span><strong>{pending.length.toLocaleString()}</strong> paused pending</span>
-    <span class:status-live={connected} class:status-offline={!connected}>{connected ? "live" : "reconnecting"}</span>
+    <span class:status-live={connected && !recovering} class:status-offline={!connected || recovering}>{recovering ? "recovering" : connected ? "live" : "reconnecting"}</span>
     {#if recoveryNotice}<span class="status-recovery" role="status">{recoveryNotice}</span>{/if}
   </section>
 

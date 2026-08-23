@@ -41,6 +41,7 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm run check
+          pnpm run test
           pnpm run build
 
       - uses: Swatinem/rust-cache@v2
