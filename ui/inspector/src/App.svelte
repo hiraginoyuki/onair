@@ -17,6 +17,7 @@
   import type { RecordMap } from "./lib/records";
   import { StreamSupervisor } from "./lib/stream";
   import type { ConnectionState, StreamEventSource } from "./lib/stream";
+  import { decodeStreamEvent, decodeVersionedRecord } from "./lib/wire";
   import type {
     ColumnKey,
     InspectorAttempt,
@@ -149,7 +150,7 @@
         new EventSource(
           `/_onair/inspector-next/events?snapshot_limit=${CLIENT_LIMIT}`
         ) as unknown as StreamEventSource,
-      decode: decodeStreamMessage,
+      decode: decodeStreamEvent,
       apply: dispatchEvent,
       onSourceStart: () => {
         cancelLiveFlush();
@@ -224,242 +225,6 @@
       // Width persistence is optional and must not interrupt inspection.
     }
   }
-
-  function decodeStreamMessage(data: string): StreamEvent | undefined {
-    try {
-      const parsed: unknown = normalizeStreamEvent(JSON.parse(data));
-      return isStreamEvent(parsed) ? parsed : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  function normalizeStreamEvent(event: unknown): unknown {
-    if (!event || typeof event !== "object") return event;
-    const candidate = event as Record<string, unknown>;
-    if (candidate.kind === "snapshot" && Array.isArray(candidate.records)) {
-      return {
-        ...candidate,
-        records: candidate.records.map((entry) => {
-          if (!entry || typeof entry !== "object") return entry;
-          const snapshot = entry as Record<string, unknown>;
-          return { ...snapshot, record: normalizeInspectorRecord(snapshot.record) };
-        })
-      };
-    }
-    if (candidate.kind === "record_upsert") {
-      return { ...candidate, record: normalizeInspectorRecord(candidate.record) };
-    }
-    return event;
-  }
-
-  function normalizeInspectorRecord(record: unknown): unknown {
-    if (!record || typeof record !== "object") return record;
-    const candidate = record as Record<string, unknown>;
-    const timeline =
-      candidate.timeline && typeof candidate.timeline === "object"
-        ? Object.fromEntries(
-            Object.entries(candidate.timeline as Record<string, unknown>).map(([key, value]) => [
-              key,
-              value ?? undefined
-            ])
-          )
-        : candidate.timeline;
-    return {
-      ...candidate,
-      backend_attempts:
-        candidate.backend_attempts === undefined
-          ? []
-          : candidate.backend_attempts,
-      retried_attempts:
-        candidate.retried_attempts === undefined
-          ? []
-          : candidate.retried_attempts,
-      exposed_backend_error:
-        candidate.exposed_backend_error === undefined ? false : candidate.exposed_backend_error,
-      timeline
-    };
-  }
-
-  function isStreamEvent(event: unknown): event is StreamEvent {
-    if (!event || typeof event !== "object") return false;
-    const candidate = event as { kind?: unknown; stream_seq?: unknown };
-    if (
-      typeof candidate.kind !== "string" ||
-      !isSafeInteger(candidate.stream_seq) ||
-      !["snapshot", "record_upsert", "record_removed", "reset"].includes(candidate.kind)
-    ) {
-      return false;
-    }
-    if (candidate.kind === "snapshot") {
-      const records = (event as { records?: unknown }).records;
-      return (
-        Array.isArray(records) &&
-        records.every((entry) => {
-          if (!entry || typeof entry !== "object") return false;
-          const snapshot = entry as { record_id?: unknown; revision?: unknown; record?: unknown };
-          return (
-            typeof snapshot.record_id === "string" &&
-            isSafeInteger(snapshot.revision) &&
-            isInspectorRecord(snapshot.record) &&
-            snapshot.record.record_id === snapshot.record_id
-          );
-        })
-      );
-    }
-    if (candidate.kind === "record_upsert") {
-      const upsert = event as {
-        record_id?: unknown;
-        revision?: unknown;
-        phase?: unknown;
-        record?: unknown;
-      };
-      return (
-        typeof upsert.record_id === "string" &&
-        isSafeInteger(upsert.revision) &&
-        ["initial", "live", "terminal"].includes(upsert.phase as string) &&
-        isInspectorRecord(upsert.record) &&
-        upsert.record.record_id === upsert.record_id
-      );
-    }
-    if (candidate.kind === "record_removed") {
-      const removed = event as { record_id?: unknown; revision?: unknown };
-      return (
-        typeof removed.record_id === "string" &&
-        isSafeInteger(removed.revision) &&
-        ["retention_evicted", "explicit"].includes((event as { reason?: unknown }).reason as string)
-      );
-    }
-    if (candidate.kind === "reset") {
-      return ["resume_unavailable", "lagged", "server_restarted"].includes(
-        (event as { reason?: unknown }).reason as string
-      );
-    }
-    return false;
-  }
-
-  function isSafeInteger(value: unknown): value is number {
-    return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-  }
-
-  function isOptionalString(value: unknown): boolean {
-    return value === undefined || typeof value === "string";
-  }
-
-  function isOptionalSafeInteger(value: unknown): boolean {
-    return value === undefined || isSafeInteger(value);
-  }
-
-  function isInspectorAttempt(attempt: unknown): attempt is InspectorAttempt {
-    if (!attempt || typeof attempt !== "object") return false;
-    const candidate = attempt as Partial<InspectorAttempt>;
-    return Boolean(
-      isSafeInteger(candidate.attempt) &&
-        typeof candidate.backend === "string" &&
-        typeof candidate.backend_target === "string" &&
-        isSafeInteger(candidate.status) &&
-        typeof candidate.outcome === "string" &&
-        isSafeInteger(candidate.started_us) &&
-        isSafeInteger(candidate.ended_us) &&
-        isSafeInteger(candidate.elapsed_us) &&
-        isSafeInteger(candidate.elapsed_ms) &&
-        isOptionalString(candidate.backend_remote_addr) &&
-        isOptionalString(candidate.debug_capture_id) &&
-        isOptionalString(candidate.error_kind) &&
-        isOptionalSafeInteger(candidate.upstream_status) &&
-        isOptionalSafeInteger(candidate.request_rewritten_us) &&
-        isOptionalSafeInteger(candidate.debug_capture_done_us) &&
-        isOptionalSafeInteger(candidate.backend_forward_start_us) &&
-        isOptionalSafeInteger(candidate.backend_headers_received_us) &&
-        isOptionalSafeInteger(candidate.backend_body_first_chunk_us) &&
-        isOptionalSafeInteger(candidate.backend_body_complete_us) &&
-        isOptionalSafeInteger(candidate.stream_complete_us)
-    );
-  }
-
-  function isInspectorRecord(record: unknown): record is InspectorRecord {
-    if (!record || typeof record !== "object") return false;
-    const candidate = record as Partial<InspectorRecord>;
-    const timeline = candidate.timeline;
-    const outcome = candidate.outcome;
-    return Boolean(
-      typeof candidate.record_id === "string" &&
-        candidate.record_id.length > 0 &&
-        isSafeInteger(candidate.started_at_unix_ms) &&
-        typeof candidate.method === "string" &&
-        typeof candidate.path === "string" &&
-        typeof candidate.route === "string" &&
-        typeof candidate.identity === "string" &&
-        typeof candidate.requested_model === "string" &&
-        typeof candidate.public_model === "string" &&
-        typeof candidate.backend_model === "string" &&
-        typeof candidate.backend === "string" &&
-        typeof candidate.backend_target === "string" &&
-        typeof candidate.stream === "boolean" &&
-        typeof candidate.peer_addr === "string" &&
-        typeof candidate.effective_client_addr === "string" &&
-        typeof candidate.trusted_proxy_addr === "string" &&
-        typeof candidate.forwarded_for === "string" &&
-        typeof candidate.user_agent === "string" &&
-        isSafeInteger(candidate.request_body_bytes) &&
-        typeof candidate.exposed_backend_error === "boolean" &&
-        isSafeInteger(candidate.status) &&
-        Array.isArray(candidate.backend_attempts) &&
-        candidate.backend_attempts.every(isInspectorAttempt) &&
-        Array.isArray(candidate.retried_attempts) &&
-        candidate.retried_attempts.every(isInspectorAttempt) &&
-        isSafeInteger(candidate.input_tokens) &&
-        isSafeInteger(candidate.cached_input_tokens) &&
-        isSafeInteger(candidate.output_tokens) &&
-        isSafeInteger(candidate.completed_at_unix_ms) &&
-        isOptionalString(candidate.client_request_id) &&
-        isOptionalString(candidate.query) &&
-        isOptionalString(candidate.backend_remote_addr) &&
-        isOptionalString(candidate.debug_capture_id) &&
-        isOptionalString(candidate.error_kind) &&
-        isOptionalSafeInteger(candidate.response_body_bytes) &&
-        timeline &&
-        isSafeInteger(timeline.started_unix_ms) &&
-        isSafeInteger(timeline.total_us) &&
-        isSafeInteger(timeline.proxy_entry_us) &&
-        isOptionalSafeInteger(timeline.auth_done_us) &&
-        isOptionalSafeInteger(timeline.request_inspected_us) &&
-        isOptionalSafeInteger(timeline.route_selected_us) &&
-        isOptionalSafeInteger(timeline.request_rewritten_us) &&
-        isOptionalSafeInteger(timeline.debug_capture_done_us) &&
-        isOptionalSafeInteger(timeline.backend_forward_start_us) &&
-        isOptionalSafeInteger(timeline.backend_headers_received_us) &&
-        isOptionalSafeInteger(timeline.backend_body_first_chunk_us) &&
-        isOptionalSafeInteger(timeline.backend_body_complete_us) &&
-        isOptionalSafeInteger(timeline.response_rewritten_us) &&
-        isOptionalSafeInteger(timeline.client_response_ready_us) &&
-        isOptionalSafeInteger(timeline.stream_complete_us) &&
-        outcome &&
-        typeof outcome.kind === "string" &&
-        isOptionalString(outcome.stage)
-    );
-  }
-
-  function decodeVersionedRecordInline(input: unknown): VersionedRecord | undefined {
-    if (!input || typeof input !== "object") return undefined;
-    const candidate = input as Record<string, unknown>;
-    const record = normalizeInspectorRecord(candidate.record);
-    if (
-      typeof candidate.record_id !== "string" ||
-      !isSafeInteger(candidate.revision) ||
-      candidate.revision === 0 ||
-      !isInspectorRecord(record) ||
-      record.record_id !== candidate.record_id
-    ) {
-      return undefined;
-    }
-    return {
-      record_id: candidate.record_id,
-      revision: candidate.revision,
-      record
-    };
-  }
-
 
   function nextSelectionRequest(): number {
     selectionRequestToken += 1;
@@ -852,7 +617,7 @@
         { cache: "no-store" }
       );
       if (!response.ok) throw new Error(`record ${recordId} is not retained`);
-      const fetched = decodeVersionedRecordInline(await response.json());
+      const fetched = decodeVersionedRecord(await response.json());
       if (!fetched || fetched.record_id !== recordId) {
         throw new Error(`record ${recordId} has an invalid shape`);
       }

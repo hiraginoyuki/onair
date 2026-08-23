@@ -1495,6 +1495,15 @@ async fn inspector_next_route_keeps_the_local_only_gate() {
     );
     let app = router(state);
 
+    let missing = app
+        .clone()
+        .oneshot(inspector_get(
+            "/_onair/inspector-next/requests/not-retained",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
     for uri in [
         "/_onair/inspector-next",
         "/_onair/inspector-next/events",
@@ -1528,7 +1537,9 @@ async fn inspector_next_stream_is_snapshot_first_and_uses_only_header_replay() {
 
     for uri in [
         "/_onair/inspector-next/events?snapshot_limit=16",
+        // An explicit refresh constructs a cursor-free source again.
         "/_onair/inspector-next/events?snapshot_limit=16",
+        // Legacy page cursors are ignored rather than rejected.
         "/_onair/inspector-next/events?snapshot_limit=16&last_event_id=0",
     ] {
         let response = app.clone().oneshot(inspector_get(uri)).await.unwrap();
@@ -2519,16 +2530,22 @@ async fn inspector_is_local_only_by_default() {
             ..InspectorConfig::default()
         },
     );
+    state
+        .inspector
+        .record(true, 16, synthetic_inspector_record("operator-gate"));
     let app = router(state);
 
-    let response = app
-        .oneshot(inspector_get_with_peer(
-            "/_onair/inspector/requests",
-            "198.51.100.20:55432",
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    for uri in [
+        "/_onair/inspector/requests/operator-gate",
+        "/_onair/inspector-next/requests/operator-gate",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(inspector_get_with_peer(uri, "198.51.100.20:55432"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
 }
 
 #[tokio::test]
@@ -2552,23 +2569,32 @@ async fn inspector_rejects_remote_forwarded_clients_by_default() {
         },
         HealthConfig::default(),
     );
+    state
+        .inspector
+        .record(true, 16, synthetic_inspector_record("operator-gate"));
     let app = router(state);
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/_onair/inspector/requests")
-                .header(FORWARDED, "for=198.51.100.20")
-                .extension(ConnectInfo(
-                    "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    for uri in [
+        "/_onair/inspector/requests/operator-gate",
+        "/_onair/inspector-next/requests/operator-gate",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .header(FORWARDED, "for=198.51.100.20")
+                    .extension(ConnectInfo(
+                        "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
 }
 
 #[tokio::test]
@@ -2584,26 +2610,29 @@ async fn inspector_allows_matching_remote_client_cidr() {
             ..InspectorConfig::default()
         },
     );
+    state
+        .inspector
+        .record(true, 16, synthetic_inspector_record("operator-gate"));
     let app = router(state);
 
-    let allowed = app
-        .clone()
-        .oneshot(inspector_get_with_peer(
-            "/_onair/inspector/requests",
-            "100.64.12.42:55432",
-        ))
-        .await
-        .unwrap();
-    assert_eq!(allowed.status(), StatusCode::OK);
+    for uri in [
+        "/_onair/inspector/requests/operator-gate",
+        "/_onair/inspector-next/requests/operator-gate",
+    ] {
+        let allowed = app
+            .clone()
+            .oneshot(inspector_get_with_peer(uri, "100.64.12.42:55432"))
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK, "{uri}");
 
-    let denied = app
-        .oneshot(inspector_get_with_peer(
-            "/_onair/inspector/requests",
-            "100.64.13.42:55432",
-        ))
-        .await
-        .unwrap();
-    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+        let denied = app
+            .clone()
+            .oneshot(inspector_get_with_peer(uri, "100.64.13.42:55432"))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
 }
 
 #[tokio::test]
@@ -2628,42 +2657,51 @@ async fn inspector_cidr_uses_forwarded_client_only_from_trusted_proxy() {
         },
         HealthConfig::default(),
     );
+    state
+        .inspector
+        .record(true, 16, synthetic_inspector_record("operator-gate"));
     let app = router(state);
 
-    let forwarded_allowed = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/_onair/inspector/requests")
-                .header(FORWARDED, "for=100.64.12.42")
-                .extension(ConnectInfo(
-                    "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(forwarded_allowed.status(), StatusCode::OK);
+    for uri in [
+        "/_onair/inspector/requests/operator-gate",
+        "/_onair/inspector-next/requests/operator-gate",
+    ] {
+        let forwarded_allowed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .header(FORWARDED, "for=100.64.12.42")
+                    .extension(ConnectInfo(
+                        "127.0.0.1:55432".parse::<std::net::SocketAddr>().unwrap(),
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forwarded_allowed.status(), StatusCode::OK, "{uri}");
 
-    let spoofed = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/_onair/inspector/requests")
-                .header(FORWARDED, "for=100.64.12.42")
-                .extension(ConnectInfo(
-                    "198.51.100.20:55432"
-                        .parse::<std::net::SocketAddr>()
-                        .unwrap(),
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(spoofed.status(), StatusCode::NOT_FOUND);
+        let spoofed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .header(FORWARDED, "for=100.64.12.42")
+                    .extension(ConnectInfo(
+                        "198.51.100.20:55432"
+                            .parse::<std::net::SocketAddr>()
+                            .unwrap(),
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(spoofed.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ import {
   type TimerScheduler
 } from "./stream";
 import type { StreamEvent } from "./types";
+import { decodeStreamEvent } from "./wire";
 
 class FakeSource implements StreamEventSource {
   onopen: ((event: unknown) => void) | null = null;
@@ -86,14 +87,6 @@ function reset(streamSeq = 1): StreamEvent {
   return { kind: "reset", stream_seq: streamSeq, reason: "lagged" };
 }
 
-function decode(data: string): StreamEvent | undefined {
-  try {
-    return JSON.parse(data) as StreamEvent;
-  } catch {
-    return undefined;
-  }
-}
-
 function makeSupervisor(
   apply: (event: StreamEvent) => void = () => undefined,
   overrides: Partial<ConstructorParameters<typeof StreamSupervisor>[0]> = {}
@@ -108,7 +101,7 @@ function makeSupervisor(
         sources.push(source);
         return source;
       },
-      decode,
+      decode: decodeStreamEvent,
       apply,
       onStateChange: (state) => states.push(state),
       ...overrides

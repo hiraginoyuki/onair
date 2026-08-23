@@ -40,6 +40,7 @@ export function syntheticRecord(
     ...overrides
   };
 }
+
 export function versionedRecord(
   recordId: string,
   revision: number,

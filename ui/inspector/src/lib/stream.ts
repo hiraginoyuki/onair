@@ -1,4 +1,5 @@
 import type { StreamEvent } from "./types";
+import type { DecodeResult } from "./wire";
 
 export const RECOVERY_DELAY_MS = 250;
 export const PROTOCOL_EVENT_NAMES = ["snapshot", "record_upsert", "record_removed", "reset"] as const;
@@ -26,7 +27,7 @@ export interface StreamEventSource {
 
 export type StreamSupervisorCallbacks = {
   createSource(): StreamEventSource;
-  decode(data: string): StreamEvent | undefined;
+  decode(data: string): DecodeResult;
   apply(event: StreamEvent): void;
   onSourceStart?(replacement: boolean): void;
   onStateChange?(state: ConnectionState): void;
@@ -42,7 +43,11 @@ const browserScheduler: TimerScheduler = {
   cancel: (handle) => globalThis.clearTimeout(handle)
 };
 
-/** Owns the EventSource lifecycle, but no record or rendering state. */
+/**
+ * Owns only the EventSource lifecycle. Record state and rendering remain with
+ * the page so a replacement source always re-enters through its authoritative
+ * snapshot path.
+ */
 export class StreamSupervisor {
   private activeSource: StreamEventSource | undefined;
   private activeSourceIsRecovery = false;
@@ -124,6 +129,8 @@ export class StreamSupervisor {
 
     nextSource.onopen = () => {
       if (!this.isCurrent(generation, nextSource)) return;
+      // Opening the transport is not enough to declare the projection live.
+      // Only a successfully processed snapshot does that.
       this.setState(
         this.activeSourceHasSnapshot
           ? "live"
@@ -134,6 +141,8 @@ export class StreamSupervisor {
     };
     nextSource.onerror = () => {
       if (!this.isCurrent(generation, nextSource)) return;
+      // Keep the same EventSource alive. The browser owns transport retries
+      // and carries Last-Event-ID on this same object.
       this.setState("reconnecting");
     };
 
@@ -141,26 +150,26 @@ export class StreamSupervisor {
       nextSource.addEventListener(name, (message) => {
         if (!this.isCurrent(generation, nextSource)) return;
 
-        let event: StreamEvent | undefined;
+        let decoded: DecodeResult;
         try {
-          event = this.callbacks.decode(message.data);
+          decoded = this.callbacks.decode(message.data);
         } catch {
-          event = undefined;
+          decoded = { ok: false, reason: "invalid_shape" };
         }
-        if (!event) {
+        if (!decoded.ok) {
           this.callbacks.onMalformed?.();
           return;
         }
 
         try {
-          this.callbacks.apply(event);
-          this.callbacks.onApplied?.(event);
+          this.callbacks.apply(decoded.event);
+          this.callbacks.onApplied?.(decoded.event);
         } catch {
           this.handleProcessingFailure(generation);
           return;
         }
 
-        if (event.kind === "snapshot") {
+        if (decoded.event.kind === "snapshot") {
           const recovered = this.activeSourceIsRecovery;
           this.activeSourceIsRecovery = false;
           this.activeSourceHasSnapshot = true;
