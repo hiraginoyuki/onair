@@ -36,7 +36,7 @@ const CLIENT_KEY: &str = "sk-test";
 const PUBLIC_MODEL: &str = "gpt-public";
 const BACKEND_MODEL: &str = "backend-private";
 
-async fn inspector_next_sse_events(response: Response<Body>, count: usize) -> Vec<(String, Value)> {
+async fn inspector_sse_events(response: Response<Body>, count: usize) -> Vec<(String, Value)> {
     let mut body = response.into_body();
     let mut buffer = String::new();
     let mut events = Vec::with_capacity(count);
@@ -1440,6 +1440,262 @@ async fn inspector_records_completed_requests_and_serves_details() {
 }
 
 #[tokio::test]
+async fn inspector_legacy_and_versioned_data_routes_share_retained_metadata() {
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            ..InspectorConfig::default()
+        },
+    );
+    for record_id in ["equivalence-oldest", "equivalence-newest"] {
+        state
+            .inspector
+            .record(true, 16, synthetic_inspector_record(record_id));
+    }
+    let app = router(state.clone());
+
+    // The legacy initial stream intentionally sends one bare record per
+    // `snapshot` event. V2 intentionally sends one snapshot envelope whose
+    // entries carry record IDs and revisions. Compare only after unwrapping
+    // those different public wire shapes.
+    let legacy = app
+        .clone()
+        .oneshot(inspector_get("/_onair/inspector/events?snapshot_limit=16"))
+        .await
+        .unwrap();
+    let legacy_events = inspector_sse_events(legacy, 2).await;
+    assert!(legacy_events.iter().all(|(name, _)| name == "snapshot"));
+    let legacy_records = legacy_events
+        .into_iter()
+        .map(|(_, record)| {
+            let record_id = record["record_id"]
+                .as_str()
+                .expect("legacy snapshot record has an ID")
+                .to_owned();
+            assert!(record.get("record").is_none());
+            (record_id, record)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let versioned_response = app
+        .clone()
+        .oneshot(inspector_get(
+            "/_onair/inspector-next/events?snapshot_limit=16",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(versioned_response.status(), StatusCode::OK);
+
+    // The response has already subscribed and captured its authoritative
+    // initial cut. This update must arrive afterward with a greater sequence
+    // and revision.
+    let mut updated = synthetic_inspector_record("equivalence-oldest");
+    updated.status = 204;
+    state.inspector.upsert(true, 16, updated);
+    let versioned_events = inspector_sse_events(versioned_response, 2).await;
+    assert_eq!(versioned_events[0].0, "snapshot");
+    assert_eq!(versioned_events[1].0, "record_upsert");
+
+    let snapshot = &versioned_events[0].1;
+    assert_eq!(snapshot["kind"], "snapshot");
+    let snapshot_sequence = snapshot["stream_seq"]
+        .as_u64()
+        .expect("v2 snapshot sequence is an integer");
+    assert!(snapshot_sequence > 0);
+    let versioned_records = snapshot["records"]
+        .as_array()
+        .expect("v2 snapshot records are an array")
+        .iter()
+        .map(|entry| {
+            assert_eq!(
+                entry
+                    .as_object()
+                    .expect("versioned snapshot entry is an object")
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["record", "record_id", "revision"])
+            );
+            let record_id = entry["record_id"]
+                .as_str()
+                .expect("versioned snapshot record has an ID")
+                .to_owned();
+            assert_eq!(entry["record"]["record_id"], record_id);
+            assert!(
+                entry["revision"]
+                    .as_u64()
+                    .is_some_and(|revision| revision > 0)
+            );
+            (record_id, entry["record"].clone())
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(versioned_records, legacy_records);
+
+    let upsert = &versioned_events[1].1;
+    assert_eq!(upsert["kind"], "record_upsert");
+    assert_eq!(upsert["record_id"], "equivalence-oldest");
+    assert_eq!(upsert["record"]["status"], 204);
+    assert!(
+        upsert["revision"]
+            .as_u64()
+            .is_some_and(|revision| revision > 1)
+    );
+    assert!(
+        upsert["stream_seq"]
+            .as_u64()
+            .is_some_and(|sequence| sequence > snapshot_sequence)
+    );
+
+    let legacy_detail = json_body(
+        app.clone()
+            .oneshot(inspector_get(
+                "/_onair/inspector/requests/equivalence-oldest",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let versioned_detail = json_body(
+        app.oneshot(inspector_get(
+            "/_onair/inspector-next/requests/equivalence-oldest",
+        ))
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(versioned_detail["record_id"], "equivalence-oldest");
+    assert!(
+        versioned_detail["revision"]
+            .as_u64()
+            .is_some_and(|revision| revision > 1)
+    );
+    assert_eq!(versioned_detail["record"], legacy_detail);
+}
+
+#[tokio::test]
+async fn inspector_legacy_and_versioned_routes_share_gates_and_safety_headers() {
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            allowed_client_cidrs: vec!["100.64.12.0/24".parse().unwrap()],
+            ..InspectorConfig::default()
+        },
+    );
+    state
+        .inspector
+        .record(true, 16, synthetic_inspector_record("gate-equivalence"));
+    let app = router(state);
+
+    for (label, legacy_uri, versioned_uri) in [
+        ("ui", "/_onair/inspector", "/_onair/inspector-next"),
+        (
+            "events",
+            "/_onair/inspector/events",
+            "/_onair/inspector-next/events",
+        ),
+        (
+            "detail",
+            "/_onair/inspector/requests/gate-equivalence",
+            "/_onair/inspector-next/requests/gate-equivalence",
+        ),
+    ] {
+        let local_legacy = app
+            .clone()
+            .oneshot(inspector_get(legacy_uri))
+            .await
+            .unwrap();
+        let local_versioned = app
+            .clone()
+            .oneshot(inspector_get(versioned_uri))
+            .await
+            .unwrap();
+        assert_eq!(local_legacy.status(), StatusCode::OK, "local {label}");
+        assert_eq!(local_versioned.status(), StatusCode::OK, "local {label}");
+        assert_matching_inspector_safety_headers(&local_legacy, &local_versioned, label);
+
+        let cidr_legacy = app
+            .clone()
+            .oneshot(inspector_get_with_peer(legacy_uri, "100.64.12.42:55432"))
+            .await
+            .unwrap();
+        let cidr_versioned = app
+            .clone()
+            .oneshot(inspector_get_with_peer(versioned_uri, "100.64.12.42:55432"))
+            .await
+            .unwrap();
+        assert_eq!(cidr_legacy.status(), StatusCode::OK, "CIDR {label}");
+        assert_eq!(cidr_versioned.status(), StatusCode::OK, "CIDR {label}");
+        assert_matching_inspector_safety_headers(&cidr_legacy, &cidr_versioned, label);
+
+        let denied_legacy = app
+            .clone()
+            .oneshot(inspector_get_with_peer(legacy_uri, "100.64.13.42:55432"))
+            .await
+            .unwrap();
+        let denied_versioned = app
+            .clone()
+            .oneshot(inspector_get_with_peer(versioned_uri, "100.64.13.42:55432"))
+            .await
+            .unwrap();
+        assert_eq!(
+            denied_legacy.status(),
+            StatusCode::NOT_FOUND,
+            "denied {label}"
+        );
+        assert_eq!(
+            denied_versioned.status(),
+            StatusCode::NOT_FOUND,
+            "denied {label}"
+        );
+        assert_matching_inspector_safety_headers(&denied_legacy, &denied_versioned, label);
+
+        if label == "ui" {
+            assert_eq!(
+                local_legacy.headers().get("content-security-policy"),
+                local_versioned.headers().get("content-security-policy")
+            );
+            assert_eq!(
+                cidr_legacy.headers().get("content-security-policy"),
+                cidr_versioned.headers().get("content-security-policy")
+            );
+        }
+    }
+}
+
+fn assert_matching_inspector_safety_headers(
+    legacy: &Response<Body>,
+    versioned: &Response<Body>,
+    label: &str,
+) {
+    for (name, expected) in [
+        ("cache-control", "no-store"),
+        ("x-content-type-options", "nosniff"),
+    ] {
+        assert_eq!(
+            legacy.headers().get(name),
+            versioned.headers().get(name),
+            "{label} {name}"
+        );
+        assert_eq!(
+            legacy
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected),
+            "{label} {name}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn inspector_routes_serve_their_intended_ui_artifacts() {
     let state = test_state_with_inspector(
         RoutingStrategy::Priority,
@@ -1548,7 +1804,7 @@ async fn inspector_next_stream_is_snapshot_first_and_uses_only_header_replay() {
     ] {
         let response = app.clone().oneshot(inspector_get(uri)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let events = inspector_next_sse_events(response, 1).await;
+        let events = inspector_sse_events(response, 1).await;
         assert_eq!(events[0].0, "snapshot", "{uri}");
         assert_eq!(events[0].1["kind"], "snapshot", "{uri}");
     }
@@ -1563,7 +1819,7 @@ async fn inspector_next_stream_is_snapshot_first_and_uses_only_header_replay() {
         .body(Body::empty())
         .unwrap();
     let replay = app.clone().oneshot(replay_request).await.unwrap();
-    let replay_events = inspector_next_sse_events(replay, 1).await;
+    let replay_events = inspector_sse_events(replay, 1).await;
     assert_eq!(replay_events[0].0, "record_upsert");
     assert_eq!(replay_events[0].1["kind"], "record_upsert");
 
@@ -1577,7 +1833,7 @@ async fn inspector_next_stream_is_snapshot_first_and_uses_only_header_replay() {
         .body(Body::empty())
         .unwrap();
     let invalid = app.clone().oneshot(invalid_header).await.unwrap();
-    let invalid_events = inspector_next_sse_events(invalid, 1).await;
+    let invalid_events = inspector_sse_events(invalid, 1).await;
     assert_eq!(invalid_events[0].0, "snapshot");
 
     let future_header = Request::builder()
@@ -1590,7 +1846,7 @@ async fn inspector_next_stream_is_snapshot_first_and_uses_only_header_replay() {
         .body(Body::empty())
         .unwrap();
     let future = app.oneshot(future_header).await.unwrap();
-    let future_events = inspector_next_sse_events(future, 2).await;
+    let future_events = inspector_sse_events(future, 2).await;
     assert_eq!(future_events[0].0, "reset");
     assert_eq!(future_events[0].1["reason"], "resume_unavailable");
     assert_eq!(future_events[1].0, "snapshot");
@@ -1627,11 +1883,27 @@ async fn inspector_next_stream_orders_reset_before_snapshot_after_replay_exhaust
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    let events = inspector_next_sse_events(response, 2).await;
+    let events = inspector_sse_events(response, 2).await;
     assert_eq!(events[0].0, "reset");
+    assert_eq!(events[0].1["kind"], "reset");
     assert_eq!(events[0].1["reason"], "resume_unavailable");
     assert_eq!(events[1].0, "snapshot");
+    assert_eq!(events[1].1["kind"], "snapshot");
     assert_eq!(events[1].1["records"].as_array().unwrap().len(), 16);
+    let reset_sequence = events[0].1["stream_seq"]
+        .as_u64()
+        .expect("reset sequence is an integer");
+    assert!(reset_sequence > 0);
+    assert_eq!(events[1].1["stream_seq"], reset_sequence);
+    assert!(
+        events[1].1["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["revision"]
+                .as_u64()
+                .is_some_and(|revision| revision > 0))
+    );
 }
 
 #[tokio::test]
