@@ -6,6 +6,8 @@ mod ui;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wire_contract_tests;
 
 pub use contract::{
     InspectorRecordPhase, InspectorRemovalReason, InspectorResetReason, InspectorStreamEvent,

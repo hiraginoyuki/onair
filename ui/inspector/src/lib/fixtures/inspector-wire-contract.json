@@ -1,0 +1,1519 @@
+{
+  "records": {
+    "ordinary": {
+      "record_id": "ordinary-record",
+      "started_at_unix_ms": 1700000000000,
+      "method": "POST",
+      "path": "/v1/responses",
+      "route": "fixture-route",
+      "identity": "fixture-identity",
+      "requested_model": "fixture-model",
+      "public_model": "fixture-model",
+      "backend_model": "fixture-backend-model",
+      "backend": "fixture-backend",
+      "backend_target": "fixture-target",
+      "stream": false,
+      "peer_addr": "not-recorded",
+      "effective_client_addr": "not-recorded",
+      "trusted_proxy_addr": "not-recorded",
+      "forwarded_for": "not-recorded",
+      "user_agent": "fixture-client",
+      "request_body_bytes": 123,
+      "outcome": {
+        "kind": "completed"
+      },
+      "status": 200,
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "output_tokens": 0,
+      "completed_at_unix_ms": 1700000000002,
+      "timeline": {
+        "started_unix_ms": 1700000000000,
+        "total_us": 1500,
+        "proxy_entry_us": 0,
+        "auth_done_us": null,
+        "request_inspected_us": null,
+        "route_selected_us": null,
+        "request_rewritten_us": null,
+        "debug_capture_done_us": null,
+        "backend_forward_start_us": null,
+        "backend_headers_received_us": null,
+        "backend_body_first_chunk_us": null,
+        "backend_body_complete_us": null,
+        "response_rewritten_us": null,
+        "client_response_ready_us": null,
+        "stream_complete_us": null
+      }
+    },
+    "all_optionals": {
+      "record_id": "all-optionals-record",
+      "client_request_id": "fixture-client-request",
+      "started_at_unix_ms": 1700000001000,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "query": "mode=fixture",
+      "route": "fixture-route",
+      "identity": "fixture-identity",
+      "requested_model": "fixture-model",
+      "public_model": "fixture-model",
+      "backend_model": "fixture-backend-model",
+      "backend": "fixture-backend",
+      "backend_target": "fixture-target",
+      "backend_remote_addr": "not-recorded",
+      "stream": true,
+      "peer_addr": "not-recorded",
+      "effective_client_addr": "not-recorded",
+      "trusted_proxy_addr": "not-recorded",
+      "forwarded_for": "not-recorded",
+      "user_agent": "fixture-client",
+      "request_body_bytes": 234,
+      "debug_capture_id": "fixture-capture",
+      "exposed_backend_error": true,
+      "outcome": {
+        "kind": "preflight",
+        "stage": "routing"
+      },
+      "status": 503,
+      "error_kind": "fixture_error",
+      "backend_attempts": [
+        {
+          "attempt": 1,
+          "backend": "fixture-backend",
+          "backend_target": "fixture-target",
+          "backend_remote_addr": "not-recorded",
+          "debug_capture_id": "fixture-attempt-capture",
+          "status": 502,
+          "outcome": "upstream_non_success",
+          "error_kind": "fixture_attempt_error",
+          "started_us": 600,
+          "ended_us": 850,
+          "elapsed_us": 250,
+          "elapsed_ms": 0,
+          "upstream_status": 502,
+          "request_rewritten_us": 400,
+          "debug_capture_done_us": 500,
+          "backend_forward_start_us": 600,
+          "backend_headers_received_us": 700,
+          "backend_body_first_chunk_us": 800,
+          "backend_body_complete_us": 850,
+          "stream_complete_us": 950
+        }
+      ],
+      "response_body_bytes": 456,
+      "input_tokens": 11,
+      "cached_input_tokens": 4,
+      "output_tokens": 7,
+      "completed_at_unix_ms": 1700000001009,
+      "timeline": {
+        "started_unix_ms": 1700000001000,
+        "total_us": 9000,
+        "proxy_entry_us": 0,
+        "auth_done_us": 100,
+        "request_inspected_us": 200,
+        "route_selected_us": 300,
+        "request_rewritten_us": 400,
+        "debug_capture_done_us": 500,
+        "backend_forward_start_us": 600,
+        "backend_headers_received_us": 700,
+        "backend_body_first_chunk_us": 800,
+        "backend_body_complete_us": 850,
+        "response_rewritten_us": 875,
+        "client_response_ready_us": 900,
+        "stream_complete_us": 950
+      }
+    }
+  },
+  "versioned_detail": {
+    "record_id": "all-optionals-record",
+    "revision": 7,
+    "record": {
+      "record_id": "all-optionals-record",
+      "client_request_id": "fixture-client-request",
+      "started_at_unix_ms": 1700000001000,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "query": "mode=fixture",
+      "route": "fixture-route",
+      "identity": "fixture-identity",
+      "requested_model": "fixture-model",
+      "public_model": "fixture-model",
+      "backend_model": "fixture-backend-model",
+      "backend": "fixture-backend",
+      "backend_target": "fixture-target",
+      "backend_remote_addr": "not-recorded",
+      "stream": true,
+      "peer_addr": "not-recorded",
+      "effective_client_addr": "not-recorded",
+      "trusted_proxy_addr": "not-recorded",
+      "forwarded_for": "not-recorded",
+      "user_agent": "fixture-client",
+      "request_body_bytes": 234,
+      "debug_capture_id": "fixture-capture",
+      "exposed_backend_error": true,
+      "outcome": {
+        "kind": "preflight",
+        "stage": "routing"
+      },
+      "status": 503,
+      "error_kind": "fixture_error",
+      "backend_attempts": [
+        {
+          "attempt": 1,
+          "backend": "fixture-backend",
+          "backend_target": "fixture-target",
+          "backend_remote_addr": "not-recorded",
+          "debug_capture_id": "fixture-attempt-capture",
+          "status": 502,
+          "outcome": "upstream_non_success",
+          "error_kind": "fixture_attempt_error",
+          "started_us": 600,
+          "ended_us": 850,
+          "elapsed_us": 250,
+          "elapsed_ms": 0,
+          "upstream_status": 502,
+          "request_rewritten_us": 400,
+          "debug_capture_done_us": 500,
+          "backend_forward_start_us": 600,
+          "backend_headers_received_us": 700,
+          "backend_body_first_chunk_us": 800,
+          "backend_body_complete_us": 850,
+          "stream_complete_us": 950
+        }
+      ],
+      "response_body_bytes": 456,
+      "input_tokens": 11,
+      "cached_input_tokens": 4,
+      "output_tokens": 7,
+      "completed_at_unix_ms": 1700000001009,
+      "timeline": {
+        "started_unix_ms": 1700000001000,
+        "total_us": 9000,
+        "proxy_entry_us": 0,
+        "auth_done_us": 100,
+        "request_inspected_us": 200,
+        "route_selected_us": 300,
+        "request_rewritten_us": 400,
+        "debug_capture_done_us": 500,
+        "backend_forward_start_us": 600,
+        "backend_headers_received_us": 700,
+        "backend_body_first_chunk_us": 800,
+        "backend_body_complete_us": 850,
+        "response_rewritten_us": 875,
+        "client_response_ready_us": 900,
+        "stream_complete_us": 950
+      }
+    }
+  },
+  "valid_events": [
+    {
+      "label": "snapshot_empty",
+      "event": {
+        "kind": "snapshot",
+        "stream_seq": 0,
+        "records": []
+      }
+    },
+    {
+      "label": "snapshot_records",
+      "event": {
+        "kind": "snapshot",
+        "stream_seq": 1,
+        "records": [
+          {
+            "record_id": "ordinary-record",
+            "revision": 1,
+            "record": {
+              "record_id": "ordinary-record",
+              "started_at_unix_ms": 1700000000000,
+              "method": "POST",
+              "path": "/v1/responses",
+              "route": "fixture-route",
+              "identity": "fixture-identity",
+              "requested_model": "fixture-model",
+              "public_model": "fixture-model",
+              "backend_model": "fixture-backend-model",
+              "backend": "fixture-backend",
+              "backend_target": "fixture-target",
+              "stream": false,
+              "peer_addr": "not-recorded",
+              "effective_client_addr": "not-recorded",
+              "trusted_proxy_addr": "not-recorded",
+              "forwarded_for": "not-recorded",
+              "user_agent": "fixture-client",
+              "request_body_bytes": 123,
+              "outcome": {
+                "kind": "completed"
+              },
+              "status": 200,
+              "input_tokens": 0,
+              "cached_input_tokens": 0,
+              "output_tokens": 0,
+              "completed_at_unix_ms": 1700000000002,
+              "timeline": {
+                "started_unix_ms": 1700000000000,
+                "total_us": 1500,
+                "proxy_entry_us": 0,
+                "auth_done_us": null,
+                "request_inspected_us": null,
+                "route_selected_us": null,
+                "request_rewritten_us": null,
+                "debug_capture_done_us": null,
+                "backend_forward_start_us": null,
+                "backend_headers_received_us": null,
+                "backend_body_first_chunk_us": null,
+                "backend_body_complete_us": null,
+                "response_rewritten_us": null,
+                "client_response_ready_us": null,
+                "stream_complete_us": null
+              }
+            }
+          },
+          {
+            "record_id": "all-optionals-record",
+            "revision": 7,
+            "record": {
+              "record_id": "all-optionals-record",
+              "client_request_id": "fixture-client-request",
+              "started_at_unix_ms": 1700000001000,
+              "method": "POST",
+              "path": "/v1/chat/completions",
+              "query": "mode=fixture",
+              "route": "fixture-route",
+              "identity": "fixture-identity",
+              "requested_model": "fixture-model",
+              "public_model": "fixture-model",
+              "backend_model": "fixture-backend-model",
+              "backend": "fixture-backend",
+              "backend_target": "fixture-target",
+              "backend_remote_addr": "not-recorded",
+              "stream": true,
+              "peer_addr": "not-recorded",
+              "effective_client_addr": "not-recorded",
+              "trusted_proxy_addr": "not-recorded",
+              "forwarded_for": "not-recorded",
+              "user_agent": "fixture-client",
+              "request_body_bytes": 234,
+              "debug_capture_id": "fixture-capture",
+              "exposed_backend_error": true,
+              "outcome": {
+                "kind": "preflight",
+                "stage": "routing"
+              },
+              "status": 503,
+              "error_kind": "fixture_error",
+              "backend_attempts": [
+                {
+                  "attempt": 1,
+                  "backend": "fixture-backend",
+                  "backend_target": "fixture-target",
+                  "backend_remote_addr": "not-recorded",
+                  "debug_capture_id": "fixture-attempt-capture",
+                  "status": 502,
+                  "outcome": "upstream_non_success",
+                  "error_kind": "fixture_attempt_error",
+                  "started_us": 600,
+                  "ended_us": 850,
+                  "elapsed_us": 250,
+                  "elapsed_ms": 0,
+                  "upstream_status": 502,
+                  "request_rewritten_us": 400,
+                  "debug_capture_done_us": 500,
+                  "backend_forward_start_us": 600,
+                  "backend_headers_received_us": 700,
+                  "backend_body_first_chunk_us": 800,
+                  "backend_body_complete_us": 850,
+                  "stream_complete_us": 950
+                }
+              ],
+              "response_body_bytes": 456,
+              "input_tokens": 11,
+              "cached_input_tokens": 4,
+              "output_tokens": 7,
+              "completed_at_unix_ms": 1700000001009,
+              "timeline": {
+                "started_unix_ms": 1700000001000,
+                "total_us": 9000,
+                "proxy_entry_us": 0,
+                "auth_done_us": 100,
+                "request_inspected_us": 200,
+                "route_selected_us": 300,
+                "request_rewritten_us": 400,
+                "debug_capture_done_us": 500,
+                "backend_forward_start_us": 600,
+                "backend_headers_received_us": 700,
+                "backend_body_first_chunk_us": 800,
+                "backend_body_complete_us": 850,
+                "response_rewritten_us": 875,
+                "client_response_ready_us": 900,
+                "stream_complete_us": 950
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "upsert_initial",
+      "event": {
+        "kind": "record_upsert",
+        "stream_seq": 2,
+        "record_id": "ordinary-record",
+        "revision": 2,
+        "phase": "initial",
+        "record": {
+          "record_id": "ordinary-record",
+          "started_at_unix_ms": 1700000000000,
+          "method": "POST",
+          "path": "/v1/responses",
+          "route": "fixture-route",
+          "identity": "fixture-identity",
+          "requested_model": "fixture-model",
+          "public_model": "fixture-model",
+          "backend_model": "fixture-backend-model",
+          "backend": "fixture-backend",
+          "backend_target": "fixture-target",
+          "stream": false,
+          "peer_addr": "not-recorded",
+          "effective_client_addr": "not-recorded",
+          "trusted_proxy_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "user_agent": "fixture-client",
+          "request_body_bytes": 123,
+          "outcome": {
+            "kind": "completed"
+          },
+          "status": 200,
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "timeline": {
+            "started_unix_ms": 1700000000000,
+            "total_us": 1500,
+            "proxy_entry_us": 0,
+            "auth_done_us": null,
+            "request_inspected_us": null,
+            "route_selected_us": null,
+            "request_rewritten_us": null,
+            "debug_capture_done_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_body_complete_us": null,
+            "response_rewritten_us": null,
+            "client_response_ready_us": null,
+            "stream_complete_us": null
+          }
+        }
+      }
+    },
+    {
+      "label": "upsert_live",
+      "event": {
+        "kind": "record_upsert",
+        "stream_seq": 3,
+        "record_id": "all-optionals-record",
+        "revision": 8,
+        "phase": "live",
+        "record": {
+          "record_id": "all-optionals-record",
+          "client_request_id": "fixture-client-request",
+          "started_at_unix_ms": 1700000001000,
+          "method": "POST",
+          "path": "/v1/chat/completions",
+          "query": "mode=fixture",
+          "route": "fixture-route",
+          "identity": "fixture-identity",
+          "requested_model": "fixture-model",
+          "public_model": "fixture-model",
+          "backend_model": "fixture-backend-model",
+          "backend": "fixture-backend",
+          "backend_target": "fixture-target",
+          "backend_remote_addr": "not-recorded",
+          "stream": true,
+          "peer_addr": "not-recorded",
+          "effective_client_addr": "not-recorded",
+          "trusted_proxy_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "user_agent": "fixture-client",
+          "request_body_bytes": 234,
+          "debug_capture_id": "fixture-capture",
+          "exposed_backend_error": true,
+          "outcome": {
+            "kind": "preflight",
+            "stage": "routing"
+          },
+          "status": 503,
+          "error_kind": "fixture_error",
+          "backend_attempts": [
+            {
+              "attempt": 1,
+              "backend": "fixture-backend",
+              "backend_target": "fixture-target",
+              "backend_remote_addr": "not-recorded",
+              "debug_capture_id": "fixture-attempt-capture",
+              "status": 502,
+              "outcome": "upstream_non_success",
+              "error_kind": "fixture_attempt_error",
+              "started_us": 600,
+              "ended_us": 850,
+              "elapsed_us": 250,
+              "elapsed_ms": 0,
+              "upstream_status": 502,
+              "request_rewritten_us": 400,
+              "debug_capture_done_us": 500,
+              "backend_forward_start_us": 600,
+              "backend_headers_received_us": 700,
+              "backend_body_first_chunk_us": 800,
+              "backend_body_complete_us": 850,
+              "stream_complete_us": 950
+            }
+          ],
+          "response_body_bytes": 456,
+          "input_tokens": 11,
+          "cached_input_tokens": 4,
+          "output_tokens": 7,
+          "completed_at_unix_ms": 1700000001009,
+          "timeline": {
+            "started_unix_ms": 1700000001000,
+            "total_us": 9000,
+            "proxy_entry_us": 0,
+            "auth_done_us": 100,
+            "request_inspected_us": 200,
+            "route_selected_us": 300,
+            "request_rewritten_us": 400,
+            "debug_capture_done_us": 500,
+            "backend_forward_start_us": 600,
+            "backend_headers_received_us": 700,
+            "backend_body_first_chunk_us": 800,
+            "backend_body_complete_us": 850,
+            "response_rewritten_us": 875,
+            "client_response_ready_us": 900,
+            "stream_complete_us": 950
+          }
+        }
+      }
+    },
+    {
+      "label": "upsert_terminal",
+      "event": {
+        "kind": "record_upsert",
+        "stream_seq": 4,
+        "record_id": "ordinary-record",
+        "revision": 3,
+        "phase": "terminal",
+        "record": {
+          "record_id": "ordinary-record",
+          "started_at_unix_ms": 1700000000000,
+          "method": "POST",
+          "path": "/v1/responses",
+          "route": "fixture-route",
+          "identity": "fixture-identity",
+          "requested_model": "fixture-model",
+          "public_model": "fixture-model",
+          "backend_model": "fixture-backend-model",
+          "backend": "fixture-backend",
+          "backend_target": "fixture-target",
+          "stream": false,
+          "peer_addr": "not-recorded",
+          "effective_client_addr": "not-recorded",
+          "trusted_proxy_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "user_agent": "fixture-client",
+          "request_body_bytes": 123,
+          "outcome": {
+            "kind": "completed"
+          },
+          "status": 200,
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "timeline": {
+            "started_unix_ms": 1700000000000,
+            "total_us": 1500,
+            "proxy_entry_us": 0,
+            "auth_done_us": null,
+            "request_inspected_us": null,
+            "route_selected_us": null,
+            "request_rewritten_us": null,
+            "debug_capture_done_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_body_complete_us": null,
+            "response_rewritten_us": null,
+            "client_response_ready_us": null,
+            "stream_complete_us": null
+          }
+        }
+      }
+    },
+    {
+      "label": "remove_retention_evicted",
+      "event": {
+        "kind": "record_removed",
+        "stream_seq": 5,
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "reason": "retention_evicted"
+      }
+    },
+    {
+      "label": "remove_explicit",
+      "event": {
+        "kind": "record_removed",
+        "stream_seq": 6,
+        "record_id": "all-optionals-record",
+        "revision": 9,
+        "reason": "explicit"
+      }
+    },
+    {
+      "label": "reset_resume_unavailable",
+      "event": {
+        "kind": "reset",
+        "stream_seq": 7,
+        "reason": "resume_unavailable"
+      }
+    },
+    {
+      "label": "reset_lagged",
+      "event": {
+        "kind": "reset",
+        "stream_seq": 8,
+        "reason": "lagged"
+      }
+    },
+    {
+      "label": "reset_server_restarted",
+      "event": {
+        "kind": "reset",
+        "stream_seq": 9,
+        "reason": "server_restarted"
+      }
+    }
+  ],
+  "malformed": [
+    {
+      "label": "invalid_array_backend_attempts_object",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_attempts": {},
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_array_retried_attempts_string",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "retried_attempts": "none",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_boolean_stream_integer",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": 0,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_boolean_exposure_string",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "exposed_backend_error": "false",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_string_method_integer",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": 42,
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_string_optional_client_request_id_boolean",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "client_request_id": true,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_integer_status_string",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": "200",
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_integer_status_fractional",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200.5,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_integer_timeline_negative",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": -1
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_integer_attempt_status_string",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "live",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_attempts": [
+            {
+              "attempt": 1,
+              "backend": "fixture-backend",
+              "backend_body_complete_us": 850,
+              "backend_body_first_chunk_us": 800,
+              "backend_forward_start_us": 600,
+              "backend_headers_received_us": 700,
+              "backend_remote_addr": "not-recorded",
+              "backend_target": "fixture-target",
+              "debug_capture_done_us": 500,
+              "debug_capture_id": "fixture-attempt-capture",
+              "elapsed_ms": 0,
+              "elapsed_us": 250,
+              "ended_us": 850,
+              "error_kind": "fixture_attempt_error",
+              "outcome": "upstream_non_success",
+              "request_rewritten_us": 400,
+              "started_us": 600,
+              "status": "502",
+              "stream_complete_us": 950,
+              "upstream_status": 502
+            }
+          ],
+          "backend_model": "fixture-backend-model",
+          "backend_remote_addr": "not-recorded",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 4,
+          "client_request_id": "fixture-client-request",
+          "completed_at_unix_ms": 1700000001009,
+          "debug_capture_id": "fixture-capture",
+          "effective_client_addr": "not-recorded",
+          "error_kind": "fixture_error",
+          "exposed_backend_error": true,
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 11,
+          "method": "POST",
+          "outcome": {
+            "kind": "preflight",
+            "stage": "routing"
+          },
+          "output_tokens": 7,
+          "path": "/v1/chat/completions",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "query": "mode=fixture",
+          "record_id": "all-optionals-record",
+          "request_body_bytes": 234,
+          "requested_model": "fixture-model",
+          "response_body_bytes": 456,
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000001000,
+          "status": 503,
+          "stream": true,
+          "timeline": {
+            "auth_done_us": 100,
+            "backend_body_complete_us": 850,
+            "backend_body_first_chunk_us": 800,
+            "backend_forward_start_us": 600,
+            "backend_headers_received_us": 700,
+            "client_response_ready_us": 900,
+            "debug_capture_done_us": 500,
+            "proxy_entry_us": 0,
+            "request_inspected_us": 200,
+            "request_rewritten_us": 400,
+            "response_rewritten_us": 875,
+            "route_selected_us": 300,
+            "started_unix_ms": 1700000001000,
+            "stream_complete_us": 950,
+            "total_us": 9000
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "all-optionals-record",
+        "revision": 9,
+        "stream_seq": 11
+      }
+    },
+    {
+      "label": "invalid_revision_zero",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 0,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_revision_string",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": "4",
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_id_empty",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_id_mismatch",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "terminal",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "different-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_envelope_array",
+      "value": []
+    },
+    {
+      "label": "invalid_envelope_null",
+      "value": null
+    },
+    {
+      "label": "invalid_envelope_unknown_kind",
+      "value": {
+        "kind": "keepalive",
+        "stream_seq": 15
+      }
+    },
+    {
+      "label": "invalid_envelope_stream_sequence_fractional",
+      "value": {
+        "kind": "reset",
+        "reason": "lagged",
+        "stream_seq": 14.5
+      }
+    },
+    {
+      "label": "invalid_envelope_snapshot_records_object",
+      "value": {
+        "kind": "snapshot",
+        "records": {},
+        "stream_seq": 12
+      }
+    },
+    {
+      "label": "invalid_envelope_snapshot_entry_array",
+      "value": {
+        "kind": "snapshot",
+        "records": [
+          []
+        ],
+        "stream_seq": 12
+      }
+    },
+    {
+      "label": "invalid_envelope_upsert_phase",
+      "value": {
+        "kind": "record_upsert",
+        "phase": "unknown",
+        "record": {
+          "backend": "fixture-backend",
+          "backend_model": "fixture-backend-model",
+          "backend_target": "fixture-target",
+          "cached_input_tokens": 0,
+          "completed_at_unix_ms": 1700000000002,
+          "effective_client_addr": "not-recorded",
+          "forwarded_for": "not-recorded",
+          "identity": "fixture-identity",
+          "input_tokens": 0,
+          "method": "POST",
+          "outcome": {
+            "kind": "completed"
+          },
+          "output_tokens": 0,
+          "path": "/v1/responses",
+          "peer_addr": "not-recorded",
+          "public_model": "fixture-model",
+          "record_id": "ordinary-record",
+          "request_body_bytes": 123,
+          "requested_model": "fixture-model",
+          "route": "fixture-route",
+          "started_at_unix_ms": 1700000000000,
+          "status": 200,
+          "stream": false,
+          "timeline": {
+            "auth_done_us": null,
+            "backend_body_complete_us": null,
+            "backend_body_first_chunk_us": null,
+            "backend_forward_start_us": null,
+            "backend_headers_received_us": null,
+            "client_response_ready_us": null,
+            "debug_capture_done_us": null,
+            "proxy_entry_us": 0,
+            "request_inspected_us": null,
+            "request_rewritten_us": null,
+            "response_rewritten_us": null,
+            "route_selected_us": null,
+            "started_unix_ms": 1700000000000,
+            "stream_complete_us": null,
+            "total_us": 1500
+          },
+          "trusted_proxy_addr": "not-recorded",
+          "user_agent": "fixture-client"
+        },
+        "record_id": "ordinary-record",
+        "revision": 4,
+        "stream_seq": 10
+      }
+    },
+    {
+      "label": "invalid_envelope_removal_reason",
+      "value": {
+        "kind": "record_removed",
+        "reason": "unknown",
+        "record_id": "ordinary-record",
+        "revision": 5,
+        "stream_seq": 13
+      }
+    },
+    {
+      "label": "invalid_envelope_reset_reason",
+      "value": {
+        "kind": "reset",
+        "reason": "unknown",
+        "stream_seq": 14
+      }
+    }
+  ]
+}
