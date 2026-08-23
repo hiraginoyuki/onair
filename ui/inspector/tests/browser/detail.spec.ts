@@ -1,6 +1,6 @@
 import type { Download } from "@playwright/test";
 import { versionedRecord } from "../../src/lib/test-fixtures";
-import { expect, snapshot, test } from "./fixture";
+import { expect, snapshot, test, upsert } from "./fixture";
 
 async function downloadedJson(download: Download): Promise<Record<string, unknown>> {
   const stream = await download.createReadStream();
@@ -204,4 +204,37 @@ test("keeps row, heading, fields, raw JSON, copy, and download on one record rev
   ).toBe(true);
   await expect(detail.locator(".detail-record-id")).toHaveText(recordId);
   await expect(detail.locator(".detail-revision")).toHaveText("revision 5");
+});
+
+test("resets attempt expansion when the selected revision changes", async ({ inspector }) => {
+  const attempt = {
+    attempt: 1,
+    backend: "attempt-backend",
+    backend_target: "attempt-target",
+    status: 502,
+    outcome: "upstream_non_success",
+    started_us: 100,
+    ended_us: 900,
+    elapsed_us: 800,
+    elapsed_ms: 0
+  };
+  const first = versionedRecord("attempt-reset", 1, { backend_attempts: [attempt] });
+  const second = versionedRecord("attempt-reset", 2, {
+    backend_attempts: [{ ...attempt, status: 503, ended_us: 1_000, elapsed_us: 900 }]
+  });
+
+  await inspector.open();
+  await inspector.openSource();
+  await inspector.emit(snapshot(1, [first]));
+
+  const detail = inspector.page.locator(".detail-pane");
+  const expansion = detail.getByRole("button", { name: "details" });
+  await expansion.click();
+  await expect(detail.getByRole("button", { name: "hide details" })).toBeVisible();
+  await expect(detail.locator(".attempt-details")).toHaveCount(1);
+
+  await inspector.emit(upsert(2, second));
+  await expect(detail.locator(".detail-revision")).toHaveText("revision 2");
+  await expect(detail.getByRole("button", { name: "details" })).toBeVisible();
+  await expect(detail.locator(".attempt-details")).toHaveCount(0);
 });

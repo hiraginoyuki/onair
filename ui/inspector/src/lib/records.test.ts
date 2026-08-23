@@ -3,16 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   applyEvent,
   freezeRecords,
-  isSelectionResponseCurrent,
-  markSelectionDetached,
-  readySelection,
-  reconcileSelection,
   saturatingIncrement,
   shouldAcceptEventSequence,
   shouldFlushCoalesced
 } from "./records";
 import { versionedRecord } from "./test-fixtures";
-import type { SelectionState, StreamEvent, VersionedRecord } from "./types";
+import type { StreamEvent, VersionedRecord } from "./types";
 
 function snapshot(streamSeq: number, records: VersionedRecord[]): StreamEvent {
   return { kind: "snapshot", stream_seq: streamSeq, records };
@@ -128,16 +124,13 @@ describe("canonical record reducer", () => {
     expect(records.get("batched")).toBe(before);
   });
 
-  it("evicts the oldest map entry while one selected item remains pinned", () => {
-    const selected = versionedRecord("one", 1);
+  it("evicts the oldest map entry at the client bound", () => {
     const records = new Map<string, VersionedRecord>();
-    applyEvent(records, upsert(selected, 1), 2);
+    applyEvent(records, upsert(versionedRecord("one", 1), 1), 2);
     applyEvent(records, upsert(versionedRecord("two", 1), 2), 2);
     applyEvent(records, upsert(versionedRecord("three", 1), 3), 2);
 
     expect([...records.keys()]).toEqual(["two", "three"]);
-    const selection = markSelectionDetached(readySelection(selected, 1, records), records);
-    expect(selection).toMatchObject({ kind: "ready", item: selected, detached: true, epoch: 1 });
   });
 
   it("clears on reset and accepts the following authoritative snapshot", () => {
@@ -152,65 +145,11 @@ describe("canonical record reducer", () => {
   });
 });
 
-describe("versioned selection", () => {
-  it("keeps lower/equal HTTP detail idempotent and accepts higher SSE detail", () => {
-    const revisionThree = versionedRecord("selected", 3, { status: 203 });
-    let displayed = new Map([["selected", revisionThree]]);
-    let selection = readySelection(revisionThree, 7, displayed);
-
-    selection = reconcileSelection(
-      selection,
-      "selected",
-      versionedRecord("selected", 2, { status: 202 }),
-      7,
-      displayed
-    );
-    expect(selection).toMatchObject({ kind: "ready", item: revisionThree });
-
-    const equal = versionedRecord("selected", 3, { status: 500 });
-    selection = reconcileSelection(selection, "selected", equal, 7, displayed);
-    expect(selection).toMatchObject({ kind: "ready", item: revisionThree });
-
-    const revisionFour = versionedRecord("selected", 4, { status: 204 });
-    displayed = new Map([["selected", revisionFour]]);
-    selection = reconcileSelection(selection, "selected", revisionFour, 7, displayed);
-    expect(selection).toEqual(readySelection(revisionFour, 7, displayed));
-  });
-
-  it("treats a newer projection epoch as authoritative even when revision restarts", () => {
-    const old = versionedRecord("selected", 19, { status: 219 });
-    let selection = readySelection(old, 4, new Map([["selected", old]]));
-    const restarted = versionedRecord("selected", 1, { status: 201 });
-    const displayed = new Map([["selected", restarted]]);
-
-    selection = reconcileSelection(selection, "selected", restarted, 5, displayed);
-    expect(selection).toEqual(readySelection(restarted, 5, displayed));
-
-    selection = reconcileSelection(selection, "selected", old, 4, displayed);
-    expect(selection).toEqual(readySelection(restarted, 5, displayed));
-  });
-
-  it("suppresses stale HTTP responses by click token and projection epoch", () => {
-    const loading: SelectionState = {
-      kind: "loading",
-      recordId: "selected",
-      requestToken: 8,
-      epoch: 3
-    };
-    expect(isSelectionResponseCurrent(8, 8, 3, 3, "selected", loading, false)).toBe(true);
-    expect(isSelectionResponseCurrent(7, 8, 3, 3, "selected", loading, false)).toBe(false);
-    expect(isSelectionResponseCurrent(8, 8, 2, 3, "selected", loading, false)).toBe(false);
-    expect(isSelectionResponseCurrent(8, 8, 3, 3, "different", loading, false)).toBe(false);
-    expect(isSelectionResponseCurrent(8, 8, 3, 3, "selected", loading, true)).toBe(false);
-  });
-});
-
 describe("frozen display projection", () => {
-  it("keeps rows and selected detail frozen through ingestion, reset, and snapshot", () => {
+  it("keeps rows frozen through ingestion, reset, and snapshot", () => {
     const initial = versionedRecord("selected", 1, { status: 200 });
     let live = new Map([["selected", initial]]);
     const frozen = freezeRecords(live);
-    const frozenSelection = readySelection(initial, 1, frozen);
     let pausedUpdateCount = 0;
 
     for (const event of [
@@ -228,33 +167,7 @@ describe("frozen display projection", () => {
     expect(pausedUpdateCount).toBe(4);
     expect(frozen.get("selected")?.revision).toBe(1);
     expect(frozen.get("selected")?.record.status).toBe(200);
-    expect(frozenSelection).toEqual(readySelection(initial, 1, frozen));
     expect(live.get("selected")?.record.status).toBe(201);
-  });
-
-  it("publishes the latest live map exactly once on resume and reconciles selection", () => {
-    const initial = versionedRecord("selected", 7);
-    const live = new Map([["selected", versionedRecord("selected", 1)]]);
-    const frozen = freezeRecords(new Map([["selected", initial]]));
-    let display: ReadonlyMap<string, VersionedRecord> = frozen;
-    let publications = 0;
-    const publish = (records: ReadonlyMap<string, VersionedRecord>) => {
-      publications += 1;
-      display = records;
-    };
-
-    publish(live);
-    const selection = reconcileSelection(
-      readySelection(initial, 2, frozen),
-      "selected",
-      live.get("selected"),
-      3,
-      display
-    );
-
-    expect(publications).toBe(1);
-    expect(display).toBe(live);
-    expect(selection).toEqual(readySelection(live.get("selected")!, 3, display));
   });
 
   it("saturates the paused update counter", () => {
