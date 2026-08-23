@@ -33,7 +33,6 @@
   type PhaseField = { key: keyof InspectorAttempt; label: string };
 
   const widthKey = "onair.inspector.v4.widths";
-  const sequenceKey = "onair.inspector.v2.seq";
   const timeFormatter = new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
@@ -83,7 +82,7 @@
   let recoveryNotice = "";
   let actionNotice = "";
   let retainedCount: number | undefined;
-  let lastSequence = readLastSequence();
+  let lastSequence = 0;
   let widths: Widths = loadWidths();
   let viewportTop = 0;
   let viewportHeight = 480;
@@ -158,15 +157,6 @@
     };
   });
 
-  function readLastSequence(): number {
-    try {
-      const value = Number(sessionStorage.getItem(sequenceKey) ?? "0");
-      return isSafeInteger(value) && value > 0 ? value : 0;
-    } catch {
-      return 0;
-    }
-  }
-
   function readHashRecordId(): string {
     if (typeof window === "undefined") return "";
     const hash = window.location.hash.slice(1);
@@ -204,6 +194,7 @@
   function beginProjection() {
     projectionEpoch += 1;
     nextSelectionRequest();
+    lastSequence = 0;
     connected = false;
     streamReady = false;
     if (!paused) {
@@ -221,24 +212,15 @@
     }
   }
 
-  function connect(resetResume = false) {
+  function connect() {
     cancelLiveFlush();
     connected = false;
     streamReady = false;
-    if (resetResume) {
-      lastSequence = 0;
-      try {
-        sessionStorage.removeItem(sequenceKey);
-      } catch {
-        // Session persistence is optional.
-      }
-    }
     if (!streamSupervisor) {
       streamSupervisor = new StreamSupervisor({
         createSource: () => {
-          const resume = lastSequence > 0 ? `&last_event_id=${lastSequence}` : "";
           return new EventSource(
-            `/_onair/inspector-next/events?snapshot_limit=${CLIENT_LIMIT}${resume}`
+            `/_onair/inspector-next/events?snapshot_limit=${CLIENT_LIMIT}`
           ) as unknown as StreamEventSource;
         },
         decode: decodeStreamMessage,
@@ -517,12 +499,6 @@
       ? records.get(currentSelectionId)
       : undefined;
     lastSequence = Math.max(lastSequence, sequence);
-    try {
-      sessionStorage.setItem(sequenceKey, String(lastSequence));
-    } catch {
-      // Session persistence is a resume hint, not a source of truth.
-    }
-
     if (event.kind === "reset") {
       projectionEpoch += 1;
       nextSelectionRequest();
@@ -681,7 +657,7 @@
       cancelLiveFlush();
       for (const event of queued) handleEvent(event, true);
       if (needsResync) {
-        connect(true);
+        connect();
         void refreshRuntime();
       }
     }
@@ -699,7 +675,7 @@
 
   function refreshInspector() {
     showNotice("refreshing inspector");
-    connect(true);
+    connect();
     void refreshRuntime();
   }
 

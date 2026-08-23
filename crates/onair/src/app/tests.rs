@@ -26,26 +26,90 @@ use onair_core::config::{
     ResolvedRoute, ResponsesMaxOutputTokensPolicy, ResponsesStorePolicy, RouteBackendBinding,
     RouteKey, RoutingConfig, RoutingStrategy, ServerConfig, TelemetryConfig, ToolSchemaMode,
 };
-use onair_obs::observe::InspectorOutcome;
 use onair_obs::observe::inspector_persisted_count;
+use onair_obs::observe::{
+    InspectorOutcome, InspectorRequestBase, InspectorRequestRecord, InspectorRequestRecordInit,
+    InspectorTokenCounts, TimelineSnapshot,
+};
 
 const CLIENT_KEY: &str = "sk-test";
 const PUBLIC_MODEL: &str = "gpt-public";
 const BACKEND_MODEL: &str = "backend-private";
 
-#[test]
-fn inspector_last_sequence_reads_query_fallback() {
-    let request = Request::builder()
-        .uri("/_onair/inspector-next/events?last_event_id=42")
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(inspector_last_sequence(&request), Some(42));
+async fn inspector_next_sse_events(response: Response<Body>, count: usize) -> Vec<(String, Value)> {
+    let mut body = response.into_body();
+    let mut buffer = String::new();
+    let mut events = Vec::with_capacity(count);
+    while events.len() < count {
+        let frame = tokio::time::timeout(Duration::from_secs(2), body.frame())
+            .await
+            .expect("inspector next SSE frame timed out")
+            .expect("inspector next SSE body closed")
+            .expect("inspector next SSE frame failed");
+        if let Some(data) = frame.data_ref() {
+            buffer.push_str(std::str::from_utf8(data).expect("inspector next SSE is UTF-8"));
+        }
+        while let Some(split) = buffer.find("\n\n") {
+            let event: String = buffer.drain(..split + 2).collect();
+            let mut event_name = String::new();
+            let mut data = String::new();
+            for line in event.lines() {
+                if let Some(rest) = line.strip_prefix("event: ") {
+                    event_name = rest.to_owned();
+                } else if let Some(rest) = line.strip_prefix("data: ") {
+                    data.push_str(rest);
+                }
+            }
+            if !data.is_empty() {
+                events.push((
+                    event_name,
+                    serde_json::from_str(&data).expect("inspector next SSE data is JSON"),
+                ));
+                if events.len() == count {
+                    return events;
+                }
+            }
+        }
+    }
+    events
+}
 
-    let invalid = Request::builder()
-        .uri("/_onair/inspector-next/events?last_event_id=nope")
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(inspector_last_sequence(&invalid), None);
+fn synthetic_inspector_record(record_id: &str) -> InspectorRequestRecord {
+    InspectorRequestRecord::new(InspectorRequestRecordInit {
+        base: InspectorRequestBase {
+            record_id: record_id.to_owned(),
+            client_request_id: None,
+            started_at_unix_ms: 1_700_000_000_000,
+            method: "POST".to_owned(),
+            path: "/synthetic".to_owned(),
+            query: None,
+            route: "synthetic-route".to_owned(),
+            identity: "synthetic-operator".to_owned(),
+            requested_model: "synthetic-model".to_owned(),
+            public_model: "synthetic-model".to_owned(),
+            backend_model: "synthetic-backend-model".to_owned(),
+            backend: "synthetic-backend".to_owned(),
+            backend_target: "synthetic-target".to_owned(),
+            backend_remote_addr: None,
+            stream: false,
+            peer_addr: "not-recorded".to_owned(),
+            effective_client_addr: "not-recorded".to_owned(),
+            trusted_proxy_addr: "not-recorded".to_owned(),
+            forwarded_for: "not-recorded".to_owned(),
+            user_agent: "synthetic-client".to_owned(),
+            request_body_bytes: 0,
+            debug_capture_id: None,
+            exposed_backend_error: false,
+        },
+        outcome: InspectorOutcome::Completed,
+        status: 200,
+        error_kind: None,
+        backend_attempts: Vec::new(),
+        retried_attempts: Vec::new(),
+        response_body_bytes: Some(0),
+        tokens: InspectorTokenCounts::default(),
+        timeline: TimelineSnapshot::default(),
+    })
 }
 
 #[tokio::test]
@@ -1443,6 +1507,116 @@ async fn inspector_next_route_keeps_the_local_only_gate() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
     }
+}
+
+#[tokio::test]
+async fn inspector_next_stream_is_snapshot_first_and_uses_only_header_replay() {
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            ..InspectorConfig::default()
+        },
+    );
+    state
+        .inspector
+        .record(true, 16, synthetic_inspector_record("stream-contract"));
+    let app = router(state);
+
+    for uri in [
+        "/_onair/inspector-next/events?snapshot_limit=16",
+        "/_onair/inspector-next/events?snapshot_limit=16",
+        "/_onair/inspector-next/events?snapshot_limit=16&last_event_id=0",
+    ] {
+        let response = app.clone().oneshot(inspector_get(uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let events = inspector_next_sse_events(response, 1).await;
+        assert_eq!(events[0].0, "snapshot", "{uri}");
+        assert_eq!(events[0].1["kind"], "snapshot", "{uri}");
+    }
+
+    let replay_request = Request::builder()
+        .method(Method::GET)
+        .uri("/_onair/inspector-next/events?snapshot_limit=16")
+        .header("last-event-id", "0")
+        .extension(ConnectInfo(
+            "127.0.0.1:55432".parse::<SocketAddr>().unwrap(),
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let replay = app.clone().oneshot(replay_request).await.unwrap();
+    let replay_events = inspector_next_sse_events(replay, 1).await;
+    assert_eq!(replay_events[0].0, "record_upsert");
+    assert_eq!(replay_events[0].1["kind"], "record_upsert");
+
+    let invalid_header = Request::builder()
+        .method(Method::GET)
+        .uri("/_onair/inspector-next/events?snapshot_limit=16")
+        .header("last-event-id", "invalid")
+        .extension(ConnectInfo(
+            "127.0.0.1:55432".parse::<SocketAddr>().unwrap(),
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let invalid = app.clone().oneshot(invalid_header).await.unwrap();
+    let invalid_events = inspector_next_sse_events(invalid, 1).await;
+    assert_eq!(invalid_events[0].0, "snapshot");
+
+    let future_header = Request::builder()
+        .method(Method::GET)
+        .uri("/_onair/inspector-next/events?snapshot_limit=16")
+        .header("last-event-id", u64::MAX.to_string())
+        .extension(ConnectInfo(
+            "127.0.0.1:55432".parse::<SocketAddr>().unwrap(),
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let future = app.oneshot(future_header).await.unwrap();
+    let future_events = inspector_next_sse_events(future, 2).await;
+    assert_eq!(future_events[0].0, "reset");
+    assert_eq!(future_events[0].1["reason"], "resume_unavailable");
+    assert_eq!(future_events[1].0, "snapshot");
+}
+
+#[tokio::test]
+async fn inspector_next_stream_orders_reset_before_snapshot_after_replay_exhaustion() {
+    let state = test_state_with_inspector(
+        RoutingStrategy::Priority,
+        vec![],
+        InspectorConfig {
+            enabled: true,
+            retention_requests: 16,
+            allow_remote: false,
+            ..InspectorConfig::default()
+        },
+    );
+    for index in 0..=4096 {
+        state.inspector.record(
+            true,
+            16,
+            synthetic_inspector_record(&format!("expired-{index}")),
+        );
+    }
+    let app = router(state);
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/_onair/inspector-next/events?snapshot_limit=16")
+        .header("last-event-id", "0")
+        .extension(ConnectInfo(
+            "127.0.0.1:55432".parse::<SocketAddr>().unwrap(),
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    let events = inspector_next_sse_events(response, 2).await;
+    assert_eq!(events[0].0, "reset");
+    assert_eq!(events[0].1["reason"], "resume_unavailable");
+    assert_eq!(events[1].0, "snapshot");
+    assert_eq!(events[1].1["records"].as_array().unwrap().len(), 16);
 }
 
 #[tokio::test]

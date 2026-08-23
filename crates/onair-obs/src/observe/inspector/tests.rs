@@ -304,19 +304,6 @@ fn v2_future_resume_returns_reset_and_snapshot() {
 }
 
 #[test]
-fn v2_page_resume_starts_with_snapshot() {
-    let store = InspectorStore::new();
-    store.record(true, 10, test_record("current"));
-
-    let (_, initial) = store.subscribe_v2_from_page(Some(1), 3);
-    assert!(matches!(
-        initial.as_slice(),
-        [InspectorStreamEvent::Snapshot { stream_seq: 1, records }]
-            if records.len() == 1 && records[0].record_id == "current"
-    ));
-}
-
-#[test]
 fn retention_boundary_evicts_under_bulk_load() {
     // Stress test: pushing more than the retention cap in one go
     // must keep the deque bounded at the retention limit and

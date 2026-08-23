@@ -387,28 +387,6 @@ impl InspectorStore {
         (receiver, initial)
     }
 
-    pub fn subscribe_v2_from_page(
-        &self,
-        last_sequence: Option<u64>,
-        snapshot_limit: usize,
-    ) -> (
-        broadcast::Receiver<InspectorStreamEvent>,
-        Vec<InspectorStreamEvent>,
-    ) {
-        let receiver = self.inner.v2_events.subscribe();
-        let initial = match last_sequence {
-            Some(last_sequence) if self.replay_since(last_sequence).is_none() => vec![
-                self.next_control_event(InspectorResetReason::ResumeUnavailable),
-                self.snapshot_event(snapshot_limit),
-            ],
-            // A page reload has no client-side record map to apply replay to.
-            // Always send the authoritative snapshot even when its saved
-            // sequence is current.
-            _ => vec![self.snapshot_event(snapshot_limit)],
-        };
-        (receiver, initial)
-    }
-
     pub fn reset_event(&self) -> InspectorStreamEvent {
         self.next_control_event(InspectorResetReason::Lagged)
     }
