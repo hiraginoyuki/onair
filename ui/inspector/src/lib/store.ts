@@ -1,4 +1,4 @@
-import type { Column, ColumnKey, InspectorRecord, StreamEvent } from "./types";
+import type { Column, ColumnKey, StreamEvent, VersionedRecord } from "./types";
 
 export const CLIENT_LIMIT = 1000;
 export const PENDING_LIMIT = 256;
@@ -20,7 +20,7 @@ export function eventSequence(event: StreamEvent): number {
 }
 
 export function applyEvent(
-  records: Map<string, { revision: number; record: InspectorRecord }>,
+  records: Map<string, VersionedRecord>,
   event: StreamEvent,
   paused: boolean,
   pending: StreamEvent[]
@@ -48,7 +48,11 @@ export function applyEvent(
   if (event.kind === "record_upsert") {
     const current = records.get(event.record_id);
     if (!current || event.revision > current.revision) {
-      records.set(event.record_id, { revision: event.revision, record: event.record });
+      records.set(event.record_id, {
+        record_id: event.record_id,
+        revision: event.revision,
+        record: event.record
+      });
       while (records.size > CLIENT_LIMIT) records.delete(records.keys().next().value as string);
     }
   }

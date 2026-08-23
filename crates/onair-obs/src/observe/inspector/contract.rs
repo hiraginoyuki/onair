@@ -12,7 +12,7 @@ use super::records::InspectorRequestRecord;
 pub enum InspectorStreamEvent {
     Snapshot {
         stream_seq: u64,
-        records: Vec<InspectorSnapshotEntry>,
+        records: Vec<InspectorVersionedRecord>,
     },
     RecordUpsert {
         stream_seq: u64,
@@ -37,7 +37,7 @@ pub enum InspectorStreamEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct InspectorSnapshotEntry {
+pub struct InspectorVersionedRecord {
     pub record_id: String,
     pub revision: u64,
     pub record: InspectorRequestRecord,
@@ -97,7 +97,7 @@ mod tests {
         let events = [
             InspectorStreamEvent::Snapshot {
                 stream_seq: 10,
-                records: vec![InspectorSnapshotEntry {
+                records: vec![InspectorVersionedRecord {
                     record_id: "synthetic-1".to_owned(),
                     revision: 1,
                     record: test_record("synthetic-1"),

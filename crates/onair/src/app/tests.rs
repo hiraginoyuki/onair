@@ -1331,6 +1331,7 @@ async fn inspector_records_completed_requests_and_serves_details() {
 
     let record_id = record["record_id"].as_str().unwrap();
     let response = app
+        .clone()
         .oneshot(inspector_get(&format!(
             "/_onair/inspector/requests/{record_id}"
         )))
@@ -1340,6 +1341,36 @@ async fn inspector_records_completed_requests_and_serves_details() {
     let detail = json_body(response).await;
     assert_eq!(detail["record_id"], record_id);
     assert_eq!(detail["debug_capture_id"], serde_json::Value::Null);
+
+    let response = app
+        .oneshot(inspector_get(&format!(
+            "/_onair/inspector-next/requests/{record_id}"
+        )))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+    assert_eq!(
+        response.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
+    let versioned = json_body(response).await;
+    assert_eq!(
+        versioned
+            .as_object()
+            .expect("versioned detail is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["record", "record_id", "revision"])
+    );
+    assert_eq!(versioned["record_id"], record_id);
+    assert!(
+        versioned["revision"]
+            .as_u64()
+            .is_some_and(|value| value > 0)
+    );
+    assert_eq!(versioned["record"], detail);
 
     backend.abort();
 }
@@ -1400,7 +1431,11 @@ async fn inspector_next_route_keeps_the_local_only_gate() {
     );
     let app = router(state);
 
-    for uri in ["/_onair/inspector-next", "/_onair/inspector-next/events"] {
+    for uri in [
+        "/_onair/inspector-next",
+        "/_onair/inspector-next/events",
+        "/_onair/inspector-next/requests/not-retained",
+    ] {
         let response = app
             .clone()
             .oneshot(inspector_get_with_peer(uri, "198.51.100.20:55432"))

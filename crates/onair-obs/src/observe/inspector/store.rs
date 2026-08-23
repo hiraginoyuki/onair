@@ -14,7 +14,7 @@ use onair_core::sanitize::{DISPLAY_SEGMENT_MAX_CHARS, sanitize_for_storage};
 
 use super::records::{InspectorOutcome, InspectorRequestRecord};
 use super::{
-    InspectorRecordPhase, InspectorResetReason, InspectorSnapshotEntry, InspectorStreamEvent,
+    InspectorRecordPhase, InspectorResetReason, InspectorStreamEvent, InspectorVersionedRecord,
 };
 use crate::observe::inspector_persistence::{InspectorPersistenceWriter, restore_records};
 
@@ -345,12 +345,21 @@ impl InspectorStore {
     }
 
     pub fn get(&self, record_id: &str) -> Option<InspectorRequestRecord> {
+        self.get_versioned(record_id)
+            .map(|retained| retained.record)
+    }
+
+    pub fn get_versioned(&self, record_id: &str) -> Option<InspectorVersionedRecord> {
         self.inner
             .records
             .lock()
             .records_by_id
             .get(record_id)
-            .map(|retained| retained.record.clone())
+            .map(|retained| InspectorVersionedRecord {
+                record_id: record_id.to_owned(),
+                revision: retained.revision,
+                record: retained.record.clone(),
+            })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<InspectorRequestRecord> {
@@ -443,7 +452,7 @@ impl InspectorStore {
             .iter()
             .skip(skip)
             .filter_map(|record_id| records.records_by_id.get(record_id))
-            .map(|retained| InspectorSnapshotEntry {
+            .map(|retained| InspectorVersionedRecord {
                 record_id: retained.record.base.record_id.clone(),
                 revision: retained.revision,
                 record: retained.record.clone(),

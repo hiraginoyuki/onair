@@ -17,7 +17,8 @@ pub use health_probe::HealthProbeTask;
 pub use inspector::{
     InspectorAttemptRecord, InspectorOutcome, InspectorRecordPhase, InspectorRemovalReason,
     InspectorRequestBase, InspectorRequestRecord, InspectorRequestRecordInit, InspectorResetReason,
-    InspectorSnapshotEntry, InspectorStore, InspectorStreamEvent, InspectorTokenCounts, LiveRecord,
+    InspectorStore, InspectorStreamEvent, InspectorTokenCounts, InspectorVersionedRecord,
+    LiveRecord,
 };
 pub use inspector_persistence::stored_count as inspector_persisted_count;
 pub use stream_capture::{StreamCapture, StreamCaptureHandle, StreamEvent, StreamTimings};

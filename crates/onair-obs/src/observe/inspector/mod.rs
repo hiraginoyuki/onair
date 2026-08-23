@@ -8,8 +8,8 @@ mod ui;
 mod tests;
 
 pub use contract::{
-    InspectorRecordPhase, InspectorRemovalReason, InspectorResetReason, InspectorSnapshotEntry,
-    InspectorStreamEvent,
+    InspectorRecordPhase, InspectorRemovalReason, InspectorResetReason, InspectorStreamEvent,
+    InspectorVersionedRecord,
 };
 pub use live::LiveRecord;
 pub use records::{

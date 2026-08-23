@@ -115,6 +115,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/_onair/inspector", get(inspector_ui))
         .route("/_onair/inspector-next", get(inspector_next_ui))
         .route("/_onair/inspector-next/events", get(inspector_next_events))
+        .route(
+            "/_onair/inspector-next/requests/{record_id}",
+            get(inspector_next_request),
+        )
         .route("/_onair/inspector/events", get(inspector_events))
         .route("/_onair/inspector/requests", get(inspector_requests))
         .route(
@@ -386,6 +390,27 @@ async fn inspector_request(
     let mut response = state
         .inspector
         .get(&request_id)
+        .map(Json)
+        .map(IntoResponse::into_response)
+        .unwrap_or_else(|| {
+            ApiError::not_found("The requested inspector record does not exist.").into_response()
+        });
+    add_inspector_headers(&mut response);
+    response
+}
+
+async fn inspector_next_request(
+    State(state): State<Arc<AppState>>,
+    Path(record_id): Path<String>,
+    request: Request<Body>,
+) -> Response<Body> {
+    if let Some(response) = local_operator_gate(&state, &request) {
+        return response;
+    }
+
+    let mut response = state
+        .inspector
+        .get_versioned(&record_id)
         .map(Json)
         .map(IntoResponse::into_response)
         .unwrap_or_else(|| {

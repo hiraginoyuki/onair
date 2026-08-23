@@ -11,15 +11,23 @@
   } from "./lib/store";
   import { StreamSupervisor } from "./lib/stream";
   import type { StreamEventSource } from "./lib/stream";
+  import {
+    isSelectionResponseCurrent,
+    markSelectionDetached,
+    reconcileSelection,
+    selectionItem,
+    selectionRecordId
+  } from "./lib/records";
   import type {
     ColumnKey,
     InspectorAttempt,
     InspectorRecord,
+    SelectionState,
     StreamEvent,
-    Timeline
+    Timeline,
+    VersionedRecord
   } from "./lib/types";
 
-  type StoredRecord = { revision: number; record: InspectorRecord };
   type Widths = Partial<Record<ColumnKey, number>>;
   type TimelineField = { key: keyof Timeline; label: string };
   type PhaseField = { key: keyof InspectorAttempt; label: string };
@@ -57,13 +65,12 @@
     { key: "stream_complete_us", label: "stream done" }
   ];
 
-  let records = new Map<string, StoredRecord>();
+  let records = new Map<string, VersionedRecord>();
   let pending: StreamEvent[] = [];
-  let selectedId = readHashRecordId();
-  let selectedRecord: InspectorRecord | undefined;
-  let selectionRequest = 0;
+  let selection: SelectionState = { kind: "none" };
+  let selectionRequestToken = 0;
+  let projectionEpoch = 0;
   let streamReady = false;
-  let detachedSelected: StoredRecord | undefined;
   let filter = "";
   let sortKey: ColumnKey = "time";
   let sortDescending = true;
@@ -75,8 +82,6 @@
   let pausedNeedsResync = false;
   let recoveryNotice = "";
   let actionNotice = "";
-  let detailLoading = false;
-  let detailError = "";
   let retainedCount: number | undefined;
   let lastSequence = readLastSequence();
   let widths: Widths = loadWidths();
@@ -94,6 +99,10 @@
   let expandedAttempts = new Set<string>();
   const downloadUrls = new Set<string>();
 
+  $: selectedId = selectionRecordId(selection);
+  $: selectedItem = selectionItem(selection);
+  $: detailLoading = selection.kind === "loading";
+  $: detailError = selection.kind === "error" ? selection.message : "";
   $: filtered = Array.from(records.values())
     .map((entry) => entry.record)
     .filter((record) => matchesFilter(record, filterNeedle))
@@ -107,8 +116,8 @@
   $: visibleEnd = Math.min(filtered.length, Math.ceil((viewportTop + viewportHeight) / ROW_HEIGHT) + 8);
   $: visible = filtered.slice(visibleStart, visibleEnd);
   $: filterNeedle = filter.trim().toLowerCase();
-  $: selected = selectedRecord;
-  $: selectedIsDetached = Boolean(detachedSelected && detachedSelected.record.record_id === selectedId);
+  $: selected = selectedItem?.record;
+  $: selectedIsDetached = selection.kind === "ready" && selection.detached;
   $: selectedAttempts = selected ? attemptRecords(selected) : [];
   $: waterfallTotal = selected
     ? Math.max(selected.timeline.total_us, ...selectedAttempts.map((attempt) => attempt.ended_us || 0))
@@ -132,7 +141,10 @@
     connect();
     void refreshRuntime();
     operatorTimer = window.setInterval(() => void refreshRuntime(), 15_000);
-    if (selectedId) void loadSelectedById(selectedId, false);
+    const initialSelectedId = readHashRecordId();
+    if (initialSelectedId) {
+      void loadSelectedById(initialSelectedId, false, nextSelectionRequest());
+    }
     return () => {
       tableResizeObserver.disconnect();
       window.removeEventListener("resize", resize);
@@ -184,6 +196,31 @@
     }
   }
 
+  function nextSelectionRequest(): number {
+    selectionRequestToken += 1;
+    return selectionRequestToken;
+  }
+
+  function beginProjection() {
+    projectionEpoch += 1;
+    nextSelectionRequest();
+    connected = false;
+    streamReady = false;
+    if (!paused) {
+      records = new Map();
+      selection = markSelectionDetached(selection, records);
+    }
+    const recordId = selectionRecordId(selection);
+    if (recordId && selection.kind !== "ready") {
+      selection = {
+        kind: "loading",
+        recordId,
+        requestToken: selectionRequestToken,
+        epoch: projectionEpoch
+      };
+    }
+  }
+
   function connect(resetResume = false) {
     cancelLiveFlush();
     connected = false;
@@ -208,8 +245,7 @@
         apply: dispatchEvent,
         onSourceStart: () => {
           cancelLiveFlush();
-          connected = false;
-          streamReady = false;
+          beginProjection();
         },
         onStateChange: (state) => {
           connected = state === "live";
@@ -458,6 +494,10 @@
 
   function handleEvent(event: StreamEvent, replay = false, publish = true) {
     if (!replay && paused && (event.kind === "snapshot" || event.kind === "reset")) {
+      if (event.kind === "reset") {
+        projectionEpoch += 1;
+        nextSelectionRequest();
+      }
       pausedNeedsResync = true;
       return;
     }
@@ -472,7 +512,10 @@
         return;
       }
     }
-    const previousSelected = selectedId ? records.get(selectedId) : undefined;
+    const currentSelectionId = selectionRecordId(selection);
+    const previousSelected = currentSelectionId
+      ? records.get(currentSelectionId)
+      : undefined;
     lastSequence = Math.max(lastSequence, sequence);
     try {
       sessionStorage.setItem(sequenceKey, String(lastSequence));
@@ -481,13 +524,12 @@
     }
 
     if (event.kind === "reset") {
+      projectionEpoch += 1;
+      nextSelectionRequest();
       pending = [];
       droppedPending = false;
       streamReady = false;
       resetTableViewport();
-      if (selectedId && selectedRecord) {
-        detachedSelected = { revision: 0, record: selectedRecord };
-      }
       recoveryNotice = `stream reset: ${event.reason.replaceAll("_", " ")}`;
       showNotice("stream reset; snapshot reloaded", false);
       void refreshRuntime();
@@ -503,57 +545,56 @@
       streamReady = true;
       recoveryNotice = "";
       resetTableViewport();
-      if (selectedId && records.has(selectedId)) {
-        selectionRequest += 1;
-        detachedSelected = undefined;
-        selectedRecord = records.get(selectedId)!.record;
-        detailLoading = false;
-        detailError = "";
-      } else if (selectedId && !selectedRecord && !detailLoading) {
-        void loadSelectedById(selectedId, false);
-      } else if (!selectedId && records.size) {
+      const recordId = selectionRecordId(selection);
+      const canonical = recordId ? records.get(recordId) : undefined;
+      if (recordId) {
+        selection = reconcileSelection(
+          selection,
+          recordId,
+          canonical,
+          projectionEpoch,
+          records
+        );
+        if (!canonical || (selection.kind === "ready" && selection.detached)) {
+          void loadSelectedById(recordId, false, nextSelectionRequest());
+        }
+      } else if (records.size) {
         const newest = [...records.values()].reduce((current, candidate) =>
           candidate.record.started_at_unix_ms > current.record.started_at_unix_ms ? candidate : current
         );
-        select(newest.record, false);
+        selectVersioned(newest, false, projectionEpoch, nextSelectionRequest());
       }
     }
     if (event.kind === "record_upsert") {
-      if (
-        event.record_id === selectedId &&
-        detachedSelected &&
-        event.revision > detachedSelected.revision
-      ) {
-        detachedSelected = undefined;
-        selectedRecord = event.record;
-        detailError = "";
-      } else if (!selectedId) {
-        select(event.record, true);
-      }
-      if (
-        detachedSelected &&
-        event.record_id === selectedId &&
-        event.revision <= detachedSelected.revision
-      ) {
-        records.delete(event.record_id);
-        records = new Map(records);
-      }
-      const currentSelected = records.get(selectedId);
-      if (
-        event.record_id === selectedId &&
-        !detachedSelected &&
-        currentSelected?.revision === event.revision
-      ) {
-        selectionRequest += 1;
-        selectedRecord = currentSelected.record;
-        detailLoading = false;
-        detailError = "";
+      const recordId = selectionRecordId(selection);
+      const canonical = records.get(event.record_id);
+      if (event.record_id === recordId && canonical) {
+        selection = reconcileSelection(
+          selection,
+          recordId,
+          canonical,
+          projectionEpoch,
+          records
+        );
+      } else if (!recordId && canonical) {
+        selectVersioned(canonical, true, projectionEpoch, nextSelectionRequest());
       }
     }
-    if (selectedId && !records.has(selectedId) && previousSelected && !detachedSelected) {
-      detachedSelected = previousSelected;
-      selectedRecord = previousSelected.record;
+    if (
+      event.kind !== "reset" &&
+      currentSelectionId &&
+      !records.has(currentSelectionId) &&
+      previousSelected
+    ) {
+      selection = reconcileSelection(
+        selection,
+        currentSelectionId,
+        previousSelected,
+        projectionEpoch,
+        records
+      );
     }
+    selection = markSelectionDetached(selection, records);
     if (event.kind !== "reset") {
       streamReady = true;
       malformedStream = false;
@@ -760,68 +801,129 @@
     return columns.reduce((total, column) => total + columnWidth(column.key, currentWidths), 0);
   }
 
-  function select(record: InspectorRecord, updateHash = true) {
-    selectionRequest += 1;
-    selectedId = record.record_id;
-    selectedRecord = record;
-    detachedSelected = undefined;
-    detailLoading = false;
-    detailError = "";
+  function selectVersioned(
+    item: VersionedRecord,
+    updateHash: boolean,
+    epoch: number,
+    _requestToken: number
+  ) {
+    selection = reconcileSelection(selection, item.record_id, item, epoch, records);
     expandedAttempts = new Set();
-    if (updateHash) history.replaceState(null, "", `#${encodeURIComponent(record.record_id)}`);
+    if (updateHash) history.replaceState(null, "", `#${encodeURIComponent(item.record_id)}`);
+  }
+
+  function selectDisplayed(recordId: string) {
+    const requestToken = nextSelectionRequest();
+    const item = records.get(recordId);
+    if (item) selectVersioned(item, true, projectionEpoch, requestToken);
   }
 
   async function handleHashChange() {
+    const requestToken = nextSelectionRequest();
     const target = readHashRecordId();
     if (!target) {
-      selectionRequest += 1;
-      selectedId = "";
-      selectedRecord = undefined;
-      detachedSelected = undefined;
-      detailLoading = false;
-      detailError = "";
+      selection = { kind: "none" };
       return;
     }
-    await loadSelectedById(target, false);
+    await loadSelectedById(target, false, requestToken);
   }
 
-  async function loadSelectedById(recordId: string, updateHash: boolean) {
+  async function loadSelectedById(
+    recordId: string,
+    updateHash: boolean,
+    requestToken: number
+  ) {
     if (!recordId) return;
-    const request = ++selectionRequest;
-    selectedId = recordId;
-    selectedRecord = undefined;
-    detachedSelected = undefined;
-    detailLoading = false;
-    detailError = "";
-    if (records.has(recordId)) {
-      select(records.get(recordId)!.record, updateHash);
-      return;
+    const prior = selection;
+    if (prior.kind !== "ready" || prior.item.record_id !== recordId) {
+      selection = {
+        kind: "loading",
+        recordId,
+        requestToken,
+        epoch: projectionEpoch
+      };
+      expandedAttempts = new Set();
     }
-    detailLoading = true;
+    if (updateHash) history.replaceState(null, "", `#${encodeURIComponent(recordId)}`);
+
+    const displayed = records.get(recordId);
+    if (displayed) {
+      selectVersioned(displayed, false, projectionEpoch, requestToken);
+      if (selection.kind !== "ready" || !selection.detached) return;
+    }
+
+    const requestEpoch = projectionEpoch;
     try {
-      const response = await fetch(`/_onair/inspector/requests/${encodeURIComponent(recordId)}`, {
-        cache: "no-store"
-      });
+      const response = await fetch(
+        `/_onair/inspector-next/requests/${encodeURIComponent(recordId)}`,
+        { cache: "no-store" }
+      );
       if (!response.ok) throw new Error(`record ${recordId} is not retained`);
-      const record = normalizeInspectorRecord(await response.json());
-      if (!isInspectorRecord(record)) throw new Error(`record ${recordId} has an invalid shape`);
-      if (request !== selectionRequest || selectedId !== recordId) return;
-      const current = records.get(recordId);
-      if (current) {
-        detachedSelected = undefined;
-        selectedRecord = current.record;
-        detailLoading = false;
-        detailError = "";
+      const value = await response.json();
+      if (!value || typeof value !== "object") {
+        throw new Error(`record ${recordId} has an invalid shape`);
+      }
+      const candidate = value as Record<string, unknown>;
+      const normalizedRecord = normalizeInspectorRecord(candidate.record);
+      const fetched = {
+        record_id: candidate.record_id,
+        revision: candidate.revision,
+        record: normalizedRecord
+      };
+      if (
+        fetched.record_id !== recordId ||
+        !isSafeInteger(fetched.revision) ||
+        fetched.revision === 0 ||
+        !isInspectorRecord(fetched.record)
+      ) {
+        throw new Error(`record ${recordId} has an invalid shape`);
+      }
+      if (
+        !isSelectionResponseCurrent(
+          requestToken,
+          selectionRequestToken,
+          requestEpoch,
+          projectionEpoch,
+          recordId,
+          selection
+        )
+      ) {
         return;
       }
-      detachedSelected = { revision: 0, record };
-      selectedRecord = record;
-      if (updateHash) history.replaceState(null, "", `#${encodeURIComponent(recordId)}`);
+      selection = reconcileSelection(
+        selection,
+        recordId,
+        fetched as VersionedRecord,
+        requestEpoch,
+        records
+      );
+      selection = reconcileSelection(
+        selection,
+        recordId,
+        records.get(recordId),
+        projectionEpoch,
+        records
+      );
     } catch (error) {
-      if (request !== selectionRequest || selectedId !== recordId) return;
-      detailError = error instanceof Error ? error.message : "record lookup failed";
-    } finally {
-      if (request === selectionRequest) detailLoading = false;
+      if (
+        !isSelectionResponseCurrent(
+          requestToken,
+          selectionRequestToken,
+          requestEpoch,
+          projectionEpoch,
+          recordId,
+          selection
+        )
+      ) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : "record lookup failed";
+      if (selection.kind === "ready" && selection.item.record_id === recordId) {
+        selection = markSelectionDetached(selection, records);
+        showNotice(message, false);
+      } else {
+        selection = { kind: "error", recordId, message, epoch: projectionEpoch };
+      }
     }
   }
 
@@ -1133,11 +1235,11 @@
               class:detached={record.record_id === selectedId && selectedIsDetached}
               aria-selected={record.record_id === selectedId}
               aria-label={`Inspect request ${record.record_id}`}
-              on:click={() => select(record)}
+              on:click={() => selectDisplayed(record.record_id)}
               on:keydown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
-                  select(record);
+                  selectDisplayed(record.record_id);
                 }
               }}
               tabindex="0"

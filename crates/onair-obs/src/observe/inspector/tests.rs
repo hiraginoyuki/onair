@@ -102,6 +102,35 @@ fn store_retains_latest_records() {
     assert!(store.get("three").is_some());
 }
 
+#[test]
+fn versioned_lookup_returns_each_retained_revision() {
+    let store = InspectorStore::new();
+    store.upsert_initial(true, 10, in_flight_record("versioned"));
+    assert_eq!(store.get_versioned("versioned").unwrap().revision, 1);
+
+    store.upsert(true, 10, in_flight_record("versioned"));
+    assert_eq!(store.get_versioned("versioned").unwrap().revision, 2);
+
+    store.record(true, 10, test_record("versioned"));
+    let retained = store
+        .get_versioned("versioned")
+        .expect("versioned record is retained");
+    assert_eq!(retained.record_id, "versioned");
+    assert_eq!(retained.revision, 3);
+    assert_eq!(retained.record.base.record_id, "versioned");
+    assert_eq!(store.get("versioned").unwrap().base.record_id, "versioned");
+
+    let InspectorStreamEvent::Snapshot { records, .. } = store.snapshot_event(10) else {
+        panic!("snapshot event expected");
+    };
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&records[0]).unwrap(),
+        serde_json::to_value(&retained).unwrap()
+    );
+    assert!(store.get_versioned("missing").is_none());
+}
+
 fn in_flight_count(store: &InspectorStore) -> usize {
     store
         .records_limited(usize::MAX)

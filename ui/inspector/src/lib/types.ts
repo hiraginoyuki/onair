@@ -78,11 +78,23 @@ export type InspectorRecord = {
   timeline: Timeline;
 };
 
+export type VersionedRecord = {
+  record_id: string;
+  revision: number;
+  record: InspectorRecord;
+};
+
+export type SelectionState =
+  | { kind: "none" }
+  | { kind: "loading"; recordId: string; requestToken: number; epoch: number }
+  | { kind: "ready"; item: VersionedRecord; detached: boolean; epoch: number }
+  | { kind: "error"; recordId: string; message: string; epoch: number };
+
 export type StreamEvent =
   | {
       kind: "snapshot";
       stream_seq: number;
-      records: { record_id: string; revision: number; record: InspectorRecord }[];
+      records: VersionedRecord[];
     }
   | {
       kind: "record_upsert";
