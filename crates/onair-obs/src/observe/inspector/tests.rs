@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Barrier, mpsc};
+use std::time::Duration;
 
 use onair_core::config::InspectorPersistenceConfig;
 
@@ -7,7 +10,7 @@ use super::records::{
     InspectorOutcome, InspectorRequestBase, InspectorRequestRecord, InspectorRequestRecordInit,
     InspectorTokenCounts,
 };
-use super::store::InspectorStore;
+use super::store::{InspectorStore, ProjectionTestPoint};
 use super::ui::ui_html;
 use crate::observe::TimelineSnapshot;
 use crate::observe::inspector::{
@@ -196,6 +199,216 @@ fn v2_stream_emits_retention_removal_before_replacement() {
             ..
         } if record_id == "newest"
     ));
+}
+
+#[test]
+fn v2_snapshot_and_queued_update_share_one_authoritative_cut() {
+    use tokio::sync::broadcast::error::TryRecvError;
+
+    let store = Arc::new(InspectorStore::new());
+    store.upsert_initial(true, 10, in_flight_record("same"));
+    let (mut receiver, _) = store.subscribe_v2(None, 10);
+
+    let snapshot_locked = Arc::new(Barrier::new(2));
+    let release_snapshot = Arc::new(Barrier::new(2));
+    let writer_before_lock = Arc::new(Barrier::new(2));
+    let writer_mutated = Arc::new(AtomicBool::new(false));
+    store.set_projection_test_hook(Some(Arc::new({
+        let snapshot_locked = Arc::clone(&snapshot_locked);
+        let release_snapshot = Arc::clone(&release_snapshot);
+        let writer_before_lock = Arc::clone(&writer_before_lock);
+        let writer_mutated = Arc::clone(&writer_mutated);
+        move |point| match point {
+            ProjectionTestPoint::SnapshotRecordsLocked => {
+                snapshot_locked.wait();
+                release_snapshot.wait();
+            }
+            ProjectionTestPoint::WriterBeforeRecordsLock { record_id } if record_id == "same" => {
+                writer_before_lock.wait();
+            }
+            ProjectionTestPoint::WriterRecordsMutated { record_id } if record_id == "same" => {
+                writer_mutated.store(true, Ordering::Release);
+            }
+            _ => {}
+        }
+    })));
+
+    let snapshot_store = Arc::clone(&store);
+    let snapshot_thread = std::thread::spawn(move || snapshot_store.snapshot_event(10));
+    snapshot_locked.wait();
+
+    let writer_store = Arc::clone(&store);
+    let writer_thread = std::thread::spawn(move || {
+        let mut update = in_flight_record("same");
+        update.timeline.auth_done_us = Some(456);
+        writer_store.upsert(true, 10, update);
+    });
+    writer_before_lock.wait();
+
+    // The writer is inside the real mutation helper and is about to acquire
+    // the retained-record lock. The snapshot still owns that lock, so the
+    // writer cannot mutate records or publish a sequence across this cut.
+    assert!(!writer_mutated.load(Ordering::Acquire));
+    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+
+    release_snapshot.wait();
+    let snapshot = snapshot_thread.join().expect("snapshot thread completes");
+    writer_thread.join().expect("writer thread completes");
+    store.set_projection_test_hook(None);
+
+    let InspectorStreamEvent::Snapshot {
+        stream_seq,
+        records,
+    } = snapshot
+    else {
+        panic!("snapshot event expected");
+    };
+    assert_eq!(stream_seq, 1);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].revision, 1);
+
+    let queued = receiver.blocking_recv().expect("queued writer update");
+    assert!(matches!(
+        queued,
+        InspectorStreamEvent::RecordUpsert {
+            stream_seq: 2,
+            revision: 2,
+            ..
+        }
+    ));
+
+    let mut projected: HashMap<String, super::InspectorVersionedRecord> = records
+        .into_iter()
+        .map(|record| (record.record_id.clone(), record))
+        .collect();
+    let InspectorStreamEvent::RecordUpsert {
+        record_id,
+        revision,
+        record,
+        ..
+    } = queued
+    else {
+        panic!("record upsert expected");
+    };
+    projected.insert(
+        record_id.clone(),
+        super::InspectorVersionedRecord {
+            record_id,
+            revision,
+            record: *record,
+        },
+    );
+
+    let InspectorStreamEvent::Snapshot {
+        records: canonical, ..
+    } = store.snapshot_event(10)
+    else {
+        panic!("canonical snapshot expected");
+    };
+    let mut projected: Vec<_> = projected.into_values().collect();
+    projected.sort_by(|left, right| left.record_id.cmp(&right.record_id));
+    assert_eq!(
+        serde_json::to_value(projected).unwrap(),
+        serde_json::to_value(canonical).unwrap()
+    );
+}
+
+#[test]
+fn concurrent_retention_one_writers_publish_without_resurrection_or_deadlock() {
+    let store = Arc::new(InspectorStore::new());
+    let (mut receiver, _) = store.subscribe_v2(None, 1);
+
+    let first_mutated = Arc::new(Barrier::new(2));
+    let release_first = Arc::new(Barrier::new(2));
+    let second_before_lock = Arc::new(Barrier::new(2));
+    let second_mutated = Arc::new(AtomicBool::new(false));
+    store.set_projection_test_hook(Some(Arc::new({
+        let first_mutated = Arc::clone(&first_mutated);
+        let release_first = Arc::clone(&release_first);
+        let second_before_lock = Arc::clone(&second_before_lock);
+        let second_mutated = Arc::clone(&second_mutated);
+        move |point| match point {
+            ProjectionTestPoint::WriterRecordsMutated { record_id } if record_id == "first" => {
+                first_mutated.wait();
+                release_first.wait();
+            }
+            ProjectionTestPoint::WriterBeforeRecordsLock { record_id } if record_id == "second" => {
+                second_before_lock.wait();
+            }
+            ProjectionTestPoint::WriterRecordsMutated { record_id } if record_id == "second" => {
+                second_mutated.store(true, Ordering::Release);
+            }
+            _ => {}
+        }
+    })));
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let first_store = Arc::clone(&store);
+    let first_done = done_tx.clone();
+    let first = std::thread::spawn(move || {
+        first_store.record(true, 1, test_record("first"));
+        first_done.send("first").expect("report first completion");
+    });
+    first_mutated.wait();
+
+    let second_store = Arc::clone(&store);
+    let second = std::thread::spawn(move || {
+        second_store.record(true, 1, test_record("second"));
+        done_tx.send("second").expect("report second completion");
+    });
+    second_before_lock.wait();
+
+    // The first writer holds both ownership of its retained mutation and the
+    // right to publish it. The second writer has entered the same helper but
+    // cannot evict or publish until the first writer completes.
+    assert!(!second_mutated.load(Ordering::Acquire));
+    release_first.wait();
+
+    let mut completed = vec![
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first writer completes without deadlock"),
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("second writer completes without deadlock"),
+    ];
+    completed.sort_unstable();
+    assert_eq!(completed, ["first", "second"]);
+    first.join().expect("first writer thread joins");
+    second.join().expect("second writer thread joins");
+    store.set_projection_test_hook(None);
+
+    assert!(matches!(
+        receiver.blocking_recv().expect("first upsert"),
+        InspectorStreamEvent::RecordUpsert {
+            stream_seq: 1,
+            record_id,
+            revision: 1,
+            ..
+        } if record_id == "first"
+    ));
+    assert!(matches!(
+        receiver.blocking_recv().expect("first removal"),
+        InspectorStreamEvent::RecordRemoved {
+            stream_seq: 2,
+            record_id,
+            revision: 2,
+            reason: InspectorRemovalReason::RetentionEvicted,
+        } if record_id == "first"
+    ));
+    assert!(matches!(
+        receiver.blocking_recv().expect("second replacement"),
+        InspectorStreamEvent::RecordUpsert {
+            stream_seq: 3,
+            record_id,
+            revision: 1,
+            ..
+        } if record_id == "second"
+    ));
+
+    let canonical = store.records_limited(usize::MAX);
+    assert_eq!(canonical.len(), 1);
+    assert_eq!(canonical[0].base.record_id, "second");
 }
 
 #[test]

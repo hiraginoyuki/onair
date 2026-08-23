@@ -34,6 +34,8 @@ pub(super) struct InspectorStoreInner {
     pub(super) v2_events: broadcast::Sender<InspectorStreamEvent>,
     pub(super) v2_state: Mutex<V2State>,
     pub(super) persistence: Option<PersistenceComponents>,
+    #[cfg(test)]
+    projection_test_hook: Mutex<Option<ProjectionTestHook>>,
 }
 
 pub(super) struct RetainedRecords {
@@ -59,6 +61,20 @@ struct UpsertResult {
 pub(super) struct V2State {
     next_sequence: u64,
     replay: VecDeque<InspectorStreamEvent>,
+}
+
+#[cfg(test)]
+pub(super) type ProjectionTestHook = Arc<dyn Fn(ProjectionTestPoint) + Send + Sync>;
+
+#[cfg(test)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum ProjectionTestPoint {
+    WriterBeforeRecordsLock { record_id: String },
+    WriterRecordsMutated { record_id: String },
+    WriterV2Locked { record_id: String },
+    WriterPublished { record_id: String },
+    SnapshotRecordsLocked,
+    SnapshotV2Locked,
 }
 
 pub(super) struct PersistenceComponents {
@@ -235,6 +251,8 @@ impl InspectorStore {
                     replay: VecDeque::with_capacity(V2_REPLAY_CAPACITY),
                 }),
                 persistence,
+                #[cfg(test)]
+                projection_test_hook: Mutex::new(None),
             }),
         }
     }
@@ -245,13 +263,7 @@ impl InspectorStore {
         }
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        let result = {
-            let mut records = self.inner.records.lock();
-            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests)
-        };
-        let UpsertResult { revision, evicted } = result;
-        self.publish_v2_removed(evicted);
-        self.publish_v2(record.clone(), InspectorRecordPhase::Terminal, revision);
+        self.mutate_and_publish_v2(&record, retention_requests, InspectorRecordPhase::Terminal);
 
         if let Some(persistence) = &self.inner.persistence {
             persistence
@@ -268,13 +280,7 @@ impl InspectorStore {
         }
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        let result = {
-            let mut records = self.inner.records.lock();
-            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests)
-        };
-        let UpsertResult { revision, evicted } = result;
-        self.publish_v2_removed(evicted);
-        self.publish_v2(record.clone(), InspectorRecordPhase::Live, revision);
+        self.mutate_and_publish_v2(&record, retention_requests, InspectorRecordPhase::Live);
 
         let _ = self.inner.events.send(record);
     }
@@ -290,13 +296,7 @@ impl InspectorStore {
         }
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        let result = {
-            let mut records = self.inner.records.lock();
-            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests)
-        };
-        let UpsertResult { revision, evicted } = result;
-        self.publish_v2_removed(evicted);
-        self.publish_v2(record.clone(), InspectorRecordPhase::Initial, revision);
+        self.mutate_and_publish_v2(&record, retention_requests, InspectorRecordPhase::Initial);
         let _ = self.inner.events.send(record);
     }
 
@@ -311,13 +311,7 @@ impl InspectorStore {
         }
 
         let retention_requests = retention_requests.clamp(1, MAX_RETENTION_REQUESTS);
-        let result = {
-            let mut records = self.inner.records.lock();
-            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests)
-        };
-        let UpsertResult { revision, evicted } = result;
-        self.publish_v2_removed(evicted);
-        self.publish_v2(record.clone(), InspectorRecordPhase::Terminal, revision);
+        self.mutate_and_publish_v2(&record, retention_requests, InspectorRecordPhase::Terminal);
 
         if let Some(persistence) = &self.inner.persistence {
             persistence
@@ -423,20 +417,35 @@ impl InspectorStore {
     }
 
     fn snapshot_event_inner(&self, limit: usize) -> InspectorStreamEvent {
-        let records = self.inner.records.lock();
-        let skip = records.retention_order.len().saturating_sub(limit.max(1));
-        let records = records
+        // The only nested Inspector locks are always acquired in this order:
+        // retained records, then v2 state. Keeping the records guard through
+        // the sequence read makes the snapshot one authoritative projection
+        // cut with respect to every mutation published by
+        // `mutate_and_publish_v2`.
+        let records_guard = self.inner.records.lock();
+        #[cfg(test)]
+        self.projection_test_point(ProjectionTestPoint::SnapshotRecordsLocked);
+        let skip = records_guard
+            .retention_order
+            .len()
+            .saturating_sub(limit.max(1));
+        let records = records_guard
             .retention_order
             .iter()
             .skip(skip)
-            .filter_map(|record_id| records.records_by_id.get(record_id))
+            .filter_map(|record_id| records_guard.records_by_id.get(record_id))
             .map(|retained| InspectorVersionedRecord {
                 record_id: retained.record.base.record_id.clone(),
                 revision: retained.revision,
                 record: retained.record.clone(),
             })
             .collect();
-        let stream_seq = self.inner.v2_state.lock().next_sequence;
+        let v2_state = self.inner.v2_state.lock();
+        #[cfg(test)]
+        self.projection_test_point(ProjectionTestPoint::SnapshotV2Locked);
+        let stream_seq = v2_state.next_sequence;
+        drop(v2_state);
+        drop(records_guard);
         InspectorStreamEvent::Snapshot {
             stream_seq,
             records,
@@ -452,21 +461,60 @@ impl InspectorStore {
         }
     }
 
-    fn publish_v2(
+    fn mutate_and_publish_v2(
         &self,
-        record: InspectorRequestRecord,
+        record: &InspectorRequestRecord,
+        retention_requests: usize,
         phase: InspectorRecordPhase,
-        revision: u64,
     ) {
+        let record_id = record.base.record_id.clone();
+        #[cfg(test)]
+        self.projection_test_point(ProjectionTestPoint::WriterBeforeRecordsLock {
+            record_id: record_id.clone(),
+        });
+
+        // This lock order is shared with snapshot construction. Record
+        // insertion/replacement/eviction and every corresponding v2 event are
+        // one ordered operation: no later writer can publish before this
+        // writer, and no snapshot can pair these records with an older
+        // sequence (or vice versa).
+        let mut records = self.inner.records.lock();
+        let UpsertResult { revision, evicted } =
+            upsert_with_fifo_eviction(&mut records, record.clone(), retention_requests);
+        #[cfg(test)]
+        self.projection_test_point(ProjectionTestPoint::WriterRecordsMutated {
+            record_id: record_id.clone(),
+        });
+
         let mut state = self.inner.v2_state.lock();
-        state.next_sequence = state.next_sequence.saturating_add(1);
+        #[cfg(test)]
+        self.projection_test_point(ProjectionTestPoint::WriterV2Locked {
+            record_id: record_id.clone(),
+        });
+
+        for evicted in evicted {
+            let event = InspectorStreamEvent::RecordRemoved {
+                stream_seq: next_v2_sequence(&mut state),
+                record_id: evicted.record_id,
+                revision: evicted.revision,
+                reason: super::InspectorRemovalReason::RetentionEvicted,
+            };
+            self.publish_v2_locked(&mut state, event);
+        }
+
         let event = InspectorStreamEvent::RecordUpsert {
-            stream_seq: state.next_sequence,
-            record_id: record.base.record_id.clone(),
+            stream_seq: next_v2_sequence(&mut state),
+            record_id: record_id.clone(),
             revision,
             phase,
-            record: Box::new(record),
+            record: Box::new(record.clone()),
         };
+        self.publish_v2_locked(&mut state, event);
+        #[cfg(test)]
+        self.projection_test_point(ProjectionTestPoint::WriterPublished { record_id });
+    }
+
+    fn publish_v2_locked(&self, state: &mut V2State, event: InspectorStreamEvent) {
         if state.replay.len() >= V2_REPLAY_CAPACITY {
             state.replay.pop_front();
         }
@@ -474,21 +522,16 @@ impl InspectorStore {
         let _ = self.inner.v2_events.send(event);
     }
 
-    fn publish_v2_removed(&self, evicted: Vec<EvictedRecord>) {
-        for evicted in evicted {
-            let mut state = self.inner.v2_state.lock();
-            state.next_sequence = state.next_sequence.saturating_add(1);
-            let event = InspectorStreamEvent::RecordRemoved {
-                stream_seq: state.next_sequence,
-                record_id: evicted.record_id,
-                revision: evicted.revision,
-                reason: super::InspectorRemovalReason::RetentionEvicted,
-            };
-            if state.replay.len() >= V2_REPLAY_CAPACITY {
-                state.replay.pop_front();
-            }
-            state.replay.push_back(event.clone());
-            let _ = self.inner.v2_events.send(event);
+    #[cfg(test)]
+    pub(super) fn set_projection_test_hook(&self, hook: Option<ProjectionTestHook>) {
+        *self.inner.projection_test_hook.lock() = hook;
+    }
+
+    #[cfg(test)]
+    fn projection_test_point(&self, point: ProjectionTestPoint) {
+        let hook = self.inner.projection_test_hook.lock().clone();
+        if let Some(hook) = hook {
+            hook(point);
         }
     }
 
@@ -503,6 +546,11 @@ impl InspectorStore {
         }
         record_id
     }
+}
+
+fn next_v2_sequence(state: &mut V2State) -> u64 {
+    state.next_sequence = state.next_sequence.saturating_add(1);
+    state.next_sequence
 }
 
 fn event_sequence(event: &InspectorStreamEvent) -> Option<u64> {
