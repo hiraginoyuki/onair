@@ -528,6 +528,21 @@ impl InspectorStore {
     }
 
     #[cfg(test)]
+    pub(super) fn v2_replay_measurement(&self) -> (usize, usize, usize) {
+        let state = self.inner.v2_state.lock();
+        let serialized_bytes = state
+            .replay
+            .iter()
+            .map(|event| {
+                serde_json::to_vec(event)
+                    .expect("replay event serializes")
+                    .len()
+            })
+            .sum();
+        (state.replay.len(), serialized_bytes, V2_REPLAY_CAPACITY)
+    }
+
+    #[cfg(test)]
     fn projection_test_point(&self, point: ProjectionTestPoint) {
         let hook = self.inner.projection_test_hook.lock().clone();
         if let Some(hook) = hook {

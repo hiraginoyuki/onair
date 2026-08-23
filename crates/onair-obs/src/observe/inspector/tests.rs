@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::hint::black_box;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use onair_core::config::InspectorPersistenceConfig;
 
@@ -409,6 +410,150 @@ fn concurrent_retention_one_writers_publish_without_resurrection_or_deadlock() {
     let canonical = store.records_limited(usize::MAX);
     assert_eq!(canonical.len(), 1);
     assert_eq!(canonical[0].base.record_id, "second");
+}
+
+#[test]
+#[ignore = "synthetic measurement harness; run explicitly with --ignored --nocapture"]
+fn measure_snapshot_and_replay_behavior() {
+    let snapshot_corpora = [100, 1_000]
+        .into_iter()
+        .map(measure_snapshot_corpus)
+        .collect::<Vec<_>>();
+    let report = serde_json::json!({
+        "schema": "onair-inspector-snapshot-replay-measurement-v1",
+        "samples": {
+            "warmups": 10,
+            "recorded": 50,
+        },
+        "snapshot_corpora": snapshot_corpora,
+        "directed_replay": directed_replay_measurement(),
+        "production_observations": {
+            "reconnect_frequency": "unavailable_without_production_telemetry",
+            "replay_hit_rate": "unavailable_without_production_telemetry",
+            "directed_cases_are_production_frequency": false,
+        },
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("measurement report serializes")
+    );
+}
+
+fn measure_snapshot_corpus(record_count: usize) -> serde_json::Value {
+    let store = InspectorStore::new();
+    for index in 0..record_count {
+        store.record(true, record_count, deterministic_measurement_record(index));
+    }
+
+    let construction = measure_percentiles(|| store.snapshot_event(record_count));
+    let snapshot = store.snapshot_event(record_count);
+    let serialized_snapshot = serde_json::to_vec(&snapshot).expect("snapshot serializes");
+    let serialization = measure_percentiles(|| {
+        serde_json::to_vec(&snapshot).expect("snapshot serializes during measurement")
+    });
+    let (replay_events, replay_serialized_bytes, configured_capacity_events) =
+        store.v2_replay_measurement();
+
+    serde_json::json!({
+        "record_count": record_count,
+        "serialized_snapshot_bytes": serialized_snapshot.len(),
+        "snapshot_construction_us": construction,
+        "snapshot_serialization_us": serialization,
+        "replay_buffer": {
+            "configured_capacity_events": configured_capacity_events,
+            "retained_events": replay_events,
+            "serialized_event_bytes": replay_serialized_bytes,
+        },
+    })
+}
+
+fn measure_percentiles<T>(mut operation: impl FnMut() -> T) -> serde_json::Value {
+    for _ in 0..10 {
+        black_box(operation());
+    }
+    let mut samples = Vec::with_capacity(50);
+    for _ in 0..50 {
+        let started = Instant::now();
+        black_box(operation());
+        samples.push(started.elapsed().as_secs_f64() * 1_000_000.0);
+    }
+    samples.sort_by(f64::total_cmp);
+    serde_json::json!({
+        "p50": percentile(&samples, 50),
+        "p95": percentile(&samples, 95),
+    })
+}
+
+fn percentile(samples: &[f64], percentile: usize) -> f64 {
+    let rank = (samples.len() * percentile).div_ceil(100);
+    samples[rank.saturating_sub(1).min(samples.len().saturating_sub(1))]
+}
+
+fn deterministic_measurement_record(index: usize) -> InspectorRequestRecord {
+    let mut record = test_record(&format!("measurement-{index:04}"));
+    let started_at_unix_ms = 1_700_000_000_000_u64.saturating_add(index as u64);
+    record.base.started_at_unix_ms = started_at_unix_ms;
+    record.completed_at_unix_ms = started_at_unix_ms.saturating_add(1);
+    record.timeline = TimelineSnapshot {
+        started_unix_ms: started_at_unix_ms,
+        total_us: 1_000_u64.saturating_add(index as u64),
+        proxy_entry_us: 0,
+        ..TimelineSnapshot::default()
+    };
+    record
+}
+
+fn directed_replay_measurement() -> serde_json::Value {
+    let store = InspectorStore::new();
+    for revision in 0..=4_096 {
+        let mut record = deterministic_measurement_record(0);
+        record.timeline.total_us = revision;
+        store.upsert(true, 1, record);
+    }
+
+    let current_sequence = stream_sequence(&store.snapshot_event(1));
+    let (_, hit) = store.subscribe_v2(Some(current_sequence.saturating_sub(1)), 1);
+    let (_, current) = store.subscribe_v2(Some(current_sequence), 1);
+    let (_, miss) = store.subscribe_v2(Some(0), 1);
+    let sequence_after_miss = miss.last().map(stream_sequence).unwrap_or(current_sequence);
+    let future_cursor = sequence_after_miss.saturating_add(1);
+    let (_, future) = store.subscribe_v2(Some(future_cursor), 1);
+
+    serde_json::json!({
+        "hit": directed_replay_case(current_sequence.saturating_sub(1), &hit),
+        "current": directed_replay_case(current_sequence, &current),
+        "miss": directed_replay_case(0, &miss),
+        "future": directed_replay_case(future_cursor, &future),
+    })
+}
+
+fn directed_replay_case(cursor: u64, events: &[InspectorStreamEvent]) -> serde_json::Value {
+    serde_json::json!({
+        "cursor": cursor,
+        "event_count": events.len(),
+        "event_kinds": events.iter().map(stream_event_kind).collect::<Vec<_>>(),
+        "authoritative_snapshot": events
+            .iter()
+            .any(|event| matches!(event, InspectorStreamEvent::Snapshot { .. })),
+    })
+}
+
+fn stream_event_kind(event: &InspectorStreamEvent) -> &'static str {
+    match event {
+        InspectorStreamEvent::Snapshot { .. } => "snapshot",
+        InspectorStreamEvent::RecordUpsert { .. } => "record_upsert",
+        InspectorStreamEvent::RecordRemoved { .. } => "record_removed",
+        InspectorStreamEvent::Reset { .. } => "reset",
+    }
+}
+
+fn stream_sequence(event: &InspectorStreamEvent) -> u64 {
+    match event {
+        InspectorStreamEvent::Snapshot { stream_seq, .. }
+        | InspectorStreamEvent::RecordUpsert { stream_seq, .. }
+        | InspectorStreamEvent::RecordRemoved { stream_seq, .. }
+        | InspectorStreamEvent::Reset { stream_seq, .. } => *stream_seq,
+    }
 }
 
 #[test]

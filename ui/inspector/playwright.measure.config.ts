@@ -1,24 +1,27 @@
 import { defineConfig } from "@playwright/test";
 
+if (process.env.CI) {
+  throw new Error("Inspector browser measurements are local-only and must not run in CI");
+}
+
 const host = "127.0.0.1";
-const port = 4179;
+const port = 4180;
 const baseURL = `http://${host}:${port}`;
 
 export default defineConfig({
-  testDir: "./tests/browser",
-  testIgnore: "**/*.measure.spec.ts",
+  testDir: "./tests/measure",
   fullyParallel: false,
-  forbidOnly: Boolean(process.env.CI),
+  forbidOnly: true,
   retries: 0,
-  workers: process.env.CI ? 1 : undefined,
+  workers: 1,
   reporter: "line",
-  outputDir: "test-results/playwright",
-  expect: { timeout: 5_000 },
+  outputDir: "test-results/measure",
+  timeout: 120_000,
   use: {
     baseURL,
     headless: true,
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
+    trace: "off",
+    screenshot: "off",
     video: "off"
   },
   webServer: {
@@ -34,5 +37,5 @@ export default defineConfig({
       INSPECTOR_BROWSER_TEST_PORT: String(port)
     }
   },
-  projects: [{ name: "chromium", use: { browserName: "chromium" } }]
+  projects: [{ name: "chromium-measurement", use: { browserName: "chromium" } }]
 });

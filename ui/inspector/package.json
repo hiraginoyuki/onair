@@ -9,7 +9,8 @@
     "check:artifact": "node scripts/check-artifact.mjs",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run src --environment node",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "measure:browser": "playwright test --config=playwright.measure.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

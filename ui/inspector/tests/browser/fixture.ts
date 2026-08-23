@@ -40,7 +40,8 @@ export class InspectorHarness {
 
   constructor(
     readonly page: Page,
-    private readonly diagnostics: BrowserDiagnostics
+    private readonly diagnostics: BrowserDiagnostics,
+    private readonly expectedOrigin: string
   ) {}
 
   async install(): Promise<void> {
@@ -193,7 +194,7 @@ export class InspectorHarness {
   private async routeRequest(route: Route): Promise<void> {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.origin !== "http://127.0.0.1:4179") {
+    if (url.origin !== this.expectedOrigin) {
       this.diagnostics.unexpectedRequests.push(request.url());
       await route.abort();
       return;
@@ -241,7 +242,8 @@ type Fixtures = {
 };
 
 export const test = base.extend<Fixtures>({
-  inspector: async ({ page }, use) => {
+  inspector: async ({ page, baseURL }, use) => {
+    if (!baseURL) throw new Error("Inspector browser fixture requires a base URL");
     const diagnostics: BrowserDiagnostics = {
       consoleErrors: [],
       expectedHttpErrors: [],
@@ -260,7 +262,7 @@ export const test = base.extend<Fixtures>({
     });
     page.on("pageerror", (error) => diagnostics.pageErrors.push(error.message));
 
-    const inspector = new InspectorHarness(page, diagnostics);
+    const inspector = new InspectorHarness(page, diagnostics, new URL(baseURL).origin);
     await inspector.install();
     await use(inspector);
 
