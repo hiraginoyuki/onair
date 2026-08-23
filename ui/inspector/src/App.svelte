@@ -101,8 +101,8 @@
 
   $: selectedId = selectionRecordId(selection);
   $: selectedItem = selectionItem(selection);
-  $: detailLoading = selection.kind === "loading";
-  $: detailError = selection.kind === "error" ? selection.message : "";
+  $: detailViewState =
+    selection.kind === "ready" ? (selection.detached ? "detached-ready" : "ready") : selection.kind;
   $: streamPresentation = deriveStreamPresentation({
     connectionState,
     paused,
@@ -1026,20 +1026,43 @@
       </div>
     </div>
 
-    <aside class="detail-pane" aria-label="Selected request details">
+    <aside
+      class="detail-pane"
+      aria-label="Selected request details"
+      data-detail-state={detailViewState}
+    >
       <div class="detail-heading">
         <div>
-          <div class="eyebrow">selected request</div>
-          <h2>record detail</h2>
+          <div class="eyebrow">
+            {selection.kind === "loading"
+              ? "loading request"
+              : selection.kind === "error"
+                ? "request lookup error"
+                : "selected request"}
+          </div>
+          {#if selection.kind === "none"}
+            <h2>record detail</h2>
+          {:else if selection.kind === "loading" || selection.kind === "error"}
+            <h2 class="detail-record-id" title={selection.recordId}>{selection.recordId}</h2>
+          {:else}
+            <h2 class="detail-record-id" title={selection.item.record_id}>{selection.item.record_id}</h2>
+            <p class="detail-revision">revision <span class="numeric">{selection.item.revision}</span></p>
+          {/if}
         </div>
-        {#if selectedIsDetached}<span class="detached-badge">detached</span>{/if}
+        {#if selectedIsDetached}
+          <span
+            class="detached-badge"
+            aria-label="Detached: pinned revision is outside the current live table window"
+            title="Pinned revision is outside the current live table window"
+          >detached</span>
+        {/if}
       </div>
 
-      {#if detailLoading}
-        <p class="empty-detail">Loading record…</p>
-      {:else if detailError}
-        <p class="empty-detail error-text">{detailError}</p>
-      {:else if selected}
+      {#if selection.kind === "loading"}
+        <p class="empty-detail">Loading record <span class="detail-target-id">{selection.recordId}</span>…</p>
+      {:else if selection.kind === "error"}
+        <p class="empty-detail error-text">{selection.message}</p>
+      {:else if selection.kind === "ready" && selected}
         <div class="detail-actions">
           <button type="button" on:click={() => void copyRecord(selected)}>copy JSON</button>
           <button type="button" on:click={() => downloadRecord(selected)}>download JSON</button>

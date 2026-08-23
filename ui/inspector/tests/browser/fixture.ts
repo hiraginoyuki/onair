@@ -10,6 +10,8 @@ type DetailHandler = () => DetailResponse | Promise<DetailResponse>;
 
 type BrowserDiagnostics = {
   consoleErrors: string[];
+  expectedHttpErrors: string[];
+  expectedResourceConsoleErrors: number;
   httpErrors: string[];
   pageErrors: string[];
   unexpectedRequests: string[];
@@ -33,6 +35,7 @@ declare global {
 
 export class InspectorHarness {
   private readonly detailHandlers = new Map<string, DetailHandler>();
+  private readonly expectedDetailErrors = new Map<string, number>();
   private retainedCount = 0;
 
   constructor(
@@ -128,6 +131,10 @@ export class InspectorHarness {
     );
   }
 
+  expectDetailError(recordId: string, status: number): void {
+    this.expectedDetailErrors.set(recordId, status);
+  }
+
   async open(hash = ""): Promise<void> {
     await this.page.goto(`/_onair/inspector-next${hash ? `#${encodeURIComponent(hash)}` : ""}`);
     await this.expectSourceCount(1);
@@ -210,8 +217,14 @@ export class InspectorHarness {
     if (url.pathname.startsWith(prefix)) {
       const recordId = decodeURIComponent(url.pathname.slice(prefix.length));
       const response = await this.detailHandlers.get(recordId)?.();
+      const status = response ? (response.status ?? 200) : 404;
+      if (this.expectedDetailErrors.get(recordId) === status) {
+        this.expectedDetailErrors.delete(recordId);
+        this.diagnostics.expectedHttpErrors.push(`${status} ${request.url()}`);
+        this.diagnostics.expectedResourceConsoleErrors += 1;
+      }
       await route.fulfill({
-        status: response ? (response.status ?? 200) : 404,
+        status,
         contentType: "application/json",
         body: JSON.stringify(response?.json ?? { error: "not retained" })
       });
@@ -231,6 +244,8 @@ export const test = base.extend<Fixtures>({
   inspector: async ({ page }, use) => {
     const diagnostics: BrowserDiagnostics = {
       consoleErrors: [],
+      expectedHttpErrors: [],
+      expectedResourceConsoleErrors: 0,
       httpErrors: [],
       pageErrors: [],
       unexpectedRequests: []
@@ -249,8 +264,22 @@ export const test = base.extend<Fixtures>({
     await inspector.install();
     await use(inspector);
 
-    expect.soft(diagnostics.consoleErrors, "browser console errors").toEqual([]);
-    expect.soft(diagnostics.httpErrors, "unexpected HTTP errors").toEqual([]);
+    let resourceErrorAllowance = diagnostics.expectedResourceConsoleErrors;
+    const unexpectedConsoleErrors = diagnostics.consoleErrors.filter((message) => {
+      if (resourceErrorAllowance > 0 && message.startsWith("Failed to load resource:")) {
+        resourceErrorAllowance -= 1;
+        return false;
+      }
+      return true;
+    });
+    const unexpectedHttpErrors = [...diagnostics.httpErrors];
+    for (const expectedError of diagnostics.expectedHttpErrors) {
+      const index = unexpectedHttpErrors.indexOf(expectedError);
+      if (index >= 0) unexpectedHttpErrors.splice(index, 1);
+    }
+
+    expect.soft(unexpectedConsoleErrors, "browser console errors").toEqual([]);
+    expect.soft(unexpectedHttpErrors, "unexpected HTTP errors").toEqual([]);
     expect.soft(diagnostics.pageErrors, "uncaught page errors").toEqual([]);
     expect.soft(diagnostics.unexpectedRequests, "unexpected or external requests").toEqual([]);
   }

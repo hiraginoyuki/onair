@@ -39,8 +39,8 @@ test("keeps the visible projection frozen while canonical ingestion continues", 
 
   const selectedRow = inspector.page.getByRole("row", { name: "Inspect request selected" });
   await expect(selectedRow).toContainText("200");
-  await expect(inspector.page.getByRole("heading", { name: "record detail" })).toBeVisible();
-  await expect(inspector.page.getByText("selected", { exact: true }).first()).toBeVisible();
+  await expect(inspector.page.locator(".detail-record-id")).toHaveText("selected");
+  await expect(inspector.page.locator(".detail-revision")).toHaveText("revision 1");
 
   const pause = inspector.page.getByRole("button", { name: "Pause table updates" });
   await expect(pause).toHaveAttribute("aria-pressed", "false");

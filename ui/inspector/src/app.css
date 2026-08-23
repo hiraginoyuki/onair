@@ -465,7 +465,21 @@ th.right .sort {
   justify-content: space-between;
   gap: var(--space-6);
 }
+.detail-heading > div { min-width: 0; }
+.detail-record-id {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-wrap: wrap;
+}
+.detail-revision {
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.detail-target-id { color: var(--soft); overflow-wrap: anywhere; }
 .detached-badge {
+  flex: none;
   padding: 3px 6px;
   border-radius: var(--radius-nested);
   color: #f4d199;
