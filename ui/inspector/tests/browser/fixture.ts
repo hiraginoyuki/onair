@@ -137,7 +137,14 @@ export class InspectorHarness {
   }
 
   async open(hash = ""): Promise<void> {
-    await this.page.goto(`/_onair/inspector-next${hash ? `#${encodeURIComponent(hash)}` : ""}`);
+    await this.openAt("/_onair/inspector-next", hash);
+  }
+
+  async openAt(
+    path: "/_onair/inspector" | "/_onair/inspector-next",
+    hash = ""
+  ): Promise<void> {
+    await this.page.goto(`${path}${hash ? `#${encodeURIComponent(hash)}` : ""}`);
     await this.expectSourceCount(1);
   }
 
@@ -200,7 +207,11 @@ export class InspectorHarness {
       return;
     }
 
-    if (request.isNavigationRequest() && url.pathname === "/_onair/inspector-next") {
+    if (
+      request.isNavigationRequest() &&
+      (url.pathname === "/_onair/inspector" ||
+        url.pathname === "/_onair/inspector-next")
+    ) {
       await route.continue();
       return;
     }

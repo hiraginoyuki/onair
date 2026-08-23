@@ -233,25 +233,49 @@ records.
 
 Endpoints:
 
-- `GET /_onair/inspector`: information-dense browser UI with a live request
-  table, operator overview cards, backend-health cards, detail pane,
-  per-request timeline bars, and backend-attempt waterfalls with expandable
-  per-attempt detail panes.
-- `GET /_onair/inspector/requests`: JSON list of retained records, newest
+- `GET /_onair/inspector`: primary Svelte inspector UI.
+- `GET /_onair/inspector-next`: alias for the exact same Svelte artifact during
+  the rollout soak. Both UI responses have the same bytes, local/CIDR access
+  gate, Content Security Policy, `Cache-Control: no-store`, and
+  `X-Content-Type-Options: nosniff` headers.
+- `GET /_onair/inspector-next/events`: versioned server-sent-event transport.
+  A new page starts with one authoritative `snapshot` envelope. Subsequent
+  events are complete-record `record_upsert` replacements,
+  `record_removed` tombstones, or `reset` boundaries. Entries carry positive
+  per-record revisions and events carry stream sequences. Browser-managed
+  same-`EventSource` reconnects may use `Last-Event-ID`; when replay is not
+  available, the stream sends `reset` followed by an authoritative snapshot.
+  The 15-second keepalive is an SSE transport comment, not a named application
+  event.
+  Use `?snapshot_limit=<n>` to cap snapshot records; the UI requests `1000`.
+- `GET /_onair/inspector-next/requests/{record_id}`: versioned JSON detail as
+  `{ "record_id", "revision", "record" }`. The UI uses this route for deep
+  links and for a selected record outside its bounded table window.
+- `GET /_onair/inspector/requests`: retained compatibility JSON list, newest
   first. Use `?limit=<n>` to cap the response; onair clamps the limit to
   `1..=10000` and defaults to `1000`.
-- `GET /_onair/inspector/requests/{record_id}`: JSON detail for one retained
-  record.
-- `GET /_onair/inspector/events`: server-sent events for low-latency live
-  updates. Use `?snapshot_limit=<n>` to cap the initial replay; the UI
-  defaults this to `1000`.
-- The UI updates the URL hash to the selected `record_id`, so a request detail
-  view can be bookmarked or shared locally.
-- The request table includes sortable columns, identity by default, a column
-  chooser, local saved table-view presets, quick filters for errors, fallback,
-  and slow requests, pause/resume live updates, copy/download actions for the
-  selected request JSON, and a filter input that uses space-separated terms so
-  every term must match the retained request metadata it searches.
+- `GET /_onair/inspector/requests/{record_id}`: retained compatibility detail
+  with the legacy bare-record JSON shape.
+- `GET /_onair/inspector/events`: retained compatibility SSE stream with one
+  bare record per initial `snapshot` event and bare `request` updates.
+
+The Svelte UI presents a bounded, virtualized live table with fixed 40 px rows
+and time, HTTP status, total duration, route, model, backend, outcome, and
+exposed-error columns. Columns are sortable; variable-width columns can be
+resized by pointer or keyboard, persist their widths locally, and can be reset.
+The filter searches retained request metadata. Horizontal scrolling stays
+inside the table pane, and the table/detail layout stacks at narrow widths.
+
+Pause freezes the displayed table and selected detail while canonical stream
+ingestion continues. Resume publishes the latest canonical projection without
+making replay a correctness dependency. Connection, reconnect, recovery,
+reset, warning, frozen-view, and detached-selection states are shown explicitly.
+
+Selecting a row updates the URL hash, so a request can be bookmarked locally.
+The detail pane shows the selected versioned revision, request/routing/client
+metadata, sizes and token usage, timeline bars, expandable backend-attempt
+waterfalls, retried-attempt summaries, and record-only raw JSON. Copy and
+download actions export only the selected record, not its version wrapper.
 
 Read-only operator endpoints use the same `[inspector]` enablement and
 effective-client loopback/CIDR/`allow_remote` gate:
@@ -267,6 +291,10 @@ effective-client loopback/CIDR/`allow_remote` gate:
   and optional active probes, including split traffic/probe counters,
   consecutive failures, last status, last error kind, last source, and last
   observed latency.
+
+The Svelte inspector polls `/_onair/operator/runtime` for the retained-record
+count. The other operator endpoints remain independently available JSON APIs;
+they are not embedded in the current table/detail surface.
 
 Each retained record includes route, identity, public/backend model IDs, final
 backend ID/target, backend remote socket when available,

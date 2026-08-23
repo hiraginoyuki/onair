@@ -4,12 +4,13 @@ import { createServer } from "node:http";
 const host = process.env.INSPECTOR_BROWSER_TEST_HOST ?? "127.0.0.1";
 const port = Number(process.env.INSPECTOR_BROWSER_TEST_PORT ?? "4179");
 const artifact = await readFile(new URL("../../dist/index.html", import.meta.url));
+const uiPaths = new Set(["/_onair/inspector", "/_onair/inspector-next"]);
 
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://${host}:${port}`);
   if (
     (request.method !== "GET" && request.method !== "HEAD") ||
-    url.pathname !== "/_onair/inspector-next"
+    !uiPaths.has(url.pathname)
   ) {
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     response.end("not found\n");

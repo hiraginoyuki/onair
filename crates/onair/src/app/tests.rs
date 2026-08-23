@@ -1696,7 +1696,7 @@ fn assert_matching_inspector_safety_headers(
 }
 
 #[tokio::test]
-async fn inspector_routes_serve_their_intended_ui_artifacts() {
+async fn inspector_ui_routes_serve_the_same_versioned_artifact_and_headers() {
     let state = test_state_with_inspector(
         RoutingStrategy::Priority,
         vec![],
@@ -1709,36 +1709,40 @@ async fn inspector_routes_serve_their_intended_ui_artifacts() {
     );
     let app = router(state);
 
-    let legacy = app
+    let primary = app
         .clone()
         .oneshot(inspector_get("/_onair/inspector"))
         .await
         .unwrap();
-    assert_eq!(legacy.status(), StatusCode::OK);
-    let legacy_body = to_bytes(legacy.into_body(), 1024 * 1024).await.unwrap();
-    let legacy_body = String::from_utf8(legacy_body.to_vec()).unwrap();
-    assert!(legacy_body.contains("<h1>onair inspector</h1>"));
-    assert!(!legacy_body.contains("<div id=\"app\"></div>"));
-
-    let next = app
+    let alias = app
         .oneshot(inspector_get("/_onair/inspector-next"))
         .await
         .unwrap();
-    assert_eq!(next.status(), StatusCode::OK);
-    let csp = next
+    assert_eq!(primary.status(), StatusCode::OK);
+    assert_eq!(alias.status(), StatusCode::OK);
+    assert_eq!(primary.headers(), alias.headers());
+    assert_eq!(primary.headers().get("cache-control").unwrap(), "no-store");
+    assert_eq!(
+        primary.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
+    let csp = primary
         .headers()
         .get("content-security-policy")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
     assert!(csp.contains("script-src 'unsafe-inline'"));
-    let next_body = to_bytes(next.into_body(), 1024 * 1024).await.unwrap();
+    let primary_body = to_bytes(primary.into_body(), 1024 * 1024).await.unwrap();
+    let alias_body = to_bytes(alias.into_body(), 1024 * 1024).await.unwrap();
     assert_eq!(
-        next_body.as_ref(),
+        primary_body.as_ref(),
         include_bytes!("../../../../ui/inspector/dist/index.html")
     );
-    let next_body = String::from_utf8(next_body.to_vec()).unwrap();
-    assert!(next_body.contains("<div id=\"app\"></div>"));
-    assert!(next_body.contains("/_onair/inspector-next/events"));
+    assert_eq!(primary_body, alias_body);
+    let primary_body = String::from_utf8(primary_body.to_vec()).unwrap();
+    assert!(primary_body.contains("<div id=\"app\"></div>"));
+    assert!(primary_body.contains("/_onair/inspector-next/events"));
+    assert!(primary_body.contains("/_onair/inspector-next/requests/"));
 }
 
 #[tokio::test]
